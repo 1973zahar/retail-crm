@@ -1,8 +1,8 @@
 "use strict";
 
-const APP_VERSION = "2026.06.04.7";
-const APP_BUILD = "20260604-b2c-inventory-resort";
-const STORAGE_KEY = "retail-crm-b2c-v6";
+const APP_VERSION = "2026.06.04.8";
+const APP_BUILD = "20260604-b2c-employees-roles";
+const STORAGE_KEY = "retail-crm-b2c-v7";
 
 const nowIso = () => new Date().toISOString();
 const today = () => nowIso().slice(0, 10);
@@ -10,6 +10,55 @@ const LOYALTY_DISCOUNTS = { standard: 0, silver: 3, gold: 5 };
 const LOYALTY_LABELS = { standard: "Стандарт", silver: "Silver 3%", gold: "Gold 5%" };
 const SQL_PRODUCT_SOURCE = "MSSQL:dbo.RetailProducts";
 const SQL_STOCK_RECEIPT_SOURCE = "MSSQL:dbo.RetailStockReceipts";
+const EMPLOYEE_STATUSES = { active: "Активний", inactive: "Вимкнений", vacation: "Відпустка" };
+const ROLE_BLOCKS = [
+  { id: "dashboard", label: "Панель" },
+  { id: "checkout", label: "Продажі" },
+  { id: "receipts", label: "Чеки" },
+  { id: "returns", label: "Повернення" },
+  { id: "catalog", label: "Товари SQL" },
+  { id: "customers", label: "Клієнти" },
+  { id: "stock", label: "Залишки" },
+  { id: "inventory", label: "Інвентаризація" },
+  { id: "cash", label: "Каса/POS" },
+  { id: "reports", label: "Звіти" },
+  { id: "employees", label: "Працівники" },
+  { id: "log", label: "Журнал" }
+];
+const ROLE_ACTIONS = [
+  { id: "sale_create", label: "Створити продаж" },
+  { id: "return_create", label: "Повернення" },
+  { id: "cash_open", label: "Відкрити зміну" },
+  { id: "cash_close", label: "Закрити зміну" },
+  { id: "inventory_post", label: "Провести інвентаризацію" },
+  { id: "inventory_resort", label: "Пересорт" },
+  { id: "sql_import", label: "SQL імпорт" },
+  { id: "employee_manage", label: "Керувати працівниками" },
+  { id: "reports_view", label: "Звіти" },
+  { id: "audit_view", label: "Журнал дій" }
+];
+const EMPLOYEE_ROLES = {
+  director: {
+    label: "Директор",
+    blocks: ROLE_BLOCKS.map((item) => item.id),
+    actions: ROLE_ACTIONS.map((item) => item.id)
+  },
+  admin: {
+    label: "Адміністратор",
+    blocks: ["dashboard", "checkout", "receipts", "returns", "catalog", "customers", "stock", "inventory", "cash", "reports", "employees", "log"],
+    actions: ["sale_create", "return_create", "cash_open", "cash_close", "inventory_post", "inventory_resort", "sql_import", "employee_manage", "reports_view", "audit_view"]
+  },
+  seller: {
+    label: "Продавець",
+    blocks: ["dashboard", "checkout", "receipts", "catalog", "customers", "stock"],
+    actions: ["sale_create"]
+  },
+  cashier: {
+    label: "Касир",
+    blocks: ["dashboard", "checkout", "receipts", "returns", "cash"],
+    actions: ["sale_create", "return_create", "cash_open", "cash_close"]
+  }
+};
 const sqlProductSnapshot = [
   { id: "p-100", sqlId: "SQL-100", name: "Оптичний приціл R-Point", sku: "OPT-RPOINT", barcode: "4820001000011", qr: "B2C|SKU=OPT-RPOINT|BARCODE=4820001000011", category: "Оптика", price: 5400, cost: 3650, minStock: 3, stockQty: 8 },
   { id: "p-101", sqlId: "SQL-101", name: "Чохол транспортний 120 см", sku: "CASE-120", barcode: "4820001000028", qr: "B2C|SKU=CASE-120|BARCODE=4820001000028", category: "Аксесуари", price: 2100, cost: 1180, minStock: 5, stockQty: 12 },
@@ -57,6 +106,25 @@ function stockReceiptFromSql(row) {
   };
 }
 
+function seedEmployee(id, code, name, role, phone, email, login, status = "active") {
+  return {
+    id,
+    code,
+    name,
+    role,
+    phone,
+    email,
+    login,
+    pin: "",
+    status,
+    store: "B2C магазин",
+    schedule: "5/2",
+    hireDate: today(),
+    note: "",
+    createdAt: nowIso()
+  };
+}
+
 function inventoryLineFromProduct(row) {
   return {
     productId: row.id,
@@ -83,6 +151,13 @@ const seedState = {
     { id: "c-001", name: "Олександр Клименко", phone: "+380671234567", loyalty: "silver" },
     { id: "c-002", name: "Ірина Бойко", phone: "+380662224466", loyalty: "gold" }
   ],
+  employees: [
+    seedEmployee("e-001", "EMP-001", "Олена Директор", "director", "+380671110001", "director@retail.local", "director"),
+    seedEmployee("e-002", "EMP-002", "Іван Адміністратор", "admin", "+380671110002", "admin@retail.local", "admin"),
+    seedEmployee("e-003", "EMP-003", "Марія Продавець", "seller", "+380671110003", "seller@retail.local", "seller"),
+    seedEmployee("e-004", "EMP-004", "Петро Касир", "cashier", "+380671110004", "cashier@retail.local", "cashier")
+  ],
+  selectedCashierId: "e-004",
   stock: sqlProductSnapshot.map(stockFromSql),
   productImport: {
     source: SQL_PRODUCT_SOURCE,
@@ -124,7 +199,9 @@ const seedState = {
     {
       id: "SHIFT-001",
       date: today(),
-      cashier: "Каса магазину",
+      cashierId: "e-004",
+      cashier: "Петро Касир",
+      cashierRole: "Касир",
       opened: true,
       openedAt: nowIso(),
       closedAt: "",
@@ -154,6 +231,7 @@ const navItems = [
   ["stock", "Залишки"],
   ["cash", "Каса/POS"],
   ["reports", "Звіт дня"],
+  ["employees", "Працівники"],
   ["log", "Журнал"]
 ];
 
@@ -176,6 +254,8 @@ function normalizeState(input) {
   const next = { ...clone(seedState), ...(input || {}) };
   next.products = Array.isArray(next.products) ? next.products.map(normalizeProduct) : clone(seedState.products);
   next.customers = Array.isArray(next.customers) ? next.customers.map(normalizeCustomer) : clone(seedState.customers);
+  next.employees = Array.isArray(next.employees) ? next.employees.map(normalizeEmployee) : clone(seedState.employees);
+  next.selectedCashierId = next.selectedCashierId || next.employees.find((item) => item.role === "cashier" && item.status === "active")?.id || seedState.selectedCashierId;
   next.stock = Array.isArray(next.stock) ? next.stock : clone(seedState.stock);
   next.productImport = {
     ...clone(seedState.productImport),
@@ -226,6 +306,27 @@ function normalizeCustomer(customer) {
   };
 }
 
+function normalizeEmployee(employee) {
+  const role = EMPLOYEE_ROLES[employee.role] ? employee.role : "seller";
+  const status = EMPLOYEE_STATUSES[employee.status] ? employee.status : "active";
+  return {
+    id: employee.id || `e-${Date.now()}`,
+    code: employee.code || `EMP-${Date.now()}`,
+    name: employee.name || "Працівник",
+    role,
+    phone: employee.phone || "",
+    email: employee.email || "",
+    login: employee.login || "",
+    pin: employee.pin || "",
+    status,
+    store: employee.store || "B2C магазин",
+    schedule: employee.schedule || "",
+    hireDate: employee.hireDate || today(),
+    note: employee.note || "",
+    createdAt: employee.createdAt || nowIso()
+  };
+}
+
 function normalizeReceipt(receipt, products) {
   if (Array.isArray(receipt.lines)) return receipt;
   const product = products.find((item) => item.id === receipt.productId) || products[0] || seedState.products[0];
@@ -247,6 +348,9 @@ function normalizeReceipt(receipt, products) {
 function normalizeShift(shift) {
   return {
     ...shift,
+    cashierId: shift.cashierId || "",
+    cashier: shift.cashier || "Каса магазину",
+    cashierRole: shift.cashierRole || "",
     openingCash: Number(shift.openingCash || 0),
     cashSales: Number(shift.cashSales || 0),
     cardSales: Number(shift.cardSales || 0),
@@ -305,7 +409,9 @@ function normalizeInventoryDoc(doc) {
     totalAmountDiff: Number(doc.totalAmountDiff || 0),
     positiveAmount: Number(doc.positiveAmount || 0),
     negativeAmount: Number(doc.negativeAmount || 0),
-    resorts: Array.isArray(doc.resorts) ? doc.resorts.map(normalizeInventoryResort) : []
+    resorts: Array.isArray(doc.resorts) ? doc.resorts.map(normalizeInventoryResort) : [],
+    appliedToStock: doc.appliedToStock !== false,
+    stockAdjustments: Array.isArray(doc.stockAdjustments) ? doc.stockAdjustments : []
   };
 }
 
@@ -345,6 +451,26 @@ function productById(id) {
 
 function customerById(id) {
   return state.customers.find((customer) => customer.id === id) || state.customers[0];
+}
+
+function employeeById(id) {
+  return state.employees.find((employee) => employee.id === id) || state.employees[0];
+}
+
+function activeEmployees() {
+  return state.employees.filter((employee) => employee.status === "active");
+}
+
+function roleLabel(role) {
+  return EMPLOYEE_ROLES[role]?.label || role || "-";
+}
+
+function employeeStatusLabel(status) {
+  return EMPLOYEE_STATUSES[status] || status || "-";
+}
+
+function roleHas(role, type, id) {
+  return Boolean(EMPLOYEE_ROLES[role]?.[type]?.includes(id));
 }
 
 function stockRow(productId) {
@@ -941,7 +1067,7 @@ function renderStock() {
         <div class="toolbar full no-print">
           <button class="secondary" type="button" data-print-inventory>Друк Інвентаризаційний лист</button>
           <button class="secondary" type="button" data-reset-inventory>Очистити факт</button>
-          <button class="primary" type="submit">Провести інвентаризацію</button>
+          <button class="primary" type="submit">Провести і оновити склад</button>
         </div>
         <div class="table-wrap full">
           <table>
@@ -982,7 +1108,7 @@ function renderStock() {
       ${renderInventorySheet(rows, printTotals)}
       <div class="table-wrap section-gap">
         <table>
-          <thead><tr><th>Документ</th><th>Дата</th><th>Позицій</th><th>Різниця</th><th>+/- грн</th><th>Пересорт</th></tr></thead>
+          <thead><tr><th>Документ</th><th>Дата</th><th>Позицій</th><th>Різниця</th><th>+/- грн</th><th>Пересорт</th><th>Склад</th></tr></thead>
           <tbody>
             ${state.inventoryDocs.slice(0, 5).map((doc) => `
               <tr>
@@ -992,8 +1118,9 @@ function renderStock() {
                 <td>${diffLabel(doc.totalDiff)}</td>
                 <td>${formatMoney(doc.totalAmountDiff)}</td>
                 <td>${formatMoney(inventoryResortTotals(doc.resorts).netAmount)}</td>
+                <td><span class="pill ${doc.appliedToStock ? "good" : "warn"}">${doc.appliedToStock ? "оновлено" : "чернетка"}</span></td>
               </tr>
-            `).join("") || '<tr><td colspan="6" class="muted">Проведених інвентаризацій ще немає.</td></tr>'}
+            `).join("") || '<tr><td colspan="7" class="muted">Проведених інвентаризацій ще немає.</td></tr>'}
           </tbody>
         </table>
       </div>
@@ -1132,6 +1259,7 @@ function renderOpenShift(shift) {
   return `
     <dl class="summary-list">
       <div><dt>Зміна</dt><dd>${escapeHtml(shift.id)}</dd></div>
+      <div><dt>Касир</dt><dd>${escapeHtml(shift.cashier)} · ${escapeHtml(shift.cashierRole || "-")}</dd></div>
       <div><dt>Відкрито</dt><dd>${formatDateTime(shift.openedAt)}</dd></div>
       <div><dt>Готівка продажі</dt><dd>${formatMoney(shift.cashSales)}</dd></div>
       <div><dt>Картка/POS</dt><dd>${formatMoney(shift.cardSales)}</dd></div>
@@ -1147,9 +1275,11 @@ function renderOpenShift(shift) {
 }
 
 function renderOpenShiftForm() {
+  const employees = activeEmployees();
+  const selectedId = employees.some((employee) => employee.id === state.selectedCashierId) ? state.selectedCashierId : employees[0]?.id;
   return `
     <form class="form-grid one-col" data-action="open-shift">
-      <label class="field"><span>Касир</span><input name="cashier" value="Каса магазину"></label>
+      <label class="field"><span>Касир / відповідальний</span><select name="cashierId">${employees.map((employee) => option(employee.id, `${employee.name} · ${roleLabel(employee.role)}`, employee.id === selectedId)).join("")}</select></label>
       <label class="field"><span>Розмінна готівка</span><input name="openingCash" type="number" min="0" value="3000"></label>
       <button class="primary" type="submit">Відкрити зміну</button>
     </form>
@@ -1184,6 +1314,106 @@ function renderReports() {
           <tbody>${paymentRows.map((row) => `<tr><td>${escapeHtml(paymentLabel(row.method))}</td><td><strong>${formatMoney(row.total)}</strong></td></tr>`).join("")}</tbody>
         </table>
       </div>
+    </section>
+  `;
+}
+
+function renderEmployees() {
+  setTitle("Працівники і ролі");
+  const activeCount = state.employees.filter((employee) => employee.status === "active").length;
+  const roleRows = Object.entries(EMPLOYEE_ROLES);
+  return `
+    <section class="grid four">
+      <article class="card metric"><span>Працівники</span><strong>${state.employees.length}</strong><small>${activeCount} активних.</small></article>
+      <article class="card metric"><span>Ролі</span><strong>${roleRows.length}</strong><small>Директор, адміністратор, продавець, касир.</small></article>
+      <article class="card metric"><span>Касир зміни</span><strong>${escapeHtml(employeeById(state.selectedCashierId).name)}</strong><small>${escapeHtml(roleLabel(employeeById(state.selectedCashierId).role))}.</small></article>
+      <article class="card metric"><span>Доступи</span><strong>${ROLE_BLOCKS.length}/${ROLE_ACTIONS.length}</strong><small>Блоки і дії.</small></article>
+    </section>
+    <section class="grid two section-gap">
+      <article class="panel">
+        <div class="split">
+          <h2>B2C.10 Працівники</h2>
+          <span class="pill">${state.employees.length} карток</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Код</th><th>Працівник</th><th>Роль</th><th>Контакти</th><th>Статус</th><th>Магазин</th><th>Дії</th></tr></thead>
+            <tbody>
+              ${state.employees.map((employee) => `
+                <tr>
+                  <td>${escapeHtml(employee.code)}</td>
+                  <td><strong>${escapeHtml(employee.name)}</strong><br><span class="muted">${escapeHtml(employee.login || "-")} · ${escapeHtml(employee.schedule || "-")}</span></td>
+                  <td><span class="pill">${escapeHtml(roleLabel(employee.role))}</span></td>
+                  <td>${escapeHtml(employee.phone || "-")}<br><span class="muted">${escapeHtml(employee.email || "-")}</span></td>
+                  <td><span class="pill ${employee.status === "active" ? "good" : employee.status === "vacation" ? "warn" : "danger"}">${escapeHtml(employeeStatusLabel(employee.status))}</span></td>
+                  <td>${escapeHtml(employee.store || "-")}<br><span class="muted">з ${escapeHtml(employee.hireDate || "-")}</span></td>
+                  <td>
+                    <button class="secondary" type="button" data-select-cashier="${escapeHtml(employee.id)}" ${employee.status === "active" ? "" : "disabled"}>У касу</button>
+                    <button class="secondary" type="button" data-toggle-employee="${escapeHtml(employee.id)}">${employee.status === "active" ? "Вимкнути" : "Активувати"}</button>
+                  </td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      </article>
+      <article class="panel">
+        <h2>Нова картка працівника</h2>
+        <form class="form-grid one-col" data-action="create-employee">
+          <label class="field"><span>ПІБ</span><input name="name" required placeholder="ПІБ працівника"></label>
+          <label class="field"><span>Роль</span><select name="role">${Object.entries(EMPLOYEE_ROLES).map(([id, role]) => option(id, role.label)).join("")}</select></label>
+          <label class="field"><span>Телефон</span><input name="phone" placeholder="+380..."></label>
+          <label class="field"><span>Email</span><input name="email" type="email" placeholder="name@company.ua"></label>
+          <label class="field"><span>Логін</span><input name="login" placeholder="login"></label>
+          <label class="field"><span>PIN / код доступу</span><input name="pin" placeholder="службовий PIN"></label>
+          <label class="field"><span>Статус</span><select name="status">${Object.entries(EMPLOYEE_STATUSES).map(([id, label]) => option(id, label, id === "active")).join("")}</select></label>
+          <label class="field"><span>Магазин</span><input name="store" value="B2C магазин"></label>
+          <label class="field"><span>Графік</span><input name="schedule" value="5/2"></label>
+          <label class="field"><span>Дата прийому</span><input name="hireDate" type="date" value="${today()}"></label>
+          <label class="field"><span>Коментар</span><input name="note" placeholder="зона відповідальності, умови, примітка"></label>
+          <button class="primary" type="submit">Створити працівника</button>
+        </form>
+      </article>
+    </section>
+    <section class="grid two section-gap">
+      <article class="panel">
+        <div class="split">
+          <h2>Ролі і блоки</h2>
+          <span class="pill">${ROLE_BLOCKS.length} блоків</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Блок</th>${roleRows.map(([, role]) => `<th>${escapeHtml(role.label)}</th>`).join("")}</tr></thead>
+            <tbody>
+              ${ROLE_BLOCKS.map((block) => `
+                <tr>
+                  <td>${escapeHtml(block.label)}</td>
+                  ${roleRows.map(([roleId]) => `<td><span class="pill ${roleHas(roleId, "blocks", block.id) ? "good" : "danger"}">${roleHas(roleId, "blocks", block.id) ? "так" : "ні"}</span></td>`).join("")}
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      </article>
+      <article class="panel">
+        <div class="split">
+          <h2>Ролі і дії</h2>
+          <span class="pill">${ROLE_ACTIONS.length} дій</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Дія</th>${roleRows.map(([, role]) => `<th>${escapeHtml(role.label)}</th>`).join("")}</tr></thead>
+            <tbody>
+              ${ROLE_ACTIONS.map((action) => `
+                <tr>
+                  <td>${escapeHtml(action.label)}</td>
+                  ${roleRows.map(([roleId]) => `<td><span class="pill ${roleHas(roleId, "actions", action.id) ? "good" : "danger"}">${roleHas(roleId, "actions", action.id) ? "так" : "ні"}</span></td>`).join("")}
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      </article>
     </section>
   `;
 }
@@ -1557,14 +1787,77 @@ function postInventory() {
     totalAmountDiff: totals.totalAmountDiff,
     positiveAmount: totals.positiveAmount,
     negativeAmount: totals.negativeAmount,
-    resorts: clone(state.inventory.resorts)
+    resorts: clone(state.inventory.resorts),
+    appliedToStock: true,
+    stockAdjustments: rows.map((row) => ({
+      productId: row.product.id,
+      sku: row.product.sku,
+      beforeQty: row.expectedQty,
+      afterQty: row.actualQty,
+      diff: row.diff
+    }))
   };
   rows.forEach((row) => {
     stockRow(row.product.id).qty = row.actualQty;
   });
   state.inventoryDocs.unshift(doc);
   state.inventory = normalizeInventory({ id: "INV-DRAFT", date: today(), lines: [] }, state.products, state.stock);
-  audit(`Проведено інвентаризацію ${doc.id}: різниця ${diffLabel(doc.totalDiff)}`);
+  audit(`Проведено інвентаризацію ${doc.id} і оновлено склад: різниця ${diffLabel(doc.totalDiff)}, ${formatMoney(doc.totalAmountDiff)}`);
+  saveState();
+  render();
+}
+
+function createEmployee(form) {
+  const data = Object.fromEntries(new FormData(form).entries());
+  const name = String(data.name || "").trim();
+  if (!name) return alert("Вкажіть ПІБ працівника.");
+  const login = String(data.login || "").trim();
+  if (login && state.employees.some((employee) => employee.login.toLowerCase() === login.toLowerCase())) {
+    return alert("Працівник з таким логіном вже існує.");
+  }
+  const employee = normalizeEmployee({
+    id: `e-${Date.now()}`,
+    code: `EMP-${String(state.employees.length + 1).padStart(3, "0")}`,
+    name,
+    role: data.role || "seller",
+    phone: String(data.phone || "").trim(),
+    email: String(data.email || "").trim(),
+    login,
+    pin: String(data.pin || "").trim(),
+    status: data.status || "active",
+    store: String(data.store || "B2C магазин").trim(),
+    schedule: String(data.schedule || "").trim(),
+    hireDate: data.hireDate || today(),
+    note: String(data.note || "").trim(),
+    createdAt: nowIso()
+  });
+  state.employees.push(employee);
+  if (employee.status === "active" && employee.role === "cashier") state.selectedCashierId = employee.id;
+  audit(`Створено працівника ${employee.name}: ${roleLabel(employee.role)}`);
+  saveState();
+  render();
+}
+
+function toggleEmployeeStatus(employeeId) {
+  const employee = employeeById(employeeId);
+  employee.status = employee.status === "active" ? "inactive" : "active";
+  if (employee.status !== "active" && state.selectedCashierId === employee.id) {
+    state.selectedCashierId = activeEmployees()[0]?.id || "";
+  }
+  if (employee.status === "active" && !state.selectedCashierId) {
+    state.selectedCashierId = employee.id;
+  }
+  audit(`Змінено статус працівника ${employee.name}: ${employeeStatusLabel(employee.status)}`);
+  saveState();
+  render();
+}
+
+function selectCashier(employeeId) {
+  const employee = employeeById(employeeId);
+  if (employee.status !== "active") return alert("Для касової зміни можна вибрати тільки активного працівника.");
+  state.selectedCashierId = employee.id;
+  state.currentView = "cash";
+  audit(`Працівника ${employee.name} вибрано відповідальним за касову зміну`);
   saveState();
   render();
 }
@@ -1572,10 +1865,13 @@ function postInventory() {
 function openCashShift(form) {
   const data = Object.fromEntries(new FormData(form).entries());
   if (openShift()) return alert("Вже є відкрита касова зміна.");
+  const cashier = employeeById(data.cashierId || state.selectedCashierId);
   const shift = {
     id: nextId("SHIFT", state.cashShifts),
     date: today(),
-    cashier: data.cashier || "Каса магазину",
+    cashierId: cashier.id,
+    cashier: cashier.name,
+    cashierRole: roleLabel(cashier.role),
     opened: true,
     openedAt: nowIso(),
     closedAt: "",
@@ -1644,6 +1940,7 @@ function render() {
     stock: renderStock,
     cash: renderCash,
     reports: renderReports,
+    employees: renderEmployees,
     log: renderLog
   };
   document.getElementById("app").innerHTML = (views[state.currentView] || renderDashboard)();
@@ -1676,6 +1973,10 @@ document.addEventListener("click", (event) => {
   if (inventoryResetButton) return resetInventoryDraft();
   const resortRemoveButton = event.target.closest("[data-remove-resort]");
   if (resortRemoveButton) return removeInventoryResort(Number(resortRemoveButton.dataset.removeResort));
+  const selectCashierButton = event.target.closest("[data-select-cashier]");
+  if (selectCashierButton) return selectCashier(selectCashierButton.dataset.selectCashier);
+  const toggleEmployeeButton = event.target.closest("[data-toggle-employee]");
+  if (toggleEmployeeButton) return toggleEmployeeStatus(toggleEmployeeButton.dataset.toggleEmployee);
   const selectCustomerButton = event.target.closest("[data-select-customer]");
   if (selectCustomerButton) return selectCustomer(selectCustomerButton.dataset.selectCustomer);
   if (event.target.id === "reset-demo") {
@@ -1733,6 +2034,7 @@ document.addEventListener("submit", (event) => {
   if (form.dataset.action === "sync-sql-stock-receipts") syncStockReceiptsFromSql();
   if (form.dataset.action === "create-inventory-resort") createInventoryResort(form);
   if (form.dataset.action === "post-inventory") postInventory();
+  if (form.dataset.action === "create-employee") createEmployee(form);
   if (form.dataset.action === "open-shift") openCashShift(form);
   if (form.dataset.action === "close-shift") closeCashShift(form);
 });
