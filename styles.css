@@ -200,6 +200,14 @@ h1 {
   grid-column: 1 / -1;
 }
 
+.full {
+  grid-column: 1 / -1;
+}
+
+.one-col {
+  grid-template-columns: 1fr;
+}
+
 label span {
   color: var(--muted);
   font-size: 13px;
@@ -234,6 +242,11 @@ textarea {
   background: var(--surface-soft);
   color: var(--text);
   border-color: var(--border);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .danger {
@@ -292,6 +305,105 @@ th {
   color: var(--muted);
 }
 
+.section-gap {
+  margin-top: 16px;
+}
+
+.compact-panel {
+  min-height: 100%;
+}
+
+.checkout-form {
+  align-items: end;
+}
+
+.product-pick {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+  align-items: stretch;
+}
+
+.product-button {
+  min-height: 76px;
+  display: grid;
+  gap: 5px;
+  align-content: start;
+  text-align: left;
+  background: #f9fbfd;
+  border-color: var(--border);
+}
+
+.product-button:hover {
+  border-color: var(--accent);
+  background: #eefaf7;
+}
+
+.product-button span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.cart-summary {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+  padding-top: 4px;
+}
+
+.cart-summary strong {
+  font-size: 22px;
+}
+
+.mini-input {
+  max-width: 96px;
+  padding: 7px 8px;
+}
+
+.stack {
+  display: grid;
+  gap: 10px;
+}
+
+.log-row {
+  display: grid;
+  gap: 3px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.log-row:last-child {
+  border-bottom: 0;
+}
+
+.log-row span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.summary-list {
+  display: grid;
+  gap: 9px;
+  margin: 0 0 16px;
+}
+
+.summary-list div {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) 1.3fr;
+  gap: 12px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--border);
+}
+
+.summary-list dt {
+  color: var(--muted);
+}
+
+.summary-list dd {
+  margin: 0;
+}
+
 @media (max-width: 920px) {
   body {
     grid-template-columns: 1fr;
@@ -311,5 +423,17 @@ th {
   .field.full {
     grid-column: auto;
   }
-}
 
+  .full {
+    grid-column: auto;
+  }
+
+  .cart-summary {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .summary-list div {
+    grid-template-columns: 1fr;
+  }
+}
