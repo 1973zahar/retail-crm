@@ -1,7 +1,7 @@
 "use strict";
 
-const APP_VERSION = "2026.06.04.10";
-const APP_BUILD = "20260604-b2c-sale-label";
+const APP_VERSION = "2026.06.04.11";
+const APP_BUILD = "20260604-b2c-sale-block-label";
 const STORAGE_KEY = "retail-crm-b2c-v8";
 
 const nowIso = () => new Date().toISOString();
@@ -13,7 +13,7 @@ const SQL_STOCK_RECEIPT_SOURCE = "MSSQL:dbo.RetailStockReceipts";
 const EMPLOYEE_STATUSES = { active: "Активний", inactive: "Вимкнений", vacation: "Відпустка" };
 const ROLE_BLOCKS = [
   { id: "dashboard", label: "Панель" },
-  { id: "pos", label: "POS / чеки / каса" },
+  { id: "pos", label: "Продаж" },
   { id: "returns", label: "Повернення" },
   { id: "catalog", label: "Товари SQL" },
   { id: "customers", label: "Клієнти" },
@@ -221,7 +221,7 @@ const seedState = {
 
 const navItems = [
   ["dashboard", "Панель"],
-  ["pos", "POS / Чеки / Каса"],
+  ["pos", "Продаж"],
   ["returns", "Повернення"],
   ["catalog", "Товари"],
   ["customers", "Клієнти"],
@@ -682,7 +682,7 @@ function renderCheckout() {
 }
 
 function renderPos() {
-  setTitle("POS / чеки / каса");
+  setTitle("Продаж");
   const shift = openShift();
   const todayReceipts = state.receipts.filter((receipt) => receipt.date === today());
   const todayRevenue = todayReceipts.reduce((sum, receipt) => sum + Number(receipt.total || 0), 0);
