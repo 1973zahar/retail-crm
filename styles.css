@@ -408,6 +408,18 @@ th {
   font-size: 13px;
 }
 
+.sql-box {
+  background: #111827;
+  border-radius: 8px;
+  color: #d1fae5;
+  font-family: Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-x: auto;
+  padding: 14px;
+  white-space: pre-wrap;
+}
+
 .summary-list {
   display: grid;
   gap: 9px;

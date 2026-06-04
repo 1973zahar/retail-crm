@@ -1,13 +1,40 @@
 "use strict";
 
-const APP_VERSION = "2026.06.04.3";
-const APP_BUILD = "20260604-b2c-prototype-2";
-const STORAGE_KEY = "retail-crm-b2c-v2";
+const APP_VERSION = "2026.06.04.4";
+const APP_BUILD = "20260604-b2c-sql-import";
+const STORAGE_KEY = "retail-crm-b2c-v3";
 
 const nowIso = () => new Date().toISOString();
 const today = () => nowIso().slice(0, 10);
 const LOYALTY_DISCOUNTS = { standard: 0, silver: 3, gold: 5 };
 const LOYALTY_LABELS = { standard: "Стандарт", silver: "Silver 3%", gold: "Gold 5%" };
+const SQL_PRODUCT_SOURCE = "MSSQL:dbo.RetailProducts";
+const sqlProductSnapshot = [
+  { id: "p-100", sqlId: "SQL-100", name: "Оптичний приціл R-Point", sku: "OPT-RPOINT", barcode: "4820001000011", category: "Оптика", price: 5400, cost: 3650, minStock: 3, stockQty: 8 },
+  { id: "p-101", sqlId: "SQL-101", name: "Чохол транспортний 120 см", sku: "CASE-120", barcode: "4820001000028", category: "Аксесуари", price: 2100, cost: 1180, minStock: 5, stockQty: 12 },
+  { id: "p-102", sqlId: "SQL-102", name: "Набір для догляду", sku: "CARE-KIT", barcode: "4820001000035", category: "Догляд", price: 860, cost: 420, minStock: 8, stockQty: 18 },
+  { id: "p-103", sqlId: "SQL-103", name: "Ремінь тактичний", sku: "SLING-TAC", barcode: "4820001000042", category: "Аксесуари", price: 1450, cost: 790, minStock: 6, stockQty: 7 },
+  { id: "p-104", sqlId: "SQL-104", name: "Захисні окуляри ProShield", sku: "EYE-PRO", barcode: "4820001000059", category: "Захист", price: 980, cost: 520, minStock: 10, stockQty: 15 }
+];
+
+function productFromSql(row) {
+  return {
+    id: row.id,
+    sqlId: row.sqlId,
+    source: "sql",
+    name: row.name,
+    sku: row.sku,
+    barcode: row.barcode,
+    category: row.category,
+    price: row.price,
+    cost: row.cost,
+    minStock: row.minStock
+  };
+}
+
+function stockFromSql(row) {
+  return { productId: row.id, qty: Number(row.stockQty || 0) };
+}
 
 const seedState = {
   currentView: "dashboard",
@@ -21,23 +48,19 @@ const seedState = {
       { productId: "p-102", qty: 1, discount: 0 }
     ]
   },
-  products: [
-    { id: "p-100", name: "Оптичний приціл R-Point", sku: "OPT-RPOINT", barcode: "4820001000011", category: "Оптика", price: 5400, cost: 3650, minStock: 3 },
-    { id: "p-101", name: "Чохол транспортний 120 см", sku: "CASE-120", barcode: "4820001000028", category: "Аксесуари", price: 2100, cost: 1180, minStock: 5 },
-    { id: "p-102", name: "Набір для догляду", sku: "CARE-KIT", barcode: "4820001000035", category: "Догляд", price: 860, cost: 420, minStock: 8 },
-    { id: "p-103", name: "Ремінь тактичний", sku: "SLING-TAC", barcode: "4820001000042", category: "Аксесуари", price: 1450, cost: 790, minStock: 6 }
-  ],
+  products: sqlProductSnapshot.map(productFromSql),
   customers: [
     { id: "walk-in", name: "Роздрібний покупець", phone: "", loyalty: "standard" },
     { id: "c-001", name: "Олександр Клименко", phone: "+380671234567", loyalty: "silver" },
     { id: "c-002", name: "Ірина Бойко", phone: "+380662224466", loyalty: "gold" }
   ],
-  stock: [
-    { productId: "p-100", qty: 8 },
-    { productId: "p-101", qty: 12 },
-    { productId: "p-102", qty: 18 },
-    { productId: "p-103", qty: 7 }
-  ],
+  stock: sqlProductSnapshot.map(stockFromSql),
+  productImport: {
+    source: SQL_PRODUCT_SOURCE,
+    rows: sqlProductSnapshot.length,
+    lastRunAt: nowIso(),
+    mode: "seed"
+  },
   receipts: [
     {
       id: "B2C-0001",
@@ -109,6 +132,10 @@ function normalizeState(input) {
   next.products = Array.isArray(next.products) ? next.products.map(normalizeProduct) : clone(seedState.products);
   next.customers = Array.isArray(next.customers) ? next.customers.map(normalizeCustomer) : clone(seedState.customers);
   next.stock = Array.isArray(next.stock) ? next.stock : clone(seedState.stock);
+  next.productImport = {
+    ...clone(seedState.productImport),
+    ...(next.productImport || {})
+  };
   next.receipts = Array.isArray(next.receipts) ? next.receipts.map((receipt) => normalizeReceipt(receipt, next.products)) : [];
   next.returns = Array.isArray(next.returns) ? next.returns : [];
   next.cashShifts = Array.isArray(next.cashShifts) ? next.cashShifts.map(normalizeShift) : clone(seedState.cashShifts);
@@ -126,7 +153,9 @@ function normalizeState(input) {
 function normalizeProduct(product) {
   return {
     id: product.id || `p-${Date.now()}`,
-    name: product.name || "Новий товар",
+    sqlId: product.sqlId || product.id || "",
+    source: product.source || "sql",
+    name: product.name || "Товар з SQL",
     sku: product.sku || product.id || `SKU-${Date.now()}`,
     barcode: product.barcode || "",
     category: product.category || "Інше",
@@ -574,20 +603,20 @@ function renderCatalog() {
       <article class="panel">
         <div class="split">
           <h2>B2C.4 Товари</h2>
-          <span class="pill">${state.products.length} SKU</span>
+          <span class="pill">${state.products.length} SKU з SQL</span>
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>SKU</th><th>Назва</th><th>Штрихкод</th><th>Категорія</th><th>Ціна</th><th>Собівартість</th><th>Залишок</th><th>Дії</th></tr></thead>
+            <thead><tr><th>SQL ID</th><th>SKU</th><th>Назва</th><th>Штрихкод</th><th>Категорія</th><th>Ціна</th><th>Залишок</th><th>Дії</th></tr></thead>
             <tbody>
               ${state.products.map((product) => `
                 <tr>
+                  <td>${escapeHtml(product.sqlId || "-")}</td>
                   <td>${escapeHtml(product.sku)}</td>
                   <td>${escapeHtml(product.name)}</td>
                   <td>${escapeHtml(product.barcode || "-")}</td>
                   <td>${escapeHtml(product.category)}</td>
                   <td>${formatMoney(product.price)}</td>
-                  <td>${formatMoney(product.cost)}</td>
                   <td>${stockQty(product.id)}</td>
                   <td><button class="secondary" type="button" data-add-cart="${escapeHtml(product.id)}">У чек</button></td>
                 </tr>
@@ -597,17 +626,28 @@ function renderCatalog() {
         </div>
       </article>
       <article class="panel">
-        <h2>Новий товар</h2>
-        <form class="form-grid one-col" data-action="create-product">
-          <label class="field"><span>Назва</span><input name="name" required placeholder="назва товару"></label>
-          <label class="field"><span>SKU</span><input name="sku" required placeholder="унікальний код"></label>
-          <label class="field"><span>Штрихкод</span><input name="barcode" placeholder="EAN / внутрішній код"></label>
-          <label class="field"><span>Категорія</span><input name="category" value="Аксесуари"></label>
-          <label class="field"><span>Ціна продажу</span><input name="price" type="number" min="0" required></label>
-          <label class="field"><span>Собівартість</span><input name="cost" type="number" min="0" required></label>
-          <label class="field"><span>Мінімальний залишок</span><input name="minStock" type="number" min="0" value="1"></label>
-          <label class="field"><span>Початковий залишок</span><input name="openingQty" type="number" min="0" value="0"></label>
-          <button class="primary" type="submit">Додати SKU</button>
+        <div class="split">
+          <h2>Імпорт товарів з SQL</h2>
+          <span class="pill good">ручне SKU вимкнено</span>
+        </div>
+        <div class="stack">
+          <div class="log-row">
+            <strong>Джерело</strong>
+            <span>${escapeHtml(state.productImport.source || SQL_PRODUCT_SOURCE)}</span>
+          </div>
+          <div class="log-row">
+            <strong>Останній імпорт</strong>
+            <span>${formatDateTime(state.productImport.lastRunAt)} · ${state.productImport.rows || 0} рядків</span>
+          </div>
+          <div class="sql-box">
+            SELECT sql_id, sku, barcode, name, category, price, cost, min_stock, stock_qty
+            FROM dbo.RetailProducts
+            WHERE active = 1
+          </div>
+          <p class="muted">SKU у роздробі не створюється вручну. Товари, ціни, штрихкоди та базові залишки приходять тільки з SQL-джерела.</p>
+        </div>
+        <form class="form-grid one-col" data-action="sync-sql-products">
+          <button class="primary" type="submit">Синхронізувати з SQL</button>
         </form>
       </article>
     </section>
@@ -829,26 +869,16 @@ function createReceipt(form) {
   render();
 }
 
-function createProduct(form) {
-  const data = Object.fromEntries(new FormData(form).entries());
-  const sku = String(data.sku || "").trim();
-  if (!sku) return alert("Вкажіть SKU товару.");
-  if (state.products.some((product) => product.sku.toLowerCase() === sku.toLowerCase())) {
-    return alert("SKU вже існує.");
-  }
-  const product = normalizeProduct({
-    id: `p-${Date.now()}`,
-    name: String(data.name || "").trim(),
-    sku,
-    barcode: String(data.barcode || "").trim(),
-    category: String(data.category || "Інше").trim(),
-    price: Number(data.price || 0),
-    cost: Number(data.cost || 0),
-    minStock: Number(data.minStock || 0)
-  });
-  state.products.push(product);
-  state.stock.push({ productId: product.id, qty: Math.max(0, Number(data.openingQty || 0)) });
-  audit(`Створено SKU ${product.sku}: ${product.name}`);
+function syncProductsFromSql() {
+  state.products = sqlProductSnapshot.map((row) => normalizeProduct(productFromSql(row)));
+  state.stock = sqlProductSnapshot.map(stockFromSql);
+  state.productImport = {
+    source: SQL_PRODUCT_SOURCE,
+    rows: sqlProductSnapshot.length,
+    lastRunAt: nowIso(),
+    mode: "manual-sync"
+  };
+  audit(`Імпортовано ${state.products.length} SKU з SQL (${SQL_PRODUCT_SOURCE})`);
   saveState();
   render();
 }
@@ -1111,7 +1141,7 @@ document.addEventListener("submit", (event) => {
   if (!form) return;
   event.preventDefault();
   if (form.dataset.action === "create-receipt") createReceipt(form);
-  if (form.dataset.action === "create-product") createProduct(form);
+  if (form.dataset.action === "sync-sql-products") syncProductsFromSql();
   if (form.dataset.action === "create-customer") createCustomer(form);
   if (form.dataset.action === "create-return") createPartialReturn(form);
   if (form.dataset.action === "receive-stock") receiveStock(form);
