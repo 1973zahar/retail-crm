@@ -1,8 +1,8 @@
 "use strict";
 
-const APP_VERSION = "2026.06.04.8";
-const APP_BUILD = "20260604-b2c-employees-roles";
-const STORAGE_KEY = "retail-crm-b2c-v7";
+const APP_VERSION = "2026.06.04.9";
+const APP_BUILD = "20260604-b2c-pos-combined";
+const STORAGE_KEY = "retail-crm-b2c-v8";
 
 const nowIso = () => new Date().toISOString();
 const today = () => nowIso().slice(0, 10);
@@ -13,14 +13,12 @@ const SQL_STOCK_RECEIPT_SOURCE = "MSSQL:dbo.RetailStockReceipts";
 const EMPLOYEE_STATUSES = { active: "Активний", inactive: "Вимкнений", vacation: "Відпустка" };
 const ROLE_BLOCKS = [
   { id: "dashboard", label: "Панель" },
-  { id: "checkout", label: "Продажі" },
-  { id: "receipts", label: "Чеки" },
+  { id: "pos", label: "POS / чеки / каса" },
   { id: "returns", label: "Повернення" },
   { id: "catalog", label: "Товари SQL" },
   { id: "customers", label: "Клієнти" },
   { id: "stock", label: "Залишки" },
   { id: "inventory", label: "Інвентаризація" },
-  { id: "cash", label: "Каса/POS" },
   { id: "reports", label: "Звіти" },
   { id: "employees", label: "Працівники" },
   { id: "log", label: "Журнал" }
@@ -45,17 +43,17 @@ const EMPLOYEE_ROLES = {
   },
   admin: {
     label: "Адміністратор",
-    blocks: ["dashboard", "checkout", "receipts", "returns", "catalog", "customers", "stock", "inventory", "cash", "reports", "employees", "log"],
+    blocks: ["dashboard", "pos", "returns", "catalog", "customers", "stock", "inventory", "reports", "employees", "log"],
     actions: ["sale_create", "return_create", "cash_open", "cash_close", "inventory_post", "inventory_resort", "sql_import", "employee_manage", "reports_view", "audit_view"]
   },
   seller: {
     label: "Продавець",
-    blocks: ["dashboard", "checkout", "receipts", "catalog", "customers", "stock"],
+    blocks: ["dashboard", "pos", "catalog", "customers", "stock"],
     actions: ["sale_create"]
   },
   cashier: {
     label: "Касир",
-    blocks: ["dashboard", "checkout", "receipts", "returns", "cash"],
+    blocks: ["dashboard", "pos", "returns"],
     actions: ["sale_create", "return_create", "cash_open", "cash_close"]
   }
 };
@@ -223,17 +221,17 @@ const seedState = {
 
 const navItems = [
   ["dashboard", "Панель"],
-  ["checkout", "Новий чек"],
-  ["receipts", "Чеки"],
+  ["pos", "POS / Чеки / Каса"],
   ["returns", "Повернення"],
   ["catalog", "Товари"],
   ["customers", "Клієнти"],
   ["stock", "Залишки"],
-  ["cash", "Каса/POS"],
   ["reports", "Звіт дня"],
   ["employees", "Працівники"],
   ["log", "Журнал"]
 ];
+
+const VIEW_ALIASES = { checkout: "pos", receipts: "pos", cash: "pos" };
 
 let state = loadState();
 
@@ -252,6 +250,7 @@ function loadState() {
 
 function normalizeState(input) {
   const next = { ...clone(seedState), ...(input || {}) };
+  next.currentView = normalizeView(next.currentView);
   next.products = Array.isArray(next.products) ? next.products.map(normalizeProduct) : clone(seedState.products);
   next.customers = Array.isArray(next.customers) ? next.customers.map(normalizeCustomer) : clone(seedState.customers);
   next.employees = Array.isArray(next.employees) ? next.employees.map(normalizeEmployee) : clone(seedState.employees);
@@ -279,6 +278,11 @@ function normalizeState(input) {
   next.checkout.lines = Array.isArray(next.checkout.lines) && next.checkout.lines.length ? next.checkout.lines : clone(seedState.checkout.lines);
   next.checkout.printReceiptId = next.checkout.printReceiptId || next.receipts[0]?.id || "";
   return next;
+}
+
+function normalizeView(view) {
+  const id = VIEW_ALIASES[view] || view || seedState.currentView;
+  return navItems.some(([itemId]) => itemId === id) ? id : seedState.currentView;
 }
 
 function normalizeProduct(product) {
@@ -677,6 +681,25 @@ function renderCheckout() {
   return renderCheckoutPanel(true);
 }
 
+function renderPos() {
+  setTitle("POS / чеки / каса");
+  const shift = openShift();
+  const todayReceipts = state.receipts.filter((receipt) => receipt.date === today());
+  const todayRevenue = todayReceipts.reduce((sum, receipt) => sum + Number(receipt.total || 0), 0);
+  const cashier = employeeById(state.selectedCashierId);
+  return `
+    <section class="grid four">
+      <article class="card metric"><span>Касова зміна</span><strong>${shift ? "Відкрита" : "Закрита"}</strong><small>${shift ? escapeHtml(shift.id) : "Можна відкрити в цьому блоці."}</small></article>
+      <article class="card metric"><span>Касир</span><strong>${escapeHtml(shift?.cashier || cashier.name)}</strong><small>${escapeHtml(shift?.cashierRole || roleLabel(cashier.role))}.</small></article>
+      <article class="card metric"><span>Чеків сьогодні</span><strong>${todayReceipts.length}</strong><small>Журнал чеків у цьому ж блоці.</small></article>
+      <article class="card metric"><span>Виторг сьогодні</span><strong>${formatMoney(todayRevenue)}</strong><small>До повернень.</small></article>
+    </section>
+    <div class="section-gap">${renderCheckoutPanel(true)}</div>
+    <div class="section-gap">${renderReceiptsContent()}</div>
+    <div class="section-gap">${renderCashContent()}</div>
+  `;
+}
+
 function renderCheckoutPanel(full = false) {
   const lines = cartLines();
   const subtotal = receiptSubtotal(lines);
@@ -745,6 +768,10 @@ function renderCheckoutPanel(full = false) {
 
 function renderReceipts() {
   setTitle("Чеки магазину");
+  return renderReceiptsContent();
+}
+
+function renderReceiptsContent() {
   const selected = state.receipts.find((receipt) => receipt.id === state.checkout.printReceiptId) || state.receipts[0];
   return `
     <section class="grid two">
@@ -1232,6 +1259,10 @@ function renderCustomers() {
 
 function renderCash() {
   setTitle("Каса та POS");
+  return renderCashContent();
+}
+
+function renderCashContent() {
   const shift = openShift();
   return `
     <section class="grid two">
@@ -1510,7 +1541,7 @@ function createReceipt(form) {
   applyPaymentToShift(shift, receipt.paymentMethod, receipt.total, "sale");
   state.checkout.lines = [{ productId: state.products[0].id, qty: 1, discount: 0 }];
   state.checkout.note = "";
-  state.currentView = "receipts";
+  state.currentView = "pos";
   audit(`Проведено чек ${receipt.id} на ${formatMoney(receipt.total)}`);
   saveState();
   render();
@@ -1554,7 +1585,7 @@ function createCustomer(form) {
 
 function selectCustomer(customerId) {
   state.checkout.customerId = customerId;
-  state.currentView = "checkout";
+  state.currentView = "pos";
   audit(`Клієнта ${customerById(customerId).name} вибрано для нового чека`);
   saveState();
   render();
@@ -1856,7 +1887,7 @@ function selectCashier(employeeId) {
   const employee = employeeById(employeeId);
   if (employee.status !== "active") return alert("Для касової зміни можна вибрати тільки активного працівника.");
   state.selectedCashierId = employee.id;
-  state.currentView = "cash";
+  state.currentView = "pos";
   audit(`Працівника ${employee.name} вибрано відповідальним за касову зміну`);
   saveState();
   render();
@@ -1932,13 +1963,14 @@ function render() {
   renderNav();
   const views = {
     dashboard: renderDashboard,
-    checkout: renderCheckout,
-    receipts: renderReceipts,
+    pos: renderPos,
+    checkout: renderPos,
+    receipts: renderPos,
     returns: renderReturns,
     catalog: renderCatalog,
     customers: renderCustomers,
     stock: renderStock,
-    cash: renderCash,
+    cash: renderPos,
     reports: renderReports,
     employees: renderEmployees,
     log: renderLog
@@ -1949,7 +1981,7 @@ function render() {
 document.addEventListener("click", (event) => {
   const viewButton = event.target.closest("[data-view]");
   if (viewButton) {
-    state.currentView = viewButton.dataset.view;
+    state.currentView = normalizeView(viewButton.dataset.view);
     saveState();
     render();
     return;
