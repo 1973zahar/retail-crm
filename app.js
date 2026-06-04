@@ -1,7 +1,7 @@
 "use strict";
 
-const APP_VERSION = "2026.06.04.11";
-const APP_BUILD = "20260604-b2c-sale-block-label";
+const APP_VERSION = "2026.06.04.12";
+const APP_BUILD = "20260604-b2c-directories-submenu";
 const STORAGE_KEY = "retail-crm-b2c-v8";
 
 const nowIso = () => new Date().toISOString();
@@ -222,10 +222,12 @@ const seedState = {
 const navItems = [
   ["dashboard", "Панель"],
   ["pos", "Продаж"],
+  { id: "directories", label: "Довідники", children: [
+    ["catalog", "Товари"],
+    ["customers", "Клієнти"],
+    ["stock", "Залишки"]
+  ] },
   ["returns", "Повернення"],
-  ["catalog", "Товари"],
-  ["customers", "Клієнти"],
-  ["stock", "Залишки"],
   ["reports", "Звіт дня"],
   ["employees", "Працівники"],
   ["log", "Журнал"]
@@ -282,7 +284,11 @@ function normalizeState(input) {
 
 function normalizeView(view) {
   const id = VIEW_ALIASES[view] || view || seedState.currentView;
-  return navItems.some(([itemId]) => itemId === id) ? id : seedState.currentView;
+  return flatNavItems().some(([itemId]) => itemId === id) ? id : seedState.currentView;
+}
+
+function flatNavItems(items = navItems) {
+  return items.flatMap((item) => Array.isArray(item) ? [item] : item.children || []);
 }
 
 function normalizeProduct(product) {
@@ -636,9 +642,23 @@ function setTitle(title) {
 }
 
 function renderNav() {
-  document.getElementById("nav").innerHTML = navItems.map(([id, label]) => (
-    `<button type="button" class="${state.currentView === id ? "active" : ""}" data-view="${id}">${escapeHtml(label)}</button>`
-  )).join("");
+  document.getElementById("nav").innerHTML = navItems.map((item) => {
+    if (Array.isArray(item)) {
+      const [id, label] = item;
+      return `<button type="button" class="${state.currentView === id ? "active" : ""}" data-view="${id}">${escapeHtml(label)}</button>`;
+    }
+
+    const children = item.children || [];
+    const active = children.some(([id]) => state.currentView === id);
+    return `
+      <div class="nav-group ${active ? "open" : ""}">
+        <div class="nav-group-label">${escapeHtml(item.label)}</div>
+        <div class="nav-submenu">
+          ${children.map(([id, label]) => `<button type="button" class="${state.currentView === id ? "active" : ""}" data-view="${id}">${escapeHtml(label)}</button>`).join("")}
+        </div>
+      </div>
+    `;
+  }).join("");
 }
 
 function renderDashboard() {
