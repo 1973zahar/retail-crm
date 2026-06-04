@@ -1,20 +1,26 @@
 "use strict";
 
-const APP_VERSION = "2026.06.04.4";
-const APP_BUILD = "20260604-b2c-sql-import";
-const STORAGE_KEY = "retail-crm-b2c-v3";
+const APP_VERSION = "2026.06.04.5";
+const APP_BUILD = "20260604-b2c-sql-stock-import";
+const STORAGE_KEY = "retail-crm-b2c-v4";
 
 const nowIso = () => new Date().toISOString();
 const today = () => nowIso().slice(0, 10);
 const LOYALTY_DISCOUNTS = { standard: 0, silver: 3, gold: 5 };
 const LOYALTY_LABELS = { standard: "Стандарт", silver: "Silver 3%", gold: "Gold 5%" };
 const SQL_PRODUCT_SOURCE = "MSSQL:dbo.RetailProducts";
+const SQL_STOCK_RECEIPT_SOURCE = "MSSQL:dbo.RetailStockReceipts";
 const sqlProductSnapshot = [
   { id: "p-100", sqlId: "SQL-100", name: "Оптичний приціл R-Point", sku: "OPT-RPOINT", barcode: "4820001000011", category: "Оптика", price: 5400, cost: 3650, minStock: 3, stockQty: 8 },
   { id: "p-101", sqlId: "SQL-101", name: "Чохол транспортний 120 см", sku: "CASE-120", barcode: "4820001000028", category: "Аксесуари", price: 2100, cost: 1180, minStock: 5, stockQty: 12 },
   { id: "p-102", sqlId: "SQL-102", name: "Набір для догляду", sku: "CARE-KIT", barcode: "4820001000035", category: "Догляд", price: 860, cost: 420, minStock: 8, stockQty: 18 },
   { id: "p-103", sqlId: "SQL-103", name: "Ремінь тактичний", sku: "SLING-TAC", barcode: "4820001000042", category: "Аксесуари", price: 1450, cost: 790, minStock: 6, stockQty: 7 },
   { id: "p-104", sqlId: "SQL-104", name: "Захисні окуляри ProShield", sku: "EYE-PRO", barcode: "4820001000059", category: "Захист", price: 980, cost: 520, minStock: 10, stockQty: 15 }
+];
+const sqlStockReceiptSnapshot = [
+  { id: "RCV-SQL-0001", sqlId: "IN-SQL-9001", date: today(), supplier: "SQL Central Warehouse", productId: "p-100", qty: 4, note: "SQL import demo" },
+  { id: "RCV-SQL-0002", sqlId: "IN-SQL-9002", date: today(), supplier: "SQL Central Warehouse", productId: "p-102", qty: 6, note: "SQL import demo" },
+  { id: "RCV-SQL-0003", sqlId: "IN-SQL-9003", date: today(), supplier: "SQL Central Warehouse", productId: "p-104", qty: 5, note: "SQL import demo" }
 ];
 
 function productFromSql(row) {
@@ -34,6 +40,20 @@ function productFromSql(row) {
 
 function stockFromSql(row) {
   return { productId: row.id, qty: Number(row.stockQty || 0) };
+}
+
+function stockReceiptFromSql(row) {
+  return {
+    id: row.id,
+    sqlId: row.sqlId,
+    source: "sql",
+    date: row.date,
+    supplier: row.supplier,
+    productId: row.productId,
+    qty: Number(row.qty || 0),
+    note: row.note || "",
+    createdAt: nowIso()
+  };
 }
 
 const seedState = {
@@ -58,6 +78,12 @@ const seedState = {
   productImport: {
     source: SQL_PRODUCT_SOURCE,
     rows: sqlProductSnapshot.length,
+    lastRunAt: nowIso(),
+    mode: "seed"
+  },
+  stockImport: {
+    source: SQL_STOCK_RECEIPT_SOURCE,
+    rows: sqlStockReceiptSnapshot.length,
     lastRunAt: nowIso(),
     mode: "seed"
   },
@@ -93,7 +119,7 @@ const seedState = {
       actualCash: 0
     }
   ],
-  stockReceipts: [],
+  stockReceipts: sqlStockReceiptSnapshot.map(stockReceiptFromSql),
   auditLog: [
     { at: nowIso(), actor: "system", event: "Створено demo-дані B2C прототипу" }
   ]
@@ -136,10 +162,14 @@ function normalizeState(input) {
     ...clone(seedState.productImport),
     ...(next.productImport || {})
   };
+  next.stockImport = {
+    ...clone(seedState.stockImport),
+    ...(next.stockImport || {})
+  };
   next.receipts = Array.isArray(next.receipts) ? next.receipts.map((receipt) => normalizeReceipt(receipt, next.products)) : [];
   next.returns = Array.isArray(next.returns) ? next.returns : [];
   next.cashShifts = Array.isArray(next.cashShifts) ? next.cashShifts.map(normalizeShift) : clone(seedState.cashShifts);
-  next.stockReceipts = Array.isArray(next.stockReceipts) ? next.stockReceipts : [];
+  next.stockReceipts = Array.isArray(next.stockReceipts) ? next.stockReceipts.map(normalizeStockReceipt) : clone(seedState.stockReceipts);
   next.auditLog = Array.isArray(next.auditLog) ? next.auditLog : [];
   next.checkout = {
     ...clone(seedState.checkout),
@@ -203,6 +233,20 @@ function normalizeShift(shift) {
     cardReturns: Number(shift.cardReturns || 0),
     bankReturns: Number(shift.bankReturns || 0),
     actualCash: Number(shift.actualCash || 0)
+  };
+}
+
+function normalizeStockReceipt(receipt) {
+  return {
+    id: receipt.id || nextId("RCV-SQL", []),
+    sqlId: receipt.sqlId || receipt.id || "",
+    source: receipt.source || "sql",
+    date: receipt.date || today(),
+    supplier: receipt.supplier || SQL_STOCK_RECEIPT_SOURCE,
+    productId: receipt.productId || seedState.products[0].id,
+    qty: Number(receipt.qty || 0),
+    note: receipt.note || "",
+    createdAt: receipt.createdAt || nowIso()
   };
 }
 
@@ -562,6 +606,7 @@ function renderReturns() {
 
 function renderStock() {
   setTitle("Залишки магазину");
+  const receiptRows = state.stockReceipts.slice(0, 6);
   return `
     <section class="grid two">
       <article class="panel">
@@ -583,14 +628,45 @@ function renderStock() {
         </div>
       </article>
       <article class="panel">
-        <h2>Надходження в магазин</h2>
-        <form class="form-grid one-col" data-action="receive-stock">
-          <label class="field"><span>Товар</span><select name="productId">${state.products.map((product) => option(product.id, `${product.name} · ${product.sku}`)).join("")}</select></label>
-          <label class="field"><span>Кількість</span><input name="qty" type="number" min="1" value="1" required></label>
-          <label class="field"><span>Постачальник / джерело</span><input name="supplier" value="Центральний склад"></label>
-          <label class="field"><span>Коментар</span><input name="note" placeholder="накладна або примітка"></label>
-          <button class="primary" type="submit">Оприбуткувати</button>
+        <div class="split">
+          <h2>Імпорт надходжень з SQL</h2>
+          <span class="pill good">ручне оприбуткування вимкнено</span>
+        </div>
+        <div class="stack">
+          <div class="log-row">
+            <strong>Джерело</strong>
+            <span>${escapeHtml(state.stockImport.source || SQL_STOCK_RECEIPT_SOURCE)}</span>
+          </div>
+          <div class="log-row">
+            <strong>Останній імпорт</strong>
+            <span>${formatDateTime(state.stockImport.lastRunAt)} · ${state.stockImport.rows || 0} рядків</span>
+          </div>
+          <div class="sql-box">
+            SELECT receipt_id, sql_product_id, sku, qty, supplier, receipt_date
+            FROM dbo.RetailStockReceipts
+            WHERE store_code = 'B2C' AND posted = 1
+          </div>
+          <p class="muted">Надходження в магазин не вводяться вручну. Оприбуткування, постачальник, кількість і поточні залишки приходять тільки з SQL-джерела.</p>
+        </div>
+        <form class="form-grid one-col" data-action="sync-sql-stock-receipts">
+          <button class="primary" type="submit">Імпортувати надходження з SQL</button>
         </form>
+        <div class="table-wrap section-gap">
+          <table>
+            <thead><tr><th>SQL док.</th><th>Дата</th><th>SKU</th><th>К-сть</th><th>Постачальник</th></tr></thead>
+            <tbody>
+              ${receiptRows.map((item) => `
+                <tr>
+                  <td>${escapeHtml(item.sqlId || item.id)}</td>
+                  <td>${escapeHtml(item.date)}</td>
+                  <td>${escapeHtml(productById(item.productId).sku)}</td>
+                  <td><strong>${item.qty}</strong></td>
+                  <td>${escapeHtml(item.supplier || "-")}</td>
+                </tr>
+              `).join("") || '<tr><td colspan="5" class="muted">SQL-надходжень ще немає.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
       </article>
     </section>
   `;
@@ -992,22 +1068,16 @@ function createPartialReturn(form) {
   render();
 }
 
-function receiveStock(form) {
-  const data = Object.fromEntries(new FormData(form).entries());
-  const product = productById(data.productId);
-  const qty = Math.max(1, Number(data.qty || 1));
-  stockRow(product.id).qty += qty;
-  const doc = {
-    id: nextId("RCV", state.stockReceipts),
-    date: today(),
-    supplier: data.supplier || "Центральний склад",
-    productId: product.id,
-    qty,
-    note: data.note || "",
-    createdAt: nowIso()
+function syncStockReceiptsFromSql() {
+  state.stockReceipts = sqlStockReceiptSnapshot.map((row) => normalizeStockReceipt(stockReceiptFromSql(row)));
+  state.stock = sqlProductSnapshot.map(stockFromSql);
+  state.stockImport = {
+    source: SQL_STOCK_RECEIPT_SOURCE,
+    rows: state.stockReceipts.length,
+    lastRunAt: nowIso(),
+    mode: "manual-sync"
   };
-  state.stockReceipts.unshift(doc);
-  audit(`Оприбутковано ${qty} од. ${product.sku} у магазин`);
+  audit(`Імпортовано ${state.stockReceipts.length} надходжень з SQL (${SQL_STOCK_RECEIPT_SOURCE})`);
   saveState();
   render();
 }
@@ -1144,7 +1214,7 @@ document.addEventListener("submit", (event) => {
   if (form.dataset.action === "sync-sql-products") syncProductsFromSql();
   if (form.dataset.action === "create-customer") createCustomer(form);
   if (form.dataset.action === "create-return") createPartialReturn(form);
-  if (form.dataset.action === "receive-stock") receiveStock(form);
+  if (form.dataset.action === "sync-sql-stock-receipts") syncStockReceiptsFromSql();
   if (form.dataset.action === "open-shift") openCashShift(form);
   if (form.dataset.action === "close-shift") closeCashShift(form);
 });
