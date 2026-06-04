@@ -92,27 +92,58 @@ button {
 }
 
 .nav-group {
-  display: grid;
-  gap: 6px;
+  position: relative;
 }
 
 .nav-group-label {
-  padding: 8px 12px 2px;
-  color: #b6c3d2;
-  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  background: transparent;
+  color: #e7edf5;
   font-weight: 700;
 }
 
-.nav-group.open .nav-group-label {
+.nav-group-caret {
+  color: #b6c3d2;
+}
+
+.nav-group.open .nav-group-label,
+.nav-group:hover .nav-group-label,
+.nav-group:focus-within .nav-group-label {
+  background: #243447;
   color: #ffffff;
 }
 
 .nav-submenu {
+  position: absolute;
+  top: 0;
+  left: calc(100% + 12px);
+  z-index: 30;
   display: grid;
   gap: 6px;
-  margin-left: 8px;
-  padding-left: 10px;
-  border-left: 1px solid rgba(255, 255, 255, 0.18);
+  min-width: 190px;
+  margin: 0;
+  padding: 8px;
+  background: #17212f;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  box-shadow: 0 16px 30px rgba(0, 0, 0, 0.22);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-6px);
+  visibility: hidden;
+  transition: opacity 120ms ease, transform 120ms ease, visibility 120ms ease;
+}
+
+.nav-group:hover .nav-submenu,
+.nav-group:focus-within .nav-submenu {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(0);
+  visibility: visible;
 }
 
 .nav-submenu button {

@@ -1,7 +1,7 @@
 "use strict";
 
-const APP_VERSION = "2026.06.04.12";
-const APP_BUILD = "20260604-b2c-directories-submenu";
+const APP_VERSION = "2026.06.04.13";
+const APP_BUILD = "20260604-b2c-directories-flyout";
 const STORAGE_KEY = "retail-crm-b2c-v8";
 
 const nowIso = () => new Date().toISOString();
@@ -652,7 +652,10 @@ function renderNav() {
     const active = children.some(([id]) => state.currentView === id);
     return `
       <div class="nav-group ${active ? "open" : ""}">
-        <div class="nav-group-label">${escapeHtml(item.label)}</div>
+        <button type="button" class="nav-group-label" aria-haspopup="true" aria-expanded="${active ? "true" : "false"}">
+          <span>${escapeHtml(item.label)}</span>
+          <span class="nav-group-caret" aria-hidden="true">&gt;</span>
+        </button>
         <div class="nav-submenu">
           ${children.map(([id, label]) => `<button type="button" class="${state.currentView === id ? "active" : ""}" data-view="${id}">${escapeHtml(label)}</button>`).join("")}
         </div>
