@@ -1,8 +1,8 @@
 "use strict";
 
-const APP_VERSION = "2026.06.04.5";
-const APP_BUILD = "20260604-b2c-sql-stock-import";
-const STORAGE_KEY = "retail-crm-b2c-v4";
+const APP_VERSION = "2026.06.04.6";
+const APP_BUILD = "20260604-b2c-inventory-scan";
+const STORAGE_KEY = "retail-crm-b2c-v5";
 
 const nowIso = () => new Date().toISOString();
 const today = () => nowIso().slice(0, 10);
@@ -11,11 +11,11 @@ const LOYALTY_LABELS = { standard: "Стандарт", silver: "Silver 3%", gold
 const SQL_PRODUCT_SOURCE = "MSSQL:dbo.RetailProducts";
 const SQL_STOCK_RECEIPT_SOURCE = "MSSQL:dbo.RetailStockReceipts";
 const sqlProductSnapshot = [
-  { id: "p-100", sqlId: "SQL-100", name: "Оптичний приціл R-Point", sku: "OPT-RPOINT", barcode: "4820001000011", category: "Оптика", price: 5400, cost: 3650, minStock: 3, stockQty: 8 },
-  { id: "p-101", sqlId: "SQL-101", name: "Чохол транспортний 120 см", sku: "CASE-120", barcode: "4820001000028", category: "Аксесуари", price: 2100, cost: 1180, minStock: 5, stockQty: 12 },
-  { id: "p-102", sqlId: "SQL-102", name: "Набір для догляду", sku: "CARE-KIT", barcode: "4820001000035", category: "Догляд", price: 860, cost: 420, minStock: 8, stockQty: 18 },
-  { id: "p-103", sqlId: "SQL-103", name: "Ремінь тактичний", sku: "SLING-TAC", barcode: "4820001000042", category: "Аксесуари", price: 1450, cost: 790, minStock: 6, stockQty: 7 },
-  { id: "p-104", sqlId: "SQL-104", name: "Захисні окуляри ProShield", sku: "EYE-PRO", barcode: "4820001000059", category: "Захист", price: 980, cost: 520, minStock: 10, stockQty: 15 }
+  { id: "p-100", sqlId: "SQL-100", name: "Оптичний приціл R-Point", sku: "OPT-RPOINT", barcode: "4820001000011", qr: "B2C|SKU=OPT-RPOINT|BARCODE=4820001000011", category: "Оптика", price: 5400, cost: 3650, minStock: 3, stockQty: 8 },
+  { id: "p-101", sqlId: "SQL-101", name: "Чохол транспортний 120 см", sku: "CASE-120", barcode: "4820001000028", qr: "B2C|SKU=CASE-120|BARCODE=4820001000028", category: "Аксесуари", price: 2100, cost: 1180, minStock: 5, stockQty: 12 },
+  { id: "p-102", sqlId: "SQL-102", name: "Набір для догляду", sku: "CARE-KIT", barcode: "4820001000035", qr: "B2C|SKU=CARE-KIT|BARCODE=4820001000035", category: "Догляд", price: 860, cost: 420, minStock: 8, stockQty: 18 },
+  { id: "p-103", sqlId: "SQL-103", name: "Ремінь тактичний", sku: "SLING-TAC", barcode: "4820001000042", qr: "B2C|SKU=SLING-TAC|BARCODE=4820001000042", category: "Аксесуари", price: 1450, cost: 790, minStock: 6, stockQty: 7 },
+  { id: "p-104", sqlId: "SQL-104", name: "Захисні окуляри ProShield", sku: "EYE-PRO", barcode: "4820001000059", qr: "B2C|SKU=EYE-PRO|BARCODE=4820001000059", category: "Захист", price: 980, cost: 520, minStock: 10, stockQty: 15 }
 ];
 const sqlStockReceiptSnapshot = [
   { id: "RCV-SQL-0001", sqlId: "IN-SQL-9001", date: today(), supplier: "SQL Central Warehouse", productId: "p-100", qty: 4, note: "SQL import demo" },
@@ -31,6 +31,7 @@ function productFromSql(row) {
     name: row.name,
     sku: row.sku,
     barcode: row.barcode,
+    qr: row.qr,
     category: row.category,
     price: row.price,
     cost: row.cost,
@@ -53,6 +54,14 @@ function stockReceiptFromSql(row) {
     qty: Number(row.qty || 0),
     note: row.note || "",
     createdAt: nowIso()
+  };
+}
+
+function inventoryLineFromProduct(row) {
+  return {
+    productId: row.id,
+    expectedQty: Number(row.stockQty || 0),
+    actualQty: ""
   };
 }
 
@@ -87,6 +96,14 @@ const seedState = {
     lastRunAt: nowIso(),
     mode: "seed"
   },
+  inventory: {
+    id: "INV-DRAFT",
+    date: today(),
+    scan: "",
+    printedAt: "",
+    lines: sqlProductSnapshot.map(inventoryLineFromProduct)
+  },
+  inventoryDocs: [],
   receipts: [
     {
       id: "B2C-0001",
@@ -170,6 +187,8 @@ function normalizeState(input) {
   next.returns = Array.isArray(next.returns) ? next.returns : [];
   next.cashShifts = Array.isArray(next.cashShifts) ? next.cashShifts.map(normalizeShift) : clone(seedState.cashShifts);
   next.stockReceipts = Array.isArray(next.stockReceipts) ? next.stockReceipts.map(normalizeStockReceipt) : clone(seedState.stockReceipts);
+  next.inventory = normalizeInventory(next.inventory, next.products, next.stock);
+  next.inventoryDocs = Array.isArray(next.inventoryDocs) ? next.inventoryDocs.map(normalizeInventoryDoc) : [];
   next.auditLog = Array.isArray(next.auditLog) ? next.auditLog : [];
   next.checkout = {
     ...clone(seedState.checkout),
@@ -188,6 +207,7 @@ function normalizeProduct(product) {
     name: product.name || "Товар з SQL",
     sku: product.sku || product.id || `SKU-${Date.now()}`,
     barcode: product.barcode || "",
+    qr: product.qr || "",
     category: product.category || "Інше",
     price: Number(product.price || 0),
     cost: Number(product.cost || 0),
@@ -250,6 +270,42 @@ function normalizeStockReceipt(receipt) {
   };
 }
 
+function normalizeInventory(inventory, products, stockRows) {
+  const sourceLines = Array.isArray(inventory?.lines) ? inventory.lines : [];
+  return {
+    id: inventory?.id || "INV-DRAFT",
+    date: inventory?.date || today(),
+    scan: inventory?.scan || "",
+    printedAt: inventory?.printedAt || "",
+    lines: products.map((product) => {
+      const existing = sourceLines.find((line) => line.productId === product.id);
+      const actualValue = existing?.actualQty;
+      return {
+        productId: product.id,
+        expectedQty: stockQtyFromRows(stockRows, product.id),
+        actualQty: actualValue === "" || actualValue === undefined || actualValue === null ? "" : Number(actualValue)
+      };
+    })
+  };
+}
+
+function normalizeInventoryDoc(doc) {
+  return {
+    id: doc.id || nextId("INV", []),
+    date: doc.date || today(),
+    createdAt: doc.createdAt || nowIso(),
+    lines: Array.isArray(doc.lines) ? doc.lines : [],
+    totalDiff: Number(doc.totalDiff || 0),
+    positiveDiff: Number(doc.positiveDiff || 0),
+    negativeDiff: Number(doc.negativeDiff || 0)
+  };
+}
+
+function stockQtyFromRows(stockRows, productId) {
+  const row = (stockRows || []).find((item) => item.productId === productId);
+  return Number(row?.qty || 0);
+}
+
 function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
@@ -278,6 +334,49 @@ function stockRow(productId) {
 
 function stockQty(productId) {
   return Number(stockRow(productId).qty || 0);
+}
+
+function normalizeScanText(value) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function scanTokens(value) {
+  const raw = normalizeScanText(value);
+  const tokens = new Set();
+  if (!raw) return tokens;
+  tokens.add(raw);
+  raw.split(/[|;&\n\r\t ?]+/).forEach((part) => {
+    const clean = part.trim();
+    if (!clean) return;
+    tokens.add(clean);
+    const pair = clean.split(/[=:]/);
+    if (pair.length > 1 && pair[1]) tokens.add(pair.slice(1).join("=").trim());
+  });
+  return tokens;
+}
+
+function productScanTargets(product) {
+  return [product.sku, product.barcode, product.qr, product.sqlId]
+    .map(normalizeScanText)
+    .filter(Boolean);
+}
+
+function productMatchesQuery(product, query) {
+  const raw = normalizeScanText(query);
+  if (!raw) return true;
+  const tokens = scanTokens(raw);
+  const text = normalizeScanText(`${product.name} ${product.sku} ${product.barcode} ${product.qr} ${product.sqlId}`);
+  if (text.includes(raw)) return true;
+  return productScanTargets(product).some((target) => tokens.has(target) || raw.includes(target));
+}
+
+function findProductByScan(value) {
+  const raw = normalizeScanText(value);
+  if (!raw) return null;
+  const tokens = scanTokens(raw);
+  return state.products.find((product) => (
+    productScanTargets(product).some((target) => tokens.has(target) || raw.includes(target))
+  )) || null;
 }
 
 function formatMoney(value) {
@@ -435,12 +534,7 @@ function renderCheckoutPanel(full = false) {
   const total = checkoutTotal(lines);
   const customer = customerById(state.checkout.customerId);
   const filter = String(state.checkout.search || "").trim().toLowerCase();
-  const products = state.products.filter((product) => (
-    !filter
-    || product.name.toLowerCase().includes(filter)
-    || product.sku.toLowerCase().includes(filter)
-    || product.barcode.includes(filter)
-  ));
+  const products = state.products.filter((product) => productMatchesQuery(product, filter));
   return `
     <section class="panel ${full ? "" : "compact-panel"}">
       <div class="split">
@@ -450,7 +544,8 @@ function renderCheckoutPanel(full = false) {
       <form class="form-grid checkout-form" data-action="create-receipt">
         <label class="field"><span>Покупець</span><select name="customerId" data-checkout-field>${state.customers.map((customer) => option(customer.id, customer.name, customer.id === state.checkout.customerId)).join("")}</select></label>
         <label class="field"><span>Оплата</span><select name="paymentMethod" data-checkout-field>${["cash", "card", "bank"].map((method) => option(method, paymentLabel(method), method === state.checkout.paymentMethod)).join("")}</select></label>
-        <label class="field wide"><span>Пошук SKU / штрихкод</span><input name="search" data-product-search value="${escapeHtml(state.checkout.search)}" placeholder="назва, SKU або штрихкод"></label>
+        <label class="field wide"><span>Пошук SKU / штрихкод / QR</span><input name="search" data-product-search value="${escapeHtml(state.checkout.search)}" placeholder="назва, SKU, штрихкод або QR"></label>
+        <label class="field wide"><span>Сканер продажу</span><input name="scan" data-checkout-scan autocomplete="off" placeholder="скануйте штрихкод або QR і натисніть Enter"></label>
         <div class="loyalty-note full">
           <span class="pill">${escapeHtml(LOYALTY_LABELS[customer.loyalty] || customer.loyalty)}</span>
           <strong>${escapeHtml(customer.name)}</strong>
@@ -604,9 +699,76 @@ function renderReturns() {
   `;
 }
 
+function inventoryRows() {
+  return state.products.map((product) => {
+    let line = state.inventory.lines.find((item) => item.productId === product.id);
+    if (!line) {
+      line = { productId: product.id, expectedQty: stockQty(product.id), actualQty: "" };
+      state.inventory.lines.push(line);
+    }
+    const expectedQty = stockQty(product.id);
+    const hasActual = line.actualQty !== "" && line.actualQty !== null && line.actualQty !== undefined;
+    const actualQty = hasActual ? Number(line.actualQty || 0) : "";
+    const diff = hasActual ? Number(actualQty) - expectedQty : null;
+    return { product, line, expectedQty, actualQty, hasActual, diff };
+  });
+}
+
+function inventoryTotals(rows) {
+  return rows.reduce((totals, row) => {
+    if (!row.hasActual) return totals;
+    totals.counted += 1;
+    totals.totalDiff += row.diff;
+    if (row.diff > 0) totals.positive += row.diff;
+    if (row.diff < 0) totals.negative += row.diff;
+    return totals;
+  }, { counted: 0, totalDiff: 0, positive: 0, negative: 0 });
+}
+
+function diffLabel(diff) {
+  if (diff === null || diff === undefined) return "-";
+  if (diff > 0) return `+${diff}`;
+  return String(diff);
+}
+
+function renderInventorySheet(rows, totals) {
+  return `
+    <div class="inventory-print-sheet">
+      <div class="split">
+        <div>
+          <h2>Інвентаризаційний лист</h2>
+          <p class="muted">${escapeHtml(state.inventory.id)} · ${escapeHtml(state.inventory.date)} · B2C магазин</p>
+        </div>
+        <span class="pill">${totals.counted}/${rows.length} позицій</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>SKU</th><th>Штрихкод</th><th>QR</th><th>Товар</th><th>Облік</th><th>Факт</th><th>Різниця</th><th>Підпис</th></tr></thead>
+          <tbody>
+            ${rows.map((row) => `
+              <tr>
+                <td>${escapeHtml(row.product.sku)}</td>
+                <td>${escapeHtml(row.product.barcode || "-")}</td>
+                <td>${escapeHtml(row.product.qr || "-")}</td>
+                <td>${escapeHtml(row.product.name)}</td>
+                <td>${row.expectedQty}</td>
+                <td>${row.hasActual ? row.actualQty : ""}</td>
+                <td>${diffLabel(row.diff)}</td>
+                <td></td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
 function renderStock() {
   setTitle("Залишки магазину");
   const receiptRows = state.stockReceipts.slice(0, 6);
+  const rows = inventoryRows();
+  const totals = inventoryTotals(rows);
   return `
     <section class="grid two">
       <article class="panel">
@@ -668,6 +830,65 @@ function renderStock() {
           </table>
         </div>
       </article>
+    </section>
+    <section class="panel section-gap inventory-panel">
+      <div class="split">
+        <div>
+          <h2>Інвентаризація</h2>
+          <p class="muted">Введення фактичних залишків, сканування штрихкоду/QR, різниця по обліку і друк листа.</p>
+        </div>
+        <span class="pill">${escapeHtml(state.inventory.id)}</span>
+      </div>
+      <section class="grid four">
+        <article class="card metric"><span>Позицій</span><strong>${rows.length}</strong><small>SKU з SQL-довідника.</small></article>
+        <article class="card metric"><span>Пораховано</span><strong>${totals.counted}</strong><small>Є фактичний залишок.</small></article>
+        <article class="card metric"><span>Надлишок</span><strong>${totals.positive}</strong><small>Факт більше обліку.</small></article>
+        <article class="card metric"><span>Нестача</span><strong>${Math.abs(totals.negative)}</strong><small>Факт менше обліку.</small></article>
+      </section>
+      <form class="form-grid section-gap" data-action="post-inventory">
+        <label class="field wide"><span>Сканер інвентаризації</span><input name="inventoryScan" data-inventory-scan autocomplete="off" placeholder="скануйте штрихкод або QR, Enter додає 1 до факту"></label>
+        <div class="toolbar full no-print">
+          <button class="secondary" type="button" data-print-inventory>Друк листа</button>
+          <button class="secondary" type="button" data-reset-inventory>Очистити факт</button>
+          <button class="primary" type="submit">Провести інвентаризацію</button>
+        </div>
+        <div class="table-wrap full">
+          <table>
+            <thead><tr><th>SKU</th><th>Товар</th><th>Штрихкод</th><th>QR</th><th>Облік</th><th>Факт</th><th>Різниця</th></tr></thead>
+            <tbody>
+              ${rows.map((row) => `
+                <tr class="${row.hasActual && row.diff !== 0 ? "inventory-diff" : ""}">
+                  <td>${escapeHtml(row.product.sku)}</td>
+                  <td>${escapeHtml(row.product.name)}</td>
+                  <td>${escapeHtml(row.product.barcode || "-")}</td>
+                  <td>${escapeHtml(row.product.qr || "-")}</td>
+                  <td><strong>${row.expectedQty}</strong></td>
+                  <td><input class="mini-input" data-inventory-actual="${escapeHtml(row.product.id)}" type="number" min="0" value="${row.hasActual ? row.actualQty : ""}"></td>
+                  <td><span class="pill ${row.diff === null ? "" : row.diff < 0 ? "danger" : row.diff > 0 ? "warn" : "good"}">${diffLabel(row.diff)}</span></td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      </form>
+      ${renderInventorySheet(rows, totals)}
+      <div class="table-wrap section-gap">
+        <table>
+          <thead><tr><th>Документ</th><th>Дата</th><th>Позицій</th><th>Різниця</th><th>Надлишок</th><th>Нестача</th></tr></thead>
+          <tbody>
+            ${state.inventoryDocs.slice(0, 5).map((doc) => `
+              <tr>
+                <td>${escapeHtml(doc.id)}</td>
+                <td>${formatDateTime(doc.createdAt)}</td>
+                <td>${doc.lines.length}</td>
+                <td>${diffLabel(doc.totalDiff)}</td>
+                <td>${doc.positiveDiff}</td>
+                <td>${Math.abs(doc.negativeDiff)}</td>
+              </tr>
+            `).join("") || '<tr><td colspan="6" class="muted">Проведених інвентаризацій ще немає.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
     </section>
   `;
 }
@@ -889,6 +1110,18 @@ function addCartProduct(productId) {
   render();
 }
 
+function scanCheckoutProduct(value) {
+  const product = findProductByScan(value);
+  if (!product) {
+    state.checkout.search = String(value || "").trim();
+    saveState();
+    render();
+    alert("Товар за штрихкодом або QR не знайдено. Пошук залишено у полі товарів.");
+    return;
+  }
+  addCartProduct(product.id);
+}
+
 function removeCartLine(index) {
   state.checkout.lines.splice(index, 1);
   if (!state.checkout.lines.length) state.checkout.lines.push({ productId: state.products[0].id, qty: 1, discount: 0 });
@@ -954,6 +1187,7 @@ function syncProductsFromSql() {
     lastRunAt: nowIso(),
     mode: "manual-sync"
   };
+  state.inventory = normalizeInventory({ id: "INV-DRAFT", date: today(), lines: [] }, state.products, state.stock);
   audit(`Імпортовано ${state.products.length} SKU з SQL (${SQL_PRODUCT_SOURCE})`);
   saveState();
   render();
@@ -1077,7 +1311,79 @@ function syncStockReceiptsFromSql() {
     lastRunAt: nowIso(),
     mode: "manual-sync"
   };
+  state.inventory = normalizeInventory({ id: "INV-DRAFT", date: today(), lines: [] }, state.products, state.stock);
   audit(`Імпортовано ${state.stockReceipts.length} надходжень з SQL (${SQL_STOCK_RECEIPT_SOURCE})`);
+  saveState();
+  render();
+}
+
+function setInventoryActual(productId, value) {
+  const line = state.inventory.lines.find((item) => item.productId === productId);
+  if (!line) return;
+  line.expectedQty = stockQty(productId);
+  line.actualQty = value === "" ? "" : Math.max(0, Number(value || 0));
+  saveState();
+}
+
+function scanInventoryProduct(value) {
+  const product = findProductByScan(value);
+  if (!product) {
+    alert("Товар за штрихкодом або QR для інвентаризації не знайдено.");
+    return;
+  }
+  const line = state.inventory.lines.find((item) => item.productId === product.id);
+  if (!line) return;
+  line.expectedQty = stockQty(product.id);
+  line.actualQty = Number(line.actualQty || 0) + 1;
+  state.inventory.scan = "";
+  saveState();
+  render();
+}
+
+function resetInventoryDraft() {
+  state.inventory = normalizeInventory({ id: "INV-DRAFT", date: today(), lines: [] }, state.products, state.stock);
+  audit("Очищено фактичні залишки інвентаризації");
+  saveState();
+  render();
+}
+
+function printInventorySheet() {
+  state.inventory.printedAt = nowIso();
+  saveState();
+  render();
+  if (typeof window !== "undefined" && typeof window.print === "function") {
+    window.print();
+  }
+}
+
+function postInventory() {
+  const rows = inventoryRows().filter((row) => row.hasActual);
+  if (!rows.length) {
+    alert("Введіть фактичний залишок або проскануйте товар для інвентаризації.");
+    return;
+  }
+  const totals = inventoryTotals(rows);
+  const doc = {
+    id: nextId("INV", state.inventoryDocs),
+    date: today(),
+    createdAt: nowIso(),
+    lines: rows.map((row) => ({
+      productId: row.product.id,
+      sku: row.product.sku,
+      expectedQty: row.expectedQty,
+      actualQty: row.actualQty,
+      diff: row.diff
+    })),
+    totalDiff: totals.totalDiff,
+    positiveDiff: totals.positive,
+    negativeDiff: totals.negative
+  };
+  rows.forEach((row) => {
+    stockRow(row.product.id).qty = row.actualQty;
+  });
+  state.inventoryDocs.unshift(doc);
+  state.inventory = normalizeInventory({ id: "INV-DRAFT", date: today(), lines: [] }, state.products, state.stock);
+  audit(`Проведено інвентаризацію ${doc.id}: різниця ${diffLabel(doc.totalDiff)}`);
   saveState();
   render();
 }
@@ -1183,6 +1489,10 @@ document.addEventListener("click", (event) => {
     render();
     return;
   }
+  const inventoryPrintButton = event.target.closest("[data-print-inventory]");
+  if (inventoryPrintButton) return printInventorySheet();
+  const inventoryResetButton = event.target.closest("[data-reset-inventory]");
+  if (inventoryResetButton) return resetInventoryDraft();
   const selectCustomerButton = event.target.closest("[data-select-customer]");
   if (selectCustomerButton) return selectCustomer(selectCustomerButton.dataset.selectCustomer);
   if (event.target.id === "reset-demo") {
@@ -1204,6 +1514,24 @@ document.addEventListener("input", (event) => {
 
 document.addEventListener("change", (event) => {
   if (event.target.dataset.checkoutField !== undefined) updateCheckoutField(event.target);
+  if (event.target.dataset.checkoutScan !== undefined && event.target.value.trim()) scanCheckoutProduct(event.target.value);
+  if (event.target.dataset.inventoryActual !== undefined) {
+    setInventoryActual(event.target.dataset.inventoryActual, event.target.value);
+    render();
+  }
+  if (event.target.dataset.inventoryScan !== undefined && event.target.value.trim()) scanInventoryProduct(event.target.value);
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  if (event.target.dataset.checkoutScan !== undefined) {
+    event.preventDefault();
+    if (event.target.value.trim()) scanCheckoutProduct(event.target.value);
+  }
+  if (event.target.dataset.inventoryScan !== undefined) {
+    event.preventDefault();
+    if (event.target.value.trim()) scanInventoryProduct(event.target.value);
+  }
 });
 
 document.addEventListener("submit", (event) => {
@@ -1215,6 +1543,7 @@ document.addEventListener("submit", (event) => {
   if (form.dataset.action === "create-customer") createCustomer(form);
   if (form.dataset.action === "create-return") createPartialReturn(form);
   if (form.dataset.action === "sync-sql-stock-receipts") syncStockReceiptsFromSql();
+  if (form.dataset.action === "post-inventory") postInventory();
   if (form.dataset.action === "open-shift") openCashShift(form);
   if (form.dataset.action === "close-shift") closeCashShift(form);
 });

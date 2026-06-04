@@ -420,6 +420,25 @@ th {
   white-space: pre-wrap;
 }
 
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.inventory-diff {
+  background: #fff7ed;
+}
+
+.inventory-print-sheet {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: #fff;
+}
+
 .summary-list {
   display: grid;
   gap: 9px;
@@ -520,5 +539,47 @@ th {
 
   .summary-list div {
     grid-template-columns: 1fr;
+  }
+}
+
+@media print {
+  body {
+    display: block;
+    background: #fff;
+  }
+
+  .sidebar,
+  .topbar,
+  .no-print,
+  .nav,
+  button {
+    display: none !important;
+  }
+
+  .workspace,
+  .content,
+  .panel,
+  .inventory-print-sheet {
+    display: block;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    box-shadow: none;
+  }
+
+  .inventory-panel > .split,
+  .inventory-panel > .grid,
+  .inventory-panel > form,
+  .inventory-panel > .table-wrap {
+    display: none !important;
+  }
+
+  table {
+    min-width: 0;
+    page-break-inside: auto;
+  }
+
+  tr {
+    page-break-inside: avoid;
   }
 }
