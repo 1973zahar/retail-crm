@@ -1,8 +1,8 @@
 "use strict";
 
-const APP_VERSION = "2026.06.04.6";
-const APP_BUILD = "20260604-b2c-inventory-scan";
-const STORAGE_KEY = "retail-crm-b2c-v5";
+const APP_VERSION = "2026.06.04.7";
+const APP_BUILD = "20260604-b2c-inventory-resort";
+const STORAGE_KEY = "retail-crm-b2c-v6";
 
 const nowIso = () => new Date().toISOString();
 const today = () => nowIso().slice(0, 10);
@@ -99,9 +99,11 @@ const seedState = {
   inventory: {
     id: "INV-DRAFT",
     date: today(),
+    search: "",
     scan: "",
     printedAt: "",
-    lines: sqlProductSnapshot.map(inventoryLineFromProduct)
+    lines: sqlProductSnapshot.map(inventoryLineFromProduct),
+    resorts: []
   },
   inventoryDocs: [],
   receipts: [
@@ -275,6 +277,7 @@ function normalizeInventory(inventory, products, stockRows) {
   return {
     id: inventory?.id || "INV-DRAFT",
     date: inventory?.date || today(),
+    search: inventory?.search || "",
     scan: inventory?.scan || "",
     printedAt: inventory?.printedAt || "",
     lines: products.map((product) => {
@@ -285,7 +288,8 @@ function normalizeInventory(inventory, products, stockRows) {
         expectedQty: stockQtyFromRows(stockRows, product.id),
         actualQty: actualValue === "" || actualValue === undefined || actualValue === null ? "" : Number(actualValue)
       };
-    })
+    }),
+    resorts: Array.isArray(inventory?.resorts) ? inventory.resorts.map(normalizeInventoryResort) : []
   };
 }
 
@@ -297,7 +301,27 @@ function normalizeInventoryDoc(doc) {
     lines: Array.isArray(doc.lines) ? doc.lines : [],
     totalDiff: Number(doc.totalDiff || 0),
     positiveDiff: Number(doc.positiveDiff || 0),
-    negativeDiff: Number(doc.negativeDiff || 0)
+    negativeDiff: Number(doc.negativeDiff || 0),
+    totalAmountDiff: Number(doc.totalAmountDiff || 0),
+    positiveAmount: Number(doc.positiveAmount || 0),
+    negativeAmount: Number(doc.negativeAmount || 0),
+    resorts: Array.isArray(doc.resorts) ? doc.resorts.map(normalizeInventoryResort) : []
+  };
+}
+
+function normalizeInventoryResort(item) {
+  return {
+    id: item.id || `RSRT-${Date.now()}`,
+    fromProductId: item.fromProductId || seedState.products[0].id,
+    toProductId: item.toProductId || seedState.products[1]?.id || seedState.products[0].id,
+    qty: Number(item.qty || 1),
+    fromPrice: Number(item.fromPrice || 0),
+    toPrice: Number(item.toPrice || 0),
+    minusAmount: Number(item.minusAmount || 0),
+    plusAmount: Number(item.plusAmount || 0),
+    netAmount: Number(item.netAmount || 0),
+    note: item.note || "",
+    createdAt: item.createdAt || nowIso()
   };
 }
 
@@ -710,7 +734,11 @@ function inventoryRows() {
     const hasActual = line.actualQty !== "" && line.actualQty !== null && line.actualQty !== undefined;
     const actualQty = hasActual ? Number(line.actualQty || 0) : "";
     const diff = hasActual ? Number(actualQty) - expectedQty : null;
-    return { product, line, expectedQty, actualQty, hasActual, diff };
+    const price = Number(product.price || 0);
+    const expectedAmount = expectedQty * price;
+    const actualAmount = hasActual ? Number(actualQty) * price : null;
+    const diffAmount = hasActual ? Number(diff || 0) * price : null;
+    return { product, line, expectedQty, actualQty, hasActual, diff, price, expectedAmount, actualAmount, diffAmount };
   });
 }
 
@@ -721,14 +749,64 @@ function inventoryTotals(rows) {
     totals.totalDiff += row.diff;
     if (row.diff > 0) totals.positive += row.diff;
     if (row.diff < 0) totals.negative += row.diff;
+    totals.expectedAmount += row.expectedAmount;
+    totals.actualAmount += Number(row.actualAmount || 0);
+    totals.totalAmountDiff += Number(row.diffAmount || 0);
+    if (row.diffAmount > 0) totals.positiveAmount += row.diffAmount;
+    if (row.diffAmount < 0) totals.negativeAmount += row.diffAmount;
     return totals;
-  }, { counted: 0, totalDiff: 0, positive: 0, negative: 0 });
+  }, { counted: 0, totalDiff: 0, positive: 0, negative: 0, expectedAmount: 0, actualAmount: 0, totalAmountDiff: 0, positiveAmount: 0, negativeAmount: 0 });
 }
 
 function diffLabel(diff) {
   if (diff === null || diff === undefined) return "-";
   if (diff > 0) return `+${diff}`;
   return String(diff);
+}
+
+function inventoryResortTotals(resorts = state.inventory.resorts) {
+  return resorts.reduce((totals, item) => {
+    totals.qty += Number(item.qty || 0);
+    totals.minusAmount += Number(item.minusAmount || 0);
+    totals.plusAmount += Number(item.plusAmount || 0);
+    totals.netAmount += Number(item.netAmount || 0);
+    return totals;
+  }, { qty: 0, minusAmount: 0, plusAmount: 0, netAmount: 0 });
+}
+
+function renderInventoryResorts(showActions = false) {
+  const resorts = state.inventory.resorts || [];
+  const totals = inventoryResortTotals(resorts);
+  return `
+    <div class="resort-summary">
+      <span>К-сть: <strong>${totals.qty}</strong></span>
+      <span>Мінус: <strong>-${formatMoney(totals.minusAmount)}</strong></span>
+      <span>Плюс: <strong>${formatMoney(totals.plusAmount)}</strong></span>
+      <span>Різниця: <strong>${formatMoney(totals.netAmount)}</strong></span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Мінус товар</th><th>Плюс товар</th><th>К-сть</th><th>Мінус грн</th><th>Плюс грн</th><th>+/- грн</th>${showActions ? "<th></th>" : ""}</tr></thead>
+        <tbody>
+          ${resorts.map((item, index) => {
+            const from = productById(item.fromProductId);
+            const to = productById(item.toProductId);
+            return `
+              <tr>
+                <td>${escapeHtml(from.sku)}<br><span class="muted">${escapeHtml(from.name)}</span></td>
+                <td>${escapeHtml(to.sku)}<br><span class="muted">${escapeHtml(to.name)}</span></td>
+                <td>${item.qty}</td>
+                <td>-${formatMoney(item.minusAmount)}</td>
+                <td>${formatMoney(item.plusAmount)}</td>
+                <td><span class="pill ${item.netAmount < 0 ? "danger" : item.netAmount > 0 ? "warn" : "good"}">${formatMoney(item.netAmount)}</span></td>
+                ${showActions ? `<td><button class="secondary" type="button" data-remove-resort="${index}">Скасувати</button></td>` : ""}
+              </tr>
+            `;
+          }).join("") || `<tr><td colspan="${showActions ? 7 : 6}" class="muted">Пересорту ще немає.</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+  `;
 }
 
 function renderInventorySheet(rows, totals) {
@@ -743,23 +821,31 @@ function renderInventorySheet(rows, totals) {
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>SKU</th><th>Штрихкод</th><th>QR</th><th>Товар</th><th>Облік</th><th>Факт</th><th>Різниця</th><th>Підпис</th></tr></thead>
+          <thead><tr><th>SKU</th><th>Штрихкод</th><th>Товар</th><th>Роздріб</th><th>Облік</th><th>Факт</th><th>Різниця</th><th>+/- грн</th><th>Підпис</th></tr></thead>
           <tbody>
             ${rows.map((row) => `
               <tr>
                 <td>${escapeHtml(row.product.sku)}</td>
                 <td>${escapeHtml(row.product.barcode || "-")}</td>
-                <td>${escapeHtml(row.product.qr || "-")}</td>
                 <td>${escapeHtml(row.product.name)}</td>
+                <td>${formatMoney(row.price)}</td>
                 <td>${row.expectedQty}</td>
                 <td>${row.hasActual ? row.actualQty : ""}</td>
                 <td>${diffLabel(row.diff)}</td>
+                <td>${row.diffAmount === null ? "" : formatMoney(row.diffAmount)}</td>
                 <td></td>
               </tr>
             `).join("")}
           </tbody>
         </table>
       </div>
+      <div class="inventory-print-total">
+        <span>Плюс: ${formatMoney(totals.positiveAmount)}</span>
+        <span>Мінус: -${formatMoney(Math.abs(totals.negativeAmount))}</span>
+        <span>Нетто: ${formatMoney(totals.totalAmountDiff)}</span>
+      </div>
+      <h3>Пересорт</h3>
+      ${renderInventoryResorts(false)}
     </div>
   `;
 }
@@ -767,8 +853,12 @@ function renderInventorySheet(rows, totals) {
 function renderStock() {
   setTitle("Залишки магазину");
   const receiptRows = state.stockReceipts.slice(0, 6);
-  const rows = inventoryRows();
-  const totals = inventoryTotals(rows);
+  const allRows = inventoryRows();
+  const inventorySearch = String(state.inventory.search || "").trim();
+  const rows = allRows.filter((row) => productMatchesQuery(row.product, inventorySearch));
+  const totals = inventoryTotals(allRows);
+  const printTotals = inventoryTotals(rows);
+  const resortTotals = inventoryResortTotals();
   return `
     <section class="grid two">
       <article class="panel">
@@ -840,41 +930,59 @@ function renderStock() {
         <span class="pill">${escapeHtml(state.inventory.id)}</span>
       </div>
       <section class="grid four">
-        <article class="card metric"><span>Позицій</span><strong>${rows.length}</strong><small>SKU з SQL-довідника.</small></article>
+        <article class="card metric"><span>Позицій</span><strong>${rows.length}/${allRows.length}</strong><small>${inventorySearch ? "Відфільтровано по пошуку." : "SKU з SQL-довідника."}</small></article>
         <article class="card metric"><span>Пораховано</span><strong>${totals.counted}</strong><small>Є фактичний залишок.</small></article>
-        <article class="card metric"><span>Надлишок</span><strong>${totals.positive}</strong><small>Факт більше обліку.</small></article>
-        <article class="card metric"><span>Нестача</span><strong>${Math.abs(totals.negative)}</strong><small>Факт менше обліку.</small></article>
+        <article class="card metric"><span>Плюс</span><strong>${formatMoney(totals.positiveAmount)}</strong><small>${totals.positive} од. факт більше обліку.</small></article>
+        <article class="card metric"><span>Мінус</span><strong>${formatMoney(Math.abs(totals.negativeAmount))}</strong><small>${Math.abs(totals.negative)} од. факт менше обліку.</small></article>
       </section>
       <form class="form-grid section-gap" data-action="post-inventory">
+        <label class="field wide"><span>Пошук у інвентаризації</span><input name="inventorySearch" data-inventory-search value="${escapeHtml(state.inventory.search || "")}" placeholder="назва, SKU, штрихкод або QR"></label>
         <label class="field wide"><span>Сканер інвентаризації</span><input name="inventoryScan" data-inventory-scan autocomplete="off" placeholder="скануйте штрихкод або QR, Enter додає 1 до факту"></label>
         <div class="toolbar full no-print">
-          <button class="secondary" type="button" data-print-inventory>Друк листа</button>
+          <button class="secondary" type="button" data-print-inventory>Друк Інвентаризаційний лист</button>
           <button class="secondary" type="button" data-reset-inventory>Очистити факт</button>
           <button class="primary" type="submit">Провести інвентаризацію</button>
         </div>
         <div class="table-wrap full">
           <table>
-            <thead><tr><th>SKU</th><th>Товар</th><th>Штрихкод</th><th>QR</th><th>Облік</th><th>Факт</th><th>Різниця</th></tr></thead>
+            <thead><tr><th>SKU</th><th>Товар</th><th>Штрихкод</th><th>Роздріб</th><th>Облік</th><th>Факт</th><th>Різниця</th><th>+/- грн</th></tr></thead>
             <tbody>
               ${rows.map((row) => `
                 <tr class="${row.hasActual && row.diff !== 0 ? "inventory-diff" : ""}">
                   <td>${escapeHtml(row.product.sku)}</td>
                   <td>${escapeHtml(row.product.name)}</td>
                   <td>${escapeHtml(row.product.barcode || "-")}</td>
-                  <td>${escapeHtml(row.product.qr || "-")}</td>
+                  <td>${formatMoney(row.price)}</td>
                   <td><strong>${row.expectedQty}</strong></td>
                   <td><input class="mini-input" data-inventory-actual="${escapeHtml(row.product.id)}" type="number" min="0" value="${row.hasActual ? row.actualQty : ""}"></td>
                   <td><span class="pill ${row.diff === null ? "" : row.diff < 0 ? "danger" : row.diff > 0 ? "warn" : "good"}">${diffLabel(row.diff)}</span></td>
+                  <td>${row.diffAmount === null ? "-" : formatMoney(row.diffAmount)}</td>
                 </tr>
-              `).join("")}
+              `).join("") || '<tr><td colspan="8" class="muted">За цим пошуком позицій немає.</td></tr>'}
             </tbody>
           </table>
         </div>
       </form>
-      ${renderInventorySheet(rows, totals)}
+      <section class="inventory-resort no-print">
+        <div class="split">
+          <h2>Пересорт</h2>
+          <span class="pill ${resortTotals.netAmount < 0 ? "danger" : resortTotals.netAmount > 0 ? "warn" : "good"}">${formatMoney(resortTotals.netAmount)}</span>
+        </div>
+        <form class="form-grid" data-action="create-inventory-resort">
+          <label class="field"><span>Мінус товар</span><select name="fromProductId">${state.products.map((product, index) => option(product.id, `${product.sku} · ${product.name} · ${formatMoney(product.price)}`, index === 0)).join("")}</select></label>
+          <label class="field"><span>Плюс товар</span><select name="toProductId">${state.products.map((product, index) => option(product.id, `${product.sku} · ${product.name} · ${formatMoney(product.price)}`, index === 1)).join("")}</select></label>
+          <label class="field"><span>Кількість</span><input name="qty" type="number" min="1" value="1" required></label>
+          <label class="field wide"><span>Коментар</span><input name="note" placeholder="причина пересорту"></label>
+          <div class="toolbar full">
+            <button class="primary" type="submit">Провести пересорт у факт</button>
+          </div>
+        </form>
+        ${renderInventoryResorts(true)}
+      </section>
+      ${renderInventorySheet(rows, printTotals)}
       <div class="table-wrap section-gap">
         <table>
-          <thead><tr><th>Документ</th><th>Дата</th><th>Позицій</th><th>Різниця</th><th>Надлишок</th><th>Нестача</th></tr></thead>
+          <thead><tr><th>Документ</th><th>Дата</th><th>Позицій</th><th>Різниця</th><th>+/- грн</th><th>Пересорт</th></tr></thead>
           <tbody>
             ${state.inventoryDocs.slice(0, 5).map((doc) => `
               <tr>
@@ -882,8 +990,8 @@ function renderStock() {
                 <td>${formatDateTime(doc.createdAt)}</td>
                 <td>${doc.lines.length}</td>
                 <td>${diffLabel(doc.totalDiff)}</td>
-                <td>${doc.positiveDiff}</td>
-                <td>${Math.abs(doc.negativeDiff)}</td>
+                <td>${formatMoney(doc.totalAmountDiff)}</td>
+                <td>${formatMoney(inventoryResortTotals(doc.resorts).netAmount)}</td>
               </tr>
             `).join("") || '<tr><td colspan="6" class="muted">Проведених інвентаризацій ще немає.</td></tr>'}
           </tbody>
@@ -1325,6 +1433,71 @@ function setInventoryActual(productId, value) {
   saveState();
 }
 
+function inventoryLineForProduct(productId) {
+  let line = state.inventory.lines.find((item) => item.productId === productId);
+  if (!line) {
+    line = { productId, expectedQty: stockQty(productId), actualQty: "" };
+    state.inventory.lines.push(line);
+  }
+  line.expectedQty = stockQty(productId);
+  return line;
+}
+
+function inventoryActualBase(productId) {
+  const line = inventoryLineForProduct(productId);
+  return line.actualQty === "" || line.actualQty === null || line.actualQty === undefined ? stockQty(productId) : Number(line.actualQty || 0);
+}
+
+function createInventoryResort(form) {
+  const data = Object.fromEntries(new FormData(form).entries());
+  const fromProduct = productById(data.fromProductId);
+  const toProduct = productById(data.toProductId);
+  const qty = Math.max(1, Number(data.qty || 1));
+  if (!fromProduct || !toProduct) return alert("Оберіть товари для пересорту.");
+  if (fromProduct.id === toProduct.id) return alert("Для пересорту оберіть два різні товари.");
+
+  const fromActual = inventoryActualBase(fromProduct.id);
+  if (fromActual < qty) return alert("Кількість мінус товару не може бути більшою за фактичний залишок.");
+
+  const toActual = inventoryActualBase(toProduct.id);
+  const fromLine = inventoryLineForProduct(fromProduct.id);
+  const toLine = inventoryLineForProduct(toProduct.id);
+  fromLine.actualQty = fromActual - qty;
+  toLine.actualQty = toActual + qty;
+
+  const minusAmount = qty * Number(fromProduct.price || 0);
+  const plusAmount = qty * Number(toProduct.price || 0);
+  const item = {
+    id: nextId("RSRT", state.inventory.resorts),
+    fromProductId: fromProduct.id,
+    toProductId: toProduct.id,
+    qty,
+    fromPrice: Number(fromProduct.price || 0),
+    toPrice: Number(toProduct.price || 0),
+    minusAmount,
+    plusAmount,
+    netAmount: plusAmount - minusAmount,
+    note: data.note || "",
+    createdAt: nowIso()
+  };
+  state.inventory.resorts.unshift(item);
+  audit(`Проведено пересорт ${item.id}: -${fromProduct.sku} +${toProduct.sku}, ${qty} од., різниця ${formatMoney(item.netAmount)}`);
+  saveState();
+  render();
+}
+
+function removeInventoryResort(index) {
+  const item = state.inventory.resorts.splice(index, 1)[0];
+  if (!item) return;
+  const fromLine = inventoryLineForProduct(item.fromProductId);
+  const toLine = inventoryLineForProduct(item.toProductId);
+  fromLine.actualQty = inventoryActualBase(item.fromProductId) + Number(item.qty || 0);
+  toLine.actualQty = Math.max(0, inventoryActualBase(item.toProductId) - Number(item.qty || 0));
+  audit(`Скасовано пересорт ${item.id}`);
+  saveState();
+  render();
+}
+
 function scanInventoryProduct(value) {
   const product = findProductByScan(value);
   if (!product) {
@@ -1370,13 +1543,21 @@ function postInventory() {
     lines: rows.map((row) => ({
       productId: row.product.id,
       sku: row.product.sku,
+      price: row.price,
       expectedQty: row.expectedQty,
+      expectedAmount: row.expectedAmount,
       actualQty: row.actualQty,
-      diff: row.diff
+      actualAmount: row.actualAmount,
+      diff: row.diff,
+      diffAmount: row.diffAmount
     })),
     totalDiff: totals.totalDiff,
     positiveDiff: totals.positive,
-    negativeDiff: totals.negative
+    negativeDiff: totals.negative,
+    totalAmountDiff: totals.totalAmountDiff,
+    positiveAmount: totals.positiveAmount,
+    negativeAmount: totals.negativeAmount,
+    resorts: clone(state.inventory.resorts)
   };
   rows.forEach((row) => {
     stockRow(row.product.id).qty = row.actualQty;
@@ -1493,6 +1674,8 @@ document.addEventListener("click", (event) => {
   if (inventoryPrintButton) return printInventorySheet();
   const inventoryResetButton = event.target.closest("[data-reset-inventory]");
   if (inventoryResetButton) return resetInventoryDraft();
+  const resortRemoveButton = event.target.closest("[data-remove-resort]");
+  if (resortRemoveButton) return removeInventoryResort(Number(resortRemoveButton.dataset.removeResort));
   const selectCustomerButton = event.target.closest("[data-select-customer]");
   if (selectCustomerButton) return selectCustomer(selectCustomerButton.dataset.selectCustomer);
   if (event.target.id === "reset-demo") {
@@ -1509,6 +1692,11 @@ document.addEventListener("input", (event) => {
   }
   if (event.target.dataset.productSearch !== undefined) {
     updateCheckoutField(event.target);
+  }
+  if (event.target.dataset.inventorySearch !== undefined) {
+    state.inventory.search = event.target.value;
+    saveState();
+    render();
   }
 });
 
@@ -1543,6 +1731,7 @@ document.addEventListener("submit", (event) => {
   if (form.dataset.action === "create-customer") createCustomer(form);
   if (form.dataset.action === "create-return") createPartialReturn(form);
   if (form.dataset.action === "sync-sql-stock-receipts") syncStockReceiptsFromSql();
+  if (form.dataset.action === "create-inventory-resort") createInventoryResort(form);
   if (form.dataset.action === "post-inventory") postInventory();
   if (form.dataset.action === "open-shift") openCashShift(form);
   if (form.dataset.action === "close-shift") closeCashShift(form);
