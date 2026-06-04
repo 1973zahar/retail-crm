@@ -1,11 +1,13 @@
 "use strict";
 
-const APP_VERSION = "2026.06.04.2";
-const APP_BUILD = "20260604-b2c-prototype-1";
+const APP_VERSION = "2026.06.04.3";
+const APP_BUILD = "20260604-b2c-prototype-2";
 const STORAGE_KEY = "retail-crm-b2c-v2";
 
 const nowIso = () => new Date().toISOString();
 const today = () => nowIso().slice(0, 10);
+const LOYALTY_DISCOUNTS = { standard: 0, silver: 3, gold: 5 };
+const LOYALTY_LABELS = { standard: "Стандарт", silver: "Silver 3%", gold: "Gold 5%" };
 
 const seedState = {
   currentView: "dashboard",
@@ -14,6 +16,7 @@ const seedState = {
     paymentMethod: "card",
     search: "",
     note: "",
+    printReceiptId: "B2C-0001",
     lines: [
       { productId: "p-102", qty: 1, discount: 0 }
     ]
@@ -78,6 +81,8 @@ const navItems = [
   ["checkout", "Новий чек"],
   ["receipts", "Чеки"],
   ["returns", "Повернення"],
+  ["catalog", "Товари"],
+  ["customers", "Клієнти"],
   ["stock", "Залишки"],
   ["cash", "Каса/POS"],
   ["reports", "Звіт дня"],
@@ -101,8 +106,8 @@ function loadState() {
 
 function normalizeState(input) {
   const next = { ...clone(seedState), ...(input || {}) };
-  next.products = Array.isArray(next.products) ? next.products : clone(seedState.products);
-  next.customers = Array.isArray(next.customers) ? next.customers : clone(seedState.customers);
+  next.products = Array.isArray(next.products) ? next.products.map(normalizeProduct) : clone(seedState.products);
+  next.customers = Array.isArray(next.customers) ? next.customers.map(normalizeCustomer) : clone(seedState.customers);
   next.stock = Array.isArray(next.stock) ? next.stock : clone(seedState.stock);
   next.receipts = Array.isArray(next.receipts) ? next.receipts.map((receipt) => normalizeReceipt(receipt, next.products)) : [];
   next.returns = Array.isArray(next.returns) ? next.returns : [];
@@ -114,7 +119,30 @@ function normalizeState(input) {
     ...(next.checkout || {})
   };
   next.checkout.lines = Array.isArray(next.checkout.lines) && next.checkout.lines.length ? next.checkout.lines : clone(seedState.checkout.lines);
+  next.checkout.printReceiptId = next.checkout.printReceiptId || next.receipts[0]?.id || "";
   return next;
+}
+
+function normalizeProduct(product) {
+  return {
+    id: product.id || `p-${Date.now()}`,
+    name: product.name || "Новий товар",
+    sku: product.sku || product.id || `SKU-${Date.now()}`,
+    barcode: product.barcode || "",
+    category: product.category || "Інше",
+    price: Number(product.price || 0),
+    cost: Number(product.cost || 0),
+    minStock: Number(product.minStock || 0)
+  };
+}
+
+function normalizeCustomer(customer) {
+  return {
+    id: customer.id || `c-${Date.now()}`,
+    name: customer.name || "Покупець",
+    phone: customer.phone || "",
+    loyalty: LOYALTY_DISCOUNTS[customer.loyalty] !== undefined ? customer.loyalty : "standard"
+  };
 }
 
 function normalizeReceipt(receipt, products) {
@@ -206,7 +234,7 @@ function paymentLabel(method) {
 }
 
 function statusLabel(status) {
-  return { posted: "проведено", returned: "повернено" }[status] || status || "-";
+  return { posted: "проведено", partial_return: "часткове повернення", returned: "повернено" }[status] || status || "-";
 }
 
 function openShift() {
@@ -219,6 +247,37 @@ function shiftExpectedCash(shift) {
 
 function receiptTotal(lines) {
   return lines.reduce((sum, line) => sum + lineTotal(line), 0);
+}
+
+function receiptSubtotal(lines) {
+  return lines.reduce((sum, line) => sum + lineTotal(line), 0);
+}
+
+function loyaltyRate(customerId = state.checkout.customerId) {
+  return LOYALTY_DISCOUNTS[customerById(customerId).loyalty] || 0;
+}
+
+function loyaltyDiscount(lines, customerId = state.checkout.customerId) {
+  return Math.round(receiptSubtotal(lines) * loyaltyRate(customerId) / 100);
+}
+
+function checkoutTotal(lines, customerId = state.checkout.customerId) {
+  return Math.max(0, receiptSubtotal(lines) - loyaltyDiscount(lines, customerId));
+}
+
+function returnedQty(receiptId, productId) {
+  return state.returns
+    .filter((item) => item.receiptId === receiptId)
+    .flatMap((item) => item.lines || [])
+    .filter((line) => line.productId === productId)
+    .reduce((sum, line) => sum + Number(line.qty || 0), 0);
+}
+
+function receiptReturnableLines(receipt) {
+  return (receipt.lines || []).map((line) => {
+    const returned = returnedQty(receipt.id, line.productId);
+    return { ...line, returned, returnable: Math.max(0, Number(line.qty || 0) - returned) };
+  });
 }
 
 function lineTotal(line) {
@@ -298,7 +357,10 @@ function renderCheckout() {
 
 function renderCheckoutPanel(full = false) {
   const lines = cartLines();
-  const total = receiptTotal(lines);
+  const subtotal = receiptSubtotal(lines);
+  const loyalDiscount = loyaltyDiscount(lines);
+  const total = checkoutTotal(lines);
+  const customer = customerById(state.checkout.customerId);
   const filter = String(state.checkout.search || "").trim().toLowerCase();
   const products = state.products.filter((product) => (
     !filter
@@ -316,6 +378,11 @@ function renderCheckoutPanel(full = false) {
         <label class="field"><span>Покупець</span><select name="customerId" data-checkout-field>${state.customers.map((customer) => option(customer.id, customer.name, customer.id === state.checkout.customerId)).join("")}</select></label>
         <label class="field"><span>Оплата</span><select name="paymentMethod" data-checkout-field>${["cash", "card", "bank"].map((method) => option(method, paymentLabel(method), method === state.checkout.paymentMethod)).join("")}</select></label>
         <label class="field wide"><span>Пошук SKU / штрихкод</span><input name="search" data-product-search value="${escapeHtml(state.checkout.search)}" placeholder="назва, SKU або штрихкод"></label>
+        <div class="loyalty-note full">
+          <span class="pill">${escapeHtml(LOYALTY_LABELS[customer.loyalty] || customer.loyalty)}</span>
+          <strong>${escapeHtml(customer.name)}</strong>
+          <span>${loyaltyRate()}% автоматична знижка лояльності</span>
+        </div>
         <label class="field full"><span>Коментар</span><input name="note" data-checkout-field value="${escapeHtml(state.checkout.note || "")}" placeholder="примітка до чека"></label>
         <div class="product-pick full">
           ${products.map((product) => `
@@ -346,7 +413,11 @@ function renderCheckoutPanel(full = false) {
           </table>
         </div>
         <div class="cart-summary full">
-          <strong>Разом: ${formatMoney(total)}</strong>
+          <div>
+            <span>Підсумок: ${formatMoney(subtotal)}</span>
+            <span>Лояльність: -${formatMoney(loyalDiscount)}</span>
+            <strong>Разом: ${formatMoney(total)}</strong>
+          </div>
           <button class="primary" type="submit" ${openShift() && lines.length ? "" : "disabled"}>Провести чек</button>
         </div>
       </form>
@@ -356,64 +427,106 @@ function renderCheckoutPanel(full = false) {
 
 function renderReceipts() {
   setTitle("Чеки магазину");
+  const selected = state.receipts.find((receipt) => receipt.id === state.checkout.printReceiptId) || state.receipts[0];
   return `
-    <section class="panel">
-      <div class="split">
-        <h2>B2C.2 Чеки</h2>
-        <span class="pill">${state.receipts.length} документів</span>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Чек</th><th>Дата</th><th>Покупець</th><th>Позиції</th><th>Сума</th><th>Оплата</th><th>Стан</th><th>Дії</th></tr></thead>
-          <tbody>
-            ${state.receipts.map((receipt) => `
-              <tr>
-                <td>${escapeHtml(receipt.id)}</td>
-                <td>${escapeHtml(receipt.date)}<br><span class="muted">${formatDateTime(receipt.createdAt)}</span></td>
-                <td>${escapeHtml(customerById(receipt.customerId).name)}</td>
-                <td>${receipt.lines.map((line) => `${escapeHtml(productById(line.productId).sku)} x ${line.qty}`).join("<br>")}</td>
-                <td><strong>${formatMoney(receipt.total)}</strong></td>
-                <td>${escapeHtml(paymentLabel(receipt.paymentMethod))}</td>
-                <td><span class="pill ${receipt.status === "returned" ? "warn" : "good"}">${escapeHtml(statusLabel(receipt.status))}</span></td>
-                <td><button class="secondary" type="button" data-return-receipt="${escapeHtml(receipt.id)}" ${receipt.status === "returned" ? "disabled" : ""}>Повернення</button></td>
-              </tr>
-            `).join("")}
-          </tbody>
-        </table>
-      </div>
+    <section class="grid two">
+      <article class="panel">
+        <div class="split">
+          <h2>B2C.2 Чеки</h2>
+          <span class="pill">${state.receipts.length} документів</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Чек</th><th>Дата</th><th>Покупець</th><th>Позиції</th><th>Сума</th><th>Оплата</th><th>Стан</th><th>Дії</th></tr></thead>
+            <tbody>
+              ${state.receipts.map((receipt) => `
+                <tr>
+                  <td>${escapeHtml(receipt.id)}</td>
+                  <td>${escapeHtml(receipt.date)}<br><span class="muted">${formatDateTime(receipt.createdAt)}</span></td>
+                  <td>${escapeHtml(customerById(receipt.customerId).name)}</td>
+                  <td>${receipt.lines.map((line) => `${escapeHtml(productById(line.productId).sku)} x ${line.qty}`).join("<br>")}</td>
+                  <td><strong>${formatMoney(receipt.total)}</strong></td>
+                  <td>${escapeHtml(paymentLabel(receipt.paymentMethod))}</td>
+                  <td><span class="pill ${receipt.status === "returned" ? "warn" : "good"}">${escapeHtml(statusLabel(receipt.status))}</span></td>
+                  <td>
+                    <button class="secondary" type="button" data-print-receipt="${escapeHtml(receipt.id)}">Друк</button>
+                    <button class="secondary" type="button" data-return-receipt="${escapeHtml(receipt.id)}" ${receipt.status === "returned" ? "disabled" : ""}>Все назад</button>
+                  </td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      </article>
+      <article class="panel">
+        <div class="split">
+          <h2>Чек до друку</h2>
+          <span class="pill">${selected ? escapeHtml(selected.id) : "немає"}</span>
+        </div>
+        ${selected ? renderReceiptSlip(selected) : '<p class="muted">Оберіть чек для перегляду.</p>'}
+      </article>
     </section>
+  `;
+}
+
+function renderReceiptSlip(receipt) {
+  const customer = customerById(receipt.customerId);
+  return `
+    <div class="receipt-slip">
+      <strong>Роздрібна торгівля B2C</strong>
+      <span>${escapeHtml(receipt.id)} · ${formatDateTime(receipt.createdAt)}</span>
+      <span>Покупець: ${escapeHtml(customer.name)}</span>
+      <hr>
+      ${receipt.lines.map((line) => {
+        const product = productById(line.productId);
+        return `<div class="receipt-line"><span>${escapeHtml(product.sku)} x ${line.qty}</span><strong>${formatMoney(line.total)}</strong></div>`;
+      }).join("")}
+      ${Number(receipt.loyaltyDiscount || 0) ? `<div class="receipt-line muted"><span>Знижка лояльності</span><strong>-${formatMoney(receipt.loyaltyDiscount)}</strong></div>` : ""}
+      <hr>
+      <div class="receipt-line total"><span>До сплати</span><strong>${formatMoney(receipt.total)}</strong></div>
+      <span>Оплата: ${escapeHtml(paymentLabel(receipt.paymentMethod))}</span>
+    </div>
   `;
 }
 
 function renderReturns() {
   setTitle("Повернення");
+  const returnableReceipts = state.receipts.filter((receipt) => receipt.status !== "returned");
   return `
-    <section class="panel">
-      <div class="split">
-        <h2>B2C.3 Повернення</h2>
-        <span class="pill">${state.returns.length} документів</span>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Повернення</th><th>Чек</th><th>Дата</th><th>Покупець</th><th>Позиції</th><th>Сума</th><th>Причина</th></tr></thead>
-          <tbody>
-            ${state.returns.map((item) => {
-              const receipt = state.receipts.find((row) => row.id === item.receiptId);
-              return `
+    <section class="grid two">
+      <article class="panel">
+        <div class="split">
+          <h2>B2C.3 Повернення</h2>
+          <span class="pill">${state.returns.length} документів</span>
+        </div>
+        <form class="form-grid one-col" data-action="create-return">
+          <label class="field"><span>Чек</span><select name="receiptId">${returnableReceipts.map((receipt) => option(receipt.id, `${receipt.id} · ${customerById(receipt.customerId).name} · ${formatMoney(receipt.total)}`)).join("")}</select></label>
+          <label class="field"><span>Товар</span><select name="productId">${returnableReceipts.flatMap((receipt) => receiptReturnableLines(receipt).filter((line) => line.returnable > 0).map((line) => option(`${receipt.id}::${line.productId}`, `${receipt.id} · ${productById(line.productId).sku} · доступно ${line.returnable}`))).join("")}</select></label>
+          <label class="field"><span>Кількість</span><input name="qty" type="number" min="1" value="1"></label>
+          <label class="field"><span>Причина</span><input name="reason" value="часткове повернення"></label>
+          <button class="primary" type="submit" ${returnableReceipts.length ? "" : "disabled"}>Оформити повернення</button>
+        </form>
+      </article>
+      <article class="panel">
+        <h2>Журнал повернень</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Повернення</th><th>Чек</th><th>Дата</th><th>Позиції</th><th>Сума</th><th>Причина</th></tr></thead>
+            <tbody>
+              ${state.returns.map((item) => `
                 <tr>
                   <td>${escapeHtml(item.id)}</td>
                   <td>${escapeHtml(item.receiptId)}</td>
                   <td>${escapeHtml(item.date)}</td>
-                  <td>${escapeHtml(customerById(receipt?.customerId).name)}</td>
                   <td>${item.lines.map((line) => `${escapeHtml(productById(line.productId).sku)} x ${line.qty}`).join("<br>")}</td>
                   <td><strong>${formatMoney(item.total)}</strong></td>
-                  <td>${escapeHtml(item.reason || "повне повернення")}</td>
+                  <td>${escapeHtml(item.reason || "повернення")}</td>
                 </tr>
-              `;
-            }).join("") || '<tr><td colspan="7" class="muted">Повернень ще немає.</td></tr>'}
-          </tbody>
-        </table>
-      </div>
+              `).join("") || '<tr><td colspan="6" class="muted">Повернень ще немає.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </article>
     </section>
   `;
 }
@@ -424,7 +537,7 @@ function renderStock() {
     <section class="grid two">
       <article class="panel">
         <div class="split">
-          <h2>B2C.4 Залишки</h2>
+          <h2>B2C.6 Залишки</h2>
           <span class="pill">склад магазину</span>
         </div>
         <div class="table-wrap">
@@ -454,6 +567,97 @@ function renderStock() {
   `;
 }
 
+function renderCatalog() {
+  setTitle("Товари магазину");
+  return `
+    <section class="grid two">
+      <article class="panel">
+        <div class="split">
+          <h2>B2C.4 Товари</h2>
+          <span class="pill">${state.products.length} SKU</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>SKU</th><th>Назва</th><th>Штрихкод</th><th>Категорія</th><th>Ціна</th><th>Собівартість</th><th>Залишок</th><th>Дії</th></tr></thead>
+            <tbody>
+              ${state.products.map((product) => `
+                <tr>
+                  <td>${escapeHtml(product.sku)}</td>
+                  <td>${escapeHtml(product.name)}</td>
+                  <td>${escapeHtml(product.barcode || "-")}</td>
+                  <td>${escapeHtml(product.category)}</td>
+                  <td>${formatMoney(product.price)}</td>
+                  <td>${formatMoney(product.cost)}</td>
+                  <td>${stockQty(product.id)}</td>
+                  <td><button class="secondary" type="button" data-add-cart="${escapeHtml(product.id)}">У чек</button></td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      </article>
+      <article class="panel">
+        <h2>Новий товар</h2>
+        <form class="form-grid one-col" data-action="create-product">
+          <label class="field"><span>Назва</span><input name="name" required placeholder="назва товару"></label>
+          <label class="field"><span>SKU</span><input name="sku" required placeholder="унікальний код"></label>
+          <label class="field"><span>Штрихкод</span><input name="barcode" placeholder="EAN / внутрішній код"></label>
+          <label class="field"><span>Категорія</span><input name="category" value="Аксесуари"></label>
+          <label class="field"><span>Ціна продажу</span><input name="price" type="number" min="0" required></label>
+          <label class="field"><span>Собівартість</span><input name="cost" type="number" min="0" required></label>
+          <label class="field"><span>Мінімальний залишок</span><input name="minStock" type="number" min="0" value="1"></label>
+          <label class="field"><span>Початковий залишок</span><input name="openingQty" type="number" min="0" value="0"></label>
+          <button class="primary" type="submit">Додати SKU</button>
+        </form>
+      </article>
+    </section>
+  `;
+}
+
+function renderCustomers() {
+  setTitle("Клієнти і лояльність");
+  return `
+    <section class="grid two">
+      <article class="panel">
+        <div class="split">
+          <h2>B2C.5 Клієнти</h2>
+          <span class="pill">${state.customers.length} карток</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Клієнт</th><th>Телефон</th><th>Лояльність</th><th>Чеків</th><th>Сума</th><th>Дії</th></tr></thead>
+            <tbody>
+              ${state.customers.map((customer) => {
+                const receipts = state.receipts.filter((receipt) => receipt.customerId === customer.id);
+                const total = receipts.reduce((sum, receipt) => sum + Number(receipt.total || 0), 0);
+                return `
+                  <tr>
+                    <td>${escapeHtml(customer.name)}</td>
+                    <td>${escapeHtml(customer.phone || "-")}</td>
+                    <td><span class="pill">${escapeHtml(LOYALTY_LABELS[customer.loyalty] || customer.loyalty)}</span></td>
+                    <td>${receipts.length}</td>
+                    <td>${formatMoney(total)}</td>
+                    <td><button class="secondary" type="button" data-select-customer="${escapeHtml(customer.id)}">У чек</button></td>
+                  </tr>
+                `;
+              }).join("")}
+            </tbody>
+          </table>
+        </div>
+      </article>
+      <article class="panel">
+        <h2>Нова картка клієнта</h2>
+        <form class="form-grid one-col" data-action="create-customer">
+          <label class="field"><span>Ім'я</span><input name="name" required placeholder="ПІБ або назва"></label>
+          <label class="field"><span>Телефон</span><input name="phone" placeholder="+380..."></label>
+          <label class="field"><span>Лояльність</span><select name="loyalty">${Object.entries(LOYALTY_LABELS).map(([id, label]) => option(id, label)).join("")}</select></label>
+          <button class="primary" type="submit">Створити клієнта</button>
+        </form>
+      </article>
+    </section>
+  `;
+}
+
 function renderCash() {
   setTitle("Каса та POS");
   const shift = openShift();
@@ -461,7 +665,7 @@ function renderCash() {
     <section class="grid two">
       <article class="panel">
         <div class="split">
-          <h2>B2C.5 Каса/POS</h2>
+          <h2>B2C.7 Каса/POS</h2>
           <span class="pill ${shift ? "warn" : "good"}">${shift ? "зміна відкрита" : "зміна закрита"}</span>
         </div>
         ${shift ? renderOpenShift(shift) : renderOpenShiftForm()}
@@ -512,10 +716,10 @@ function renderReports() {
   const receipts = state.receipts.filter((receipt) => receipt.status === "posted");
   const returnsTotal = state.returns.reduce((sum, item) => sum + Number(item.total || 0), 0);
   const revenue = receipts.reduce((sum, receipt) => sum + Number(receipt.total || 0), 0);
-  const margin = receipts.reduce((sum, receipt) => sum + receipt.lines.reduce((lineSum, line) => {
-    const product = productById(line.productId);
-    return lineSum + line.total - Number(product.cost || 0) * Number(line.qty || 0);
-  }, 0), 0);
+  const margin = receipts.reduce((sum, receipt) => {
+    const cost = receipt.lines.reduce((lineSum, line) => lineSum + Number(productById(line.productId).cost || 0) * Number(line.qty || 0), 0);
+    return sum + Number(receipt.total || 0) - cost;
+  }, 0);
   const paymentRows = ["cash", "card", "bank"].map((method) => ({
     method,
     total: receipts.filter((receipt) => receipt.paymentMethod === method).reduce((sum, receipt) => sum + Number(receipt.total || 0), 0)
@@ -590,6 +794,9 @@ function createReceipt(form) {
     const product = productById(line.productId);
     return { ...line, price: Number(product.price || line.price || 0), total: lineTotal(line) };
   });
+  const subtotal = receiptSubtotal(lines);
+  const loyalDiscount = loyaltyDiscount(lines, state.checkout.customerId);
+  const total = checkoutTotal(lines, state.checkout.customerId);
   for (const line of lines) {
     if (stockQty(line.productId) < line.qty) {
       alert(`Недостатньо залишку: ${productById(line.productId).name}`);
@@ -606,7 +813,9 @@ function createReceipt(form) {
     paymentMethod: state.checkout.paymentMethod,
     status: "posted",
     lines,
-    total: receiptTotal(lines),
+    subtotal,
+    loyaltyDiscount: loyalDiscount,
+    total,
     note: state.checkout.note,
     createdAt: nowIso()
   };
@@ -616,6 +825,59 @@ function createReceipt(form) {
   state.checkout.note = "";
   state.currentView = "receipts";
   audit(`Проведено чек ${receipt.id} на ${formatMoney(receipt.total)}`);
+  saveState();
+  render();
+}
+
+function createProduct(form) {
+  const data = Object.fromEntries(new FormData(form).entries());
+  const sku = String(data.sku || "").trim();
+  if (!sku) return alert("Вкажіть SKU товару.");
+  if (state.products.some((product) => product.sku.toLowerCase() === sku.toLowerCase())) {
+    return alert("SKU вже існує.");
+  }
+  const product = normalizeProduct({
+    id: `p-${Date.now()}`,
+    name: String(data.name || "").trim(),
+    sku,
+    barcode: String(data.barcode || "").trim(),
+    category: String(data.category || "Інше").trim(),
+    price: Number(data.price || 0),
+    cost: Number(data.cost || 0),
+    minStock: Number(data.minStock || 0)
+  });
+  state.products.push(product);
+  state.stock.push({ productId: product.id, qty: Math.max(0, Number(data.openingQty || 0)) });
+  audit(`Створено SKU ${product.sku}: ${product.name}`);
+  saveState();
+  render();
+}
+
+function createCustomer(form) {
+  const data = Object.fromEntries(new FormData(form).entries());
+  const name = String(data.name || "").trim();
+  if (!name) return alert("Вкажіть ім'я клієнта.");
+  const phone = String(data.phone || "").trim();
+  if (phone && state.customers.some((customer) => customer.phone === phone)) {
+    return alert("Клієнт з таким телефоном вже існує.");
+  }
+  const customer = normalizeCustomer({
+    id: `c-${Date.now()}`,
+    name,
+    phone,
+    loyalty: data.loyalty || "standard"
+  });
+  state.customers.push(customer);
+  state.checkout.customerId = customer.id;
+  audit(`Створено клієнта ${customer.name} (${LOYALTY_LABELS[customer.loyalty]})`);
+  saveState();
+  render();
+}
+
+function selectCustomer(customerId) {
+  state.checkout.customerId = customerId;
+  state.currentView = "checkout";
+  audit(`Клієнта ${customerById(customerId).name} вибрано для нового чека`);
   saveState();
   render();
 }
@@ -632,27 +894,69 @@ function applyPaymentToShift(shift, method, total, kind) {
 function createReturn(receiptId) {
   const receipt = state.receipts.find((item) => item.id === receiptId);
   if (!receipt || receipt.status === "returned") return;
+  const remaining = receiptReturnableLines(receipt).filter((line) => line.returnable > 0);
+  if (!remaining.length) return;
   const shift = openShift();
   if (!shift) {
     alert("Для повернення потрібна відкрита касова зміна.");
     return;
   }
+  const total = remaining.reduce((sum, line) => sum + returnLineTotal(receipt, line.productId, line.returnable), 0);
   const returnDoc = {
     id: nextId("RET", state.returns),
     date: today(),
     receiptId,
-    lines: clone(receipt.lines),
-    total: Number(receipt.total || 0),
+    lines: remaining.map((line) => ({ productId: line.productId, qty: line.returnable, price: line.price, total: returnLineTotal(receipt, line.productId, line.returnable) })),
+    total,
     reason: "повне повернення",
     createdAt: nowIso()
   };
-  receipt.lines.forEach((line) => {
+  returnDoc.lines.forEach((line) => {
     stockRow(line.productId).qty += Number(line.qty || 0);
   });
   receipt.status = "returned";
   state.returns.unshift(returnDoc);
   applyPaymentToShift(shift, receipt.paymentMethod, returnDoc.total, "return");
   audit(`Оформлено повернення ${returnDoc.id} по чеку ${receipt.id}`);
+  state.currentView = "returns";
+  saveState();
+  render();
+}
+
+function returnLineTotal(receipt, productId, qty) {
+  const line = receipt.lines.find((item) => item.productId === productId);
+  if (!line) return 0;
+  const unitTotal = Number(line.total || 0) / Math.max(1, Number(line.qty || 1));
+  const loyaltyShare = Number(receipt.loyaltyDiscount || 0) / Math.max(1, Number(receipt.subtotal || receiptTotal(receipt.lines) || 1));
+  return Math.round(unitTotal * Number(qty || 0) * (1 - loyaltyShare));
+}
+
+function createPartialReturn(form) {
+  const data = Object.fromEntries(new FormData(form).entries());
+  const [receiptId, productId] = String(data.productId || "").split("::");
+  const receipt = state.receipts.find((item) => item.id === receiptId);
+  if (!receipt || !productId) return alert("Оберіть чек і товар для повернення.");
+  const line = receiptReturnableLines(receipt).find((item) => item.productId === productId);
+  const qty = Math.max(1, Number(data.qty || 1));
+  if (!line || line.returnable < qty) return alert("Кількість повернення більша за доступну.");
+  const shift = openShift();
+  if (!shift) return alert("Для повернення потрібна відкрита касова зміна.");
+  const total = returnLineTotal(receipt, productId, qty);
+  const returnDoc = {
+    id: nextId("RET", state.returns),
+    date: today(),
+    receiptId,
+    lines: [{ productId, qty, price: line.price, total }],
+    total,
+    reason: data.reason || "часткове повернення",
+    createdAt: nowIso()
+  };
+  stockRow(productId).qty += qty;
+  state.returns.unshift(returnDoc);
+  const stillReturnable = receiptReturnableLines(receipt).some((item) => item.returnable > 0);
+  receipt.status = stillReturnable ? "partial_return" : "returned";
+  applyPaymentToShift(shift, receipt.paymentMethod, returnDoc.total, "return");
+  audit(`Оформлено повернення ${returnDoc.id} по чеку ${receipt.id}: ${productById(productId).sku} x ${qty}`);
   state.currentView = "returns";
   saveState();
   render();
@@ -748,6 +1052,8 @@ function render() {
     checkout: renderCheckout,
     receipts: renderReceipts,
     returns: renderReturns,
+    catalog: renderCatalog,
+    customers: renderCustomers,
     stock: renderStock,
     cash: renderCash,
     reports: renderReports,
@@ -770,6 +1076,15 @@ document.addEventListener("click", (event) => {
   if (removeButton) return removeCartLine(Number(removeButton.dataset.removeCart));
   const returnButton = event.target.closest("[data-return-receipt]");
   if (returnButton) return createReturn(returnButton.dataset.returnReceipt);
+  const printButton = event.target.closest("[data-print-receipt]");
+  if (printButton) {
+    state.checkout.printReceiptId = printButton.dataset.printReceipt;
+    saveState();
+    render();
+    return;
+  }
+  const selectCustomerButton = event.target.closest("[data-select-customer]");
+  if (selectCustomerButton) return selectCustomer(selectCustomerButton.dataset.selectCustomer);
   if (event.target.id === "reset-demo") {
     state = clone(seedState);
     audit("Скинуто demo-дані", "manager");
@@ -796,6 +1111,9 @@ document.addEventListener("submit", (event) => {
   if (!form) return;
   event.preventDefault();
   if (form.dataset.action === "create-receipt") createReceipt(form);
+  if (form.dataset.action === "create-product") createProduct(form);
+  if (form.dataset.action === "create-customer") createCustomer(form);
+  if (form.dataset.action === "create-return") createPartialReturn(form);
   if (form.dataset.action === "receive-stock") receiveStock(form);
   if (form.dataset.action === "open-shift") openCashShift(form);
   if (form.dataset.action === "close-shift") closeCashShift(form);

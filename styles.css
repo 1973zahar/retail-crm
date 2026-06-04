@@ -344,12 +344,38 @@ th {
   font-size: 13px;
 }
 
+.loyalty-note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.loyalty-note span:last-child {
+  color: var(--muted);
+}
+
 .cart-summary {
   display: flex;
   justify-content: flex-end;
   align-items: center;
   gap: 12px;
   padding-top: 4px;
+}
+
+.cart-summary div {
+  display: grid;
+  gap: 3px;
+  text-align: right;
+}
+
+.cart-summary span {
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .cart-summary strong {
@@ -404,6 +430,44 @@ th {
   margin: 0;
 }
 
+.receipt-slip {
+  max-width: 380px;
+  display: grid;
+  gap: 8px;
+  margin: 0 auto;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  font-family: Consolas, "Courier New", monospace;
+}
+
+.receipt-slip > strong {
+  text-align: center;
+  font-size: 16px;
+}
+
+.receipt-slip > span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.receipt-slip hr {
+  width: 100%;
+  border: 0;
+  border-top: 1px dashed var(--border);
+}
+
+.receipt-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.receipt-line.total {
+  font-size: 18px;
+}
+
 @media (max-width: 920px) {
   body {
     grid-template-columns: 1fr;
@@ -430,6 +494,15 @@ th {
 
   .cart-summary {
     align-items: stretch;
+    flex-direction: column;
+  }
+
+  .cart-summary div {
+    text-align: left;
+  }
+
+  .loyalty-note {
+    align-items: flex-start;
     flex-direction: column;
   }
 
