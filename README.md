@@ -35,3 +35,20 @@ MVP-прототип містить:
 ## GitHub
 
 Ця папка має бути окремим git/GitHub репозиторієм. Локальний git ініціалізується окремо всередині `retail-crm`, без зв'язку з `marketplace-crm`.
+
+## LAN переглядалка
+
+Щоб відкрити B2C-прототип з іншого комп'ютера або телефона в тій самій мережі:
+
+```powershell
+cd D:\Codex\CRM\retail-crm
+powershell -ExecutionPolicy Bypass -File .\serve-lan.ps1 -Port 8790
+```
+
+У виводі скрипт покаже локальну адресу та LAN-адресу. На іншому пристрої відкрий:
+
+```text
+http://LAN-IP:8790/index.html
+```
+
+Якщо Windows Defender Firewall покаже запит, дозволь доступ для приватної мережі.
