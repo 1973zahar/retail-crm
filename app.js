@@ -1,7 +1,7 @@
 "use strict";
 
-const APP_VERSION = "2026.06.04.9";
-const APP_BUILD = "20260604-b2c-pos-combined";
+const APP_VERSION = "2026.06.04.10";
+const APP_BUILD = "20260604-b2c-sale-label";
 const STORAGE_KEY = "retail-crm-b2c-v8";
 
 const nowIso = () => new Date().toISOString();
@@ -677,7 +677,7 @@ function renderDashboard() {
 }
 
 function renderCheckout() {
-  setTitle("Новий чек магазину");
+  setTitle("Продаж");
   return renderCheckoutPanel(true);
 }
 
@@ -711,7 +711,7 @@ function renderCheckoutPanel(full = false) {
   return `
     <section class="panel ${full ? "" : "compact-panel"}">
       <div class="split">
-        <h2>B2C.1 Новий чек</h2>
+        <h2>B2C.1 Продаж</h2>
         <span class="pill ${openShift() ? "good" : "danger"}">${openShift() ? "каса відкрита" : "відкрийте касу"}</span>
       </div>
       <form class="form-grid checkout-form" data-action="create-receipt">
@@ -724,7 +724,7 @@ function renderCheckoutPanel(full = false) {
           <strong>${escapeHtml(customer.name)}</strong>
           <span>${loyaltyRate()}% автоматична знижка лояльності</span>
         </div>
-        <label class="field full"><span>Коментар</span><input name="note" data-checkout-field value="${escapeHtml(state.checkout.note || "")}" placeholder="примітка до чека"></label>
+        <label class="field full"><span>Коментар</span><input name="note" data-checkout-field value="${escapeHtml(state.checkout.note || "")}" placeholder="примітка до продажу"></label>
         <div class="product-pick full">
           ${products.map((product) => `
             <button class="product-button" type="button" data-add-cart="${escapeHtml(product.id)}">
@@ -759,7 +759,7 @@ function renderCheckoutPanel(full = false) {
             <span>Лояльність: -${formatMoney(loyalDiscount)}</span>
             <strong>Разом: ${formatMoney(total)}</strong>
           </div>
-          <button class="primary" type="submit" ${openShift() && lines.length ? "" : "disabled"}>Провести чек</button>
+          <button class="primary" type="submit" ${openShift() && lines.length ? "" : "disabled"}>Провести продаж</button>
         </div>
       </form>
     </section>
@@ -1542,7 +1542,7 @@ function createReceipt(form) {
   state.checkout.lines = [{ productId: state.products[0].id, qty: 1, discount: 0 }];
   state.checkout.note = "";
   state.currentView = "pos";
-  audit(`Проведено чек ${receipt.id} на ${formatMoney(receipt.total)}`);
+  audit(`Проведено продаж ${receipt.id} на ${formatMoney(receipt.total)}`);
   saveState();
   render();
 }
@@ -1586,7 +1586,7 @@ function createCustomer(form) {
 function selectCustomer(customerId) {
   state.checkout.customerId = customerId;
   state.currentView = "pos";
-  audit(`Клієнта ${customerById(customerId).name} вибрано для нового чека`);
+  audit(`Клієнта ${customerById(customerId).name} вибрано для продажу`);
   saveState();
   render();
 }
