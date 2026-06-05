@@ -1,7 +1,7 @@
 "use strict";
 
-const APP_VERSION = "2026.06.05.2";
-const APP_BUILD = "20260605-b2c-customer-create";
+const APP_VERSION = "2026.06.05.3";
+const APP_BUILD = "20260605-b2c-sale-search-fields";
 const STORAGE_KEY = "retail-crm-b2c-v8";
 
 const nowIso = () => new Date().toISOString();
@@ -135,6 +135,7 @@ const seedState = {
   currentView: "dashboard",
   checkout: {
     customerId: "walk-in",
+    customerSearch: "",
     paymentMethod: "card",
     search: "",
     note: "",
@@ -463,6 +464,15 @@ function customerById(id) {
   return state.customers.find((customer) => customer.id === id) || state.customers[0];
 }
 
+function customerLookupValue(customer) {
+  return `${customer.name} · ${customer.phone || "без телефону"} · ${LOYALTY_LABELS[customer.loyalty] || customer.loyalty}`;
+}
+
+function productLookupValue(product) {
+  const scanCode = product.barcode || product.qr || product.sqlId || product.sku;
+  return `${product.sku} · ${product.name} · ${scanCode} · ${formatMoney(product.price)} · залишок ${stockQty(product.id)}`;
+}
+
 function employeeById(id) {
   return state.employees.find((employee) => employee.id === id) || state.employees[0];
 }
@@ -530,6 +540,12 @@ function productMatchesQuery(product, query) {
   return productScanTargets(product).some((target) => tokens.has(target) || raw.includes(target));
 }
 
+function customerMatchesQuery(customer, query) {
+  const raw = normalizeScanText(query);
+  if (!raw) return true;
+  return normalizeScanText(`${customer.name} ${customer.phone} ${customer.id} ${LOYALTY_LABELS[customer.loyalty] || customer.loyalty}`).includes(raw);
+}
+
 function findProductByScan(value) {
   const raw = normalizeScanText(value);
   if (!raw) return null;
@@ -537,6 +553,24 @@ function findProductByScan(value) {
   return state.products.find((product) => (
     productScanTargets(product).some((target) => tokens.has(target) || raw.includes(target))
   )) || null;
+}
+
+function findProductForSale(value) {
+  const raw = normalizeScanText(value);
+  if (!raw) return null;
+  return state.products.find((product) => normalizeScanText(productLookupValue(product)) === raw)
+    || findProductByScan(value)
+    || state.products.find((product) => productMatchesQuery(product, value))
+    || null;
+}
+
+function findCustomerByLookup(value) {
+  const raw = normalizeScanText(value);
+  if (!raw) return null;
+  return state.customers.find((customer) => normalizeScanText(customerLookupValue(customer)) === raw)
+    || state.customers.find((customer) => normalizeScanText(customer.id) === raw)
+    || state.customers.find((customer) => customerMatchesQuery(customer, value))
+    || null;
 }
 
 function formatMoney(value) {
@@ -729,8 +763,9 @@ function renderCheckoutPanel(full = false) {
   const loyalDiscount = loyaltyDiscount(lines);
   const total = checkoutTotal(lines);
   const customer = customerById(state.checkout.customerId);
-  const filter = String(state.checkout.search || "").trim().toLowerCase();
-  const products = state.products.filter((product) => productMatchesQuery(product, filter));
+  const customerLookup = state.checkout.customerSearch && findCustomerByLookup(state.checkout.customerSearch)?.id === customer.id
+    ? state.checkout.customerSearch
+    : customerLookupValue(customer);
   return `
     <section class="panel ${full ? "" : "compact-panel"}">
       <div class="split">
@@ -738,39 +773,16 @@ function renderCheckoutPanel(full = false) {
         <span class="pill ${openShift() ? "good" : "danger"}">${openShift() ? "каса відкрита" : "відкрийте касу"}</span>
       </div>
       <form class="form-grid checkout-form" data-action="create-receipt">
-        <label class="field"><span>Покупець</span><select name="customerId" data-checkout-field>${state.customers.map((customer) => option(customer.id, customer.name, customer.id === state.checkout.customerId)).join("")}</select></label>
+        <label class="field wide"><span>Покупець</span><input name="customerSearch" data-customer-lookup list="customer-options" value="${escapeHtml(customerLookup)}" placeholder="ім'я або телефон з довідника"><datalist id="customer-options">${state.customers.map((item) => `<option value="${escapeHtml(customerLookupValue(item))}"></option>`).join("")}</datalist></label>
         <label class="field"><span>Оплата</span><select name="paymentMethod" data-checkout-field>${["cash", "card", "bank"].map((method) => option(method, paymentLabel(method), method === state.checkout.paymentMethod)).join("")}</select></label>
-        <label class="field wide"><span>Пошук SKU / штрихкод / QR</span><input name="search" data-product-search value="${escapeHtml(state.checkout.search)}" placeholder="назва, SKU, штрихкод або QR"></label>
-        <label class="field wide"><span>Сканер продажу</span><input name="scan" data-checkout-scan autocomplete="off" placeholder="скануйте штрихкод або QR і натисніть Enter"></label>
+        <label class="field wide"><span>Товар / штрихкод / QR</span><input name="search" data-product-lookup list="product-options" value="${escapeHtml(state.checkout.search)}" autocomplete="off" placeholder="назва, SKU, штрихкод або QR з довідника"><datalist id="product-options">${state.products.map((product) => `<option value="${escapeHtml(productLookupValue(product))}"></option>`).join("")}</datalist></label>
+        <div class="field lookup-action"><span>Додати</span><button class="secondary" type="button" data-add-selected-product>Додати товар</button></div>
         <div class="loyalty-note full">
           <span class="pill">${escapeHtml(LOYALTY_LABELS[customer.loyalty] || customer.loyalty)}</span>
           <strong>${escapeHtml(customer.name)}</strong>
           <span>${loyaltyRate()}% автоматична знижка лояльності</span>
         </div>
-        <div class="customer-pick full" aria-label="Список покупців">
-          <div class="picker-header">
-            <strong>Список покупців</strong>
-            <span class="muted">Створення клієнта: Довідники -> Клієнти і лояльність</span>
-          </div>
-          <div class="customer-grid">
-            ${state.customers.map((buyer) => `
-              <button class="customer-button ${buyer.id === state.checkout.customerId ? "active" : ""}" type="button" data-select-customer="${escapeHtml(buyer.id)}">
-                <strong>${escapeHtml(buyer.name)}</strong>
-                <span>${escapeHtml(buyer.phone || "без телефону")} · ${escapeHtml(LOYALTY_LABELS[buyer.loyalty] || buyer.loyalty)}</span>
-                <small>${buyer.id === state.checkout.customerId ? "вибрано" : "Додати в продаж"}</small>
-              </button>
-            `).join("") || '<p class="muted">Клієнтів ще немає. Створіть картку у Довідники -> Клієнти і лояльність.</p>'}
-          </div>
-        </div>
         <label class="field full"><span>Коментар</span><input name="note" data-checkout-field value="${escapeHtml(state.checkout.note || "")}" placeholder="примітка до продажу"></label>
-        <div class="product-pick full">
-          ${products.map((product) => `
-            <button class="product-button" type="button" data-add-cart="${escapeHtml(product.id)}">
-              <strong>${escapeHtml(product.name)}</strong>
-              <span>${escapeHtml(product.sku)} · ${formatMoney(product.price)} · залишок ${stockQty(product.id)}</span>
-            </button>
-          `).join("") || '<p class="muted">Товарів за цим пошуком немає.</p>'}
-        </div>
         <div class="table-wrap full">
           <table>
             <thead><tr><th>Товар</th><th>Ціна</th><th>К-сть</th><th>Знижка</th><th>Сума</th><th></th></tr></thead>
@@ -1529,6 +1541,24 @@ function addCartProduct(productId) {
   render();
 }
 
+function addSelectedCheckoutProduct(value = state.checkout.search) {
+  const query = String(value || "").trim();
+  if (!query) {
+    alert("Вкажіть товар, SKU, штрихкод або QR.");
+    return;
+  }
+  const product = findProductForSale(query);
+  if (!product) {
+    state.checkout.search = query;
+    saveState();
+    render();
+    alert("Товар не знайдено в довіднику. Перевірте назву, SKU, штрихкод або QR.");
+    return;
+  }
+  state.checkout.search = "";
+  addCartProduct(product.id);
+}
+
 function scanCheckoutProduct(value) {
   const product = findProductByScan(value);
   if (!product) {
@@ -1555,6 +1585,7 @@ function createReceipt(form) {
     return;
   }
   const data = Object.fromEntries(new FormData(form).entries());
+  if (data.customerSearch) selectCustomerFromLookup(data.customerSearch, false);
   state.checkout.customerId = data.customerId || state.checkout.customerId;
   state.checkout.paymentMethod = data.paymentMethod || state.checkout.paymentMethod;
   state.checkout.note = data.note || "";
@@ -1628,6 +1659,7 @@ function createCustomer(form) {
   });
   state.customers.push(customer);
   state.checkout.customerId = customer.id;
+  state.checkout.customerSearch = customerLookupValue(customer);
   audit(`Створено клієнта ${customer.name} (${LOYALTY_LABELS[customer.loyalty]})`);
   saveState();
   render();
@@ -1635,10 +1667,25 @@ function createCustomer(form) {
 
 function selectCustomer(customerId) {
   state.checkout.customerId = customerId;
+  state.checkout.customerSearch = customerLookupValue(customerById(customerId));
   state.currentView = "pos";
   audit(`Клієнта ${customerById(customerId).name} вибрано для продажу`);
   saveState();
   render();
+}
+
+function selectCustomerFromLookup(value, renderAfter = true) {
+  const query = String(value || "").trim();
+  state.checkout.customerSearch = query;
+  const customer = findCustomerByLookup(query);
+  if (customer) {
+    const changed = state.checkout.customerId !== customer.id;
+    state.checkout.customerId = customer.id;
+    state.checkout.customerSearch = customerLookupValue(customer);
+    if (changed) audit(`Клієнта ${customer.name} вибрано для продажу`);
+  }
+  saveState();
+  if (renderAfter) render();
 }
 
 function applyPaymentToShift(shift, method, total, kind) {
@@ -1984,10 +2031,14 @@ function closeCashShift(form) {
 }
 
 function updateCheckoutField(target) {
-  if (target.dataset.productSearch !== undefined) {
+  if (target.dataset.productLookup !== undefined) {
     state.checkout.search = target.value;
     saveState();
-    render();
+    return;
+  }
+  if (target.dataset.customerLookup !== undefined) {
+    state.checkout.customerSearch = target.value;
+    saveState();
     return;
   }
   if (target.dataset.checkoutField !== undefined) {
@@ -2038,6 +2089,8 @@ document.addEventListener("click", (event) => {
   }
   const addButton = event.target.closest("[data-add-cart]");
   if (addButton) return addCartProduct(addButton.dataset.addCart);
+  const addSelectedButton = event.target.closest("[data-add-selected-product]");
+  if (addSelectedButton) return addSelectedCheckoutProduct();
   const removeButton = event.target.closest("[data-remove-cart]");
   if (removeButton) return removeCartLine(Number(removeButton.dataset.removeCart));
   const returnButton = event.target.closest("[data-return-receipt]");
@@ -2073,7 +2126,7 @@ document.addEventListener("input", (event) => {
   if (event.target.dataset.cartQty !== undefined || event.target.dataset.cartDiscount !== undefined) {
     updateCartField(event.target);
   }
-  if (event.target.dataset.productSearch !== undefined) {
+  if (event.target.dataset.productLookup !== undefined || event.target.dataset.customerLookup !== undefined) {
     updateCheckoutField(event.target);
   }
   if (event.target.dataset.inventorySearch !== undefined) {
@@ -2085,6 +2138,7 @@ document.addEventListener("input", (event) => {
 
 document.addEventListener("change", (event) => {
   if (event.target.dataset.checkoutField !== undefined) updateCheckoutField(event.target);
+  if (event.target.dataset.customerLookup !== undefined) selectCustomerFromLookup(event.target.value);
   if (event.target.dataset.checkoutScan !== undefined && event.target.value.trim()) scanCheckoutProduct(event.target.value);
   if (event.target.dataset.inventoryActual !== undefined) {
     setInventoryActual(event.target.dataset.inventoryActual, event.target.value);
@@ -2098,6 +2152,14 @@ document.addEventListener("keydown", (event) => {
   if (event.target.dataset.checkoutScan !== undefined) {
     event.preventDefault();
     if (event.target.value.trim()) scanCheckoutProduct(event.target.value);
+  }
+  if (event.target.dataset.productLookup !== undefined) {
+    event.preventDefault();
+    addSelectedCheckoutProduct(event.target.value);
+  }
+  if (event.target.dataset.customerLookup !== undefined) {
+    event.preventDefault();
+    selectCustomerFromLookup(event.target.value);
   }
   if (event.target.dataset.inventoryScan !== undefined) {
     event.preventDefault();
