@@ -1,7 +1,7 @@
 "use strict";
 
-const APP_VERSION = "2026.06.05.12";
-const APP_BUILD = "20260605-b2c-document-lists";
+const APP_VERSION = "2026.06.05.13";
+const APP_BUILD = "20260605-b2c-stacked-lists";
 const STORAGE_KEY = "retail-crm-b2c-v8";
 const ROLE_PERMISSION_SCHEMA = "20260605-document-lists";
 const SCHEMA_DEFAULT_ACTIONS = ["drilldown_view", "document_edit", "document_list_view", "document_list_sort", "document_list_collapse"];
@@ -1333,7 +1333,7 @@ function renderDashboard() {
       ${metricCard("Низький залишок", String(lowStock), "Позиції для поповнення магазину.")}
       ${metricCard("Каса", shift ? "Відкрита" : "Закрита", shift ? `${shift.id} · очікувано ${formatMoney(shiftExpectedCash(shift))}` : "Немає активної зміни")}
     </section>
-    <section class="grid two section-gap">
+    <section class="stacked-panels section-gap">
       ${canOpenBlock("pos") && canDo("sale_create") ? renderCheckoutPanel() : ""}
       <article class="panel">
         <div class="split">
@@ -1525,7 +1525,7 @@ function renderReceiptsContent() {
   const selected = state.receipts.find((receipt) => receipt.id === state.checkout.printReceiptId) || state.receipts[0];
   const receiptRows = state.receipts.map(receiptListRow);
   return `
-    <section class="grid two">
+    <section class="stacked-panels">
       <article class="panel">
         ${documentListHeader("receipts", "B2C.2 Продажі", `${state.receipts.length} документів`)}
         ${renderDocumentStripList("receipts", receiptRows, "Продажів ще немає.")}
@@ -1566,7 +1566,7 @@ function renderReturns() {
   const returnableReceipts = state.receipts.filter((receipt) => receipt.status !== "returned");
   const returnRows = state.returns.map(returnListRow);
   return `
-    <section class="grid two">
+    <section class="stacked-panels">
       <article class="panel">
         <div class="split">
           <h2>B2C.3 Повернення</h2>
@@ -1729,7 +1729,7 @@ function renderStock() {
   const canPostInventory = canDo("inventory_post");
   const canResortInventory = canDo("inventory_resort");
   return `
-    <section class="grid two">
+    <section class="stacked-panels">
       <article class="panel">
         <div class="split">
           <h2>B2C.6 Залишки</h2>
@@ -1878,7 +1878,7 @@ function renderStock() {
 function renderCatalog() {
   setTitle("Товари магазину");
   return `
-    <section class="grid two">
+    <section class="stacked-panels">
       <article class="panel">
         <div class="split">
           <h2>B2C.4 Товари</h2>
@@ -1936,7 +1936,7 @@ function renderCatalog() {
 function renderCustomers() {
   setTitle("Клієнти і лояльність");
   return `
-    <section class="grid two">
+    <section class="stacked-panels">
       <article class="panel">
         <div class="split">
           <div>
@@ -1997,7 +1997,7 @@ function renderCash() {
 function renderCashContent() {
   const shift = openShift();
   return `
-    <section class="grid two">
+    <section class="stacked-panels">
       <article class="panel">
         <div class="split">
           <h2>B2C.7 Каса/POS</h2>
@@ -2095,7 +2095,7 @@ function renderEmployees() {
       <article class="card metric"><span>Касир зміни</span><strong>${escapeHtml(employeeById(state.selectedCashierId).name)}</strong><small>${escapeHtml(roleLabel(employeeById(state.selectedCashierId).role))}.</small></article>
       <article class="card metric"><span>Доступи</span><strong>${ROLE_BLOCKS.length}/${ROLE_ACTIONS.length}</strong><small>Блоки і дії.</small></article>
     </section>
-    <section class="grid two section-gap">
+    <section class="stacked-panels section-gap">
       <article class="panel">
         <div class="split">
           <h2>B2C.10 Працівники</h2>
@@ -2141,7 +2141,7 @@ function renderEmployees() {
         </form>
       </article>` : ""}
     </section>
-    <section class="grid two section-gap">
+    <section class="stacked-panels section-gap">
       <article class="panel">
         <div class="split">
           <h2>Ролі і блоки</h2>
