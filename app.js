@@ -1,7 +1,7 @@
 "use strict";
 
-const APP_VERSION = "2026.06.05.5";
-const APP_BUILD = "20260605-b2c-inventory-add-stock-products";
+const APP_VERSION = "2026.06.05.6";
+const APP_BUILD = "20260605-b2c-inventory-list-edit";
 const STORAGE_KEY = "retail-crm-b2c-v8";
 
 const nowIso = () => new Date().toISOString();
@@ -1157,7 +1157,7 @@ function renderStock() {
         </div>
         <div class="table-wrap full">
           <table>
-            <thead><tr><th>SKU</th><th>Товар</th><th>Штрихкод</th><th>Роздріб</th><th>Облік</th><th>Факт</th><th>Різниця</th><th>+/- грн</th></tr></thead>
+            <thead><tr><th>SKU</th><th>Товар</th><th>Штрихкод</th><th>Роздріб</th><th>Облік</th><th>Факт</th><th>Різниця</th><th>+/- грн</th><th>Дії</th></tr></thead>
             <tbody>
               ${rows.map((row) => `
                 <tr class="${row.hasActual && row.diff !== 0 ? "inventory-diff" : ""}">
@@ -1169,8 +1169,9 @@ function renderStock() {
                   <td><input class="mini-input" data-inventory-actual="${escapeHtml(row.product.id)}" type="number" min="0" value="${row.hasActual ? row.actualQty : ""}"></td>
                   <td><span class="pill ${row.diff === null ? "" : row.diff < 0 ? "danger" : row.diff > 0 ? "warn" : "good"}">${diffLabel(row.diff)}</span></td>
                   <td>${row.diffAmount === null ? "-" : formatMoney(row.diffAmount)}</td>
+                  <td><button class="secondary" type="button" data-remove-inventory-product="${escapeHtml(row.product.id)}">Видалити</button></td>
                 </tr>
-              `).join("") || `<tr><td colspan="8" class="muted">${inventorySearch ? "За цим пошуком позицій немає." : "Додайте товар з довідника товарів або відскануйте штрихкод/QR."}</td></tr>`}
+              `).join("") || `<tr><td colspan="9" class="muted">${inventorySearch ? "За цим пошуком позицій немає." : "Додайте товар з довідника товарів або відскануйте штрихкод/QR."}</td></tr>`}
             </tbody>
           </table>
         </div>
@@ -1851,6 +1852,21 @@ function addAllInventoryStockProducts() {
   render();
 }
 
+function removeInventoryProduct(productId) {
+  const index = state.inventory.lines.findIndex((item) => item.productId === productId);
+  if (index === -1) return;
+  const product = productById(productId);
+  const relatedResorts = state.inventory.resorts.filter((item) => item.fromProductId === productId || item.toProductId === productId).length;
+  state.inventory.lines.splice(index, 1);
+  if (relatedResorts) {
+    state.inventory.resorts = state.inventory.resorts.filter((item) => item.fromProductId !== productId && item.toProductId !== productId);
+  }
+  if (normalizeScanText(state.inventory.search) === normalizeScanText(product.sku)) state.inventory.search = "";
+  audit(`Видалено товар з інвентаризації: ${product.sku}${relatedResorts ? `, прибрано пересортів: ${relatedResorts}` : ""}`);
+  saveState();
+  render();
+}
+
 function inventoryActualBase(productId) {
   const line = inventoryLineForProduct(productId);
   return line.actualQty === "" || line.actualQty === null || line.actualQty === undefined ? stockQty(productId) : Number(line.actualQty || 0);
@@ -2160,6 +2176,8 @@ document.addEventListener("click", (event) => {
   if (addInventoryProductButton) return addInventoryProductFromLookup();
   const addAllStockInventoryButton = event.target.closest("[data-add-all-stock-inventory]");
   if (addAllStockInventoryButton) return addAllInventoryStockProducts();
+  const removeInventoryProductButton = event.target.closest("[data-remove-inventory-product]");
+  if (removeInventoryProductButton) return removeInventoryProduct(removeInventoryProductButton.dataset.removeInventoryProduct);
   const resortRemoveButton = event.target.closest("[data-remove-resort]");
   if (resortRemoveButton) return removeInventoryResort(Number(resortRemoveButton.dataset.removeResort));
   const selectCashierButton = event.target.closest("[data-select-cashier]");
