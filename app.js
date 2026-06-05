@@ -1,7 +1,7 @@
 "use strict";
 
-const APP_VERSION = "2026.06.05.9";
-const APP_BUILD = "20260605-b2c-role-permissions";
+const APP_VERSION = "2026.06.05.10";
+const APP_BUILD = "20260605-b2c-sale-payment-confirm";
 const STORAGE_KEY = "retail-crm-b2c-v8";
 
 const nowIso = () => new Date().toISOString();
@@ -154,6 +154,10 @@ const seedState = {
       { productId: "p-102", qty: 1, discount: 0 }
     ]
   },
+  saleConfirm: {
+    open: false,
+    paymentMethod: "card"
+  },
   products: sqlProductSnapshot.map(productFromSql),
   customers: [
     { id: "walk-in", name: "Роздрібний покупець", phone: "", loyalty: "standard" },
@@ -297,6 +301,13 @@ function normalizeState(input) {
   };
   next.checkout.lines = Array.isArray(next.checkout.lines) && next.checkout.lines.length ? next.checkout.lines : clone(seedState.checkout.lines);
   next.checkout.printReceiptId = next.checkout.printReceiptId || next.receipts[0]?.id || "";
+  next.saleConfirm = {
+    ...clone(seedState.saleConfirm),
+    ...(next.saleConfirm || {})
+  };
+  next.saleConfirm.paymentMethod = ["cash", "card", "bank"].includes(next.saleConfirm.paymentMethod)
+    ? next.saleConfirm.paymentMethod
+    : next.checkout.paymentMethod;
   if (!canOpenBlock(next.currentView, next)) next.currentView = firstAllowedView(next);
   return next;
 }
@@ -500,6 +511,11 @@ function productById(id) {
 
 function customerById(id) {
   return state.customers.find((customer) => customer.id === id) || state.customers[0];
+}
+
+function hasRegisteredCustomer(customerId = state.checkout.customerId) {
+  const customer = state.customers.find((item) => item.id === customerId);
+  return Boolean(customer && customer.id && customer.id !== "walk-in");
 }
 
 function customerLookupValue(customer) {
@@ -908,6 +924,43 @@ function renderCheckoutPanel(full = false) {
         </div>
       </form>
     </section>
+  `;
+}
+
+function renderSalePaymentConfirm() {
+  if (!state.saleConfirm.open) return "";
+  const lines = cartLines();
+  const customer = customerById(state.checkout.customerId);
+  const method = state.saleConfirm.paymentMethod || state.checkout.paymentMethod || "card";
+  const bankBlocked = method === "bank" && !hasRegisteredCustomer();
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="sale-payment-title">
+        <div class="split">
+          <div>
+            <p class="eyebrow">Перед проведенням продажу</p>
+            <h2 id="sale-payment-title">Підтвердити метод оплати</h2>
+          </div>
+          <button class="secondary" type="button" data-cancel-sale-confirm>Скасувати</button>
+        </div>
+        <form class="form-grid one-col" data-action="confirm-sale-payment">
+          <label class="field">
+            <span>Метод оплати</span>
+            <select name="paymentMethod" data-sale-confirm-payment>${["cash", "card", "bank"].map((item) => option(item, paymentLabel(item), item === method)).join("")}</select>
+          </label>
+          <dl class="summary-list">
+            <div><dt>Покупець</dt><dd>${escapeHtml(customer.name)}</dd></div>
+            <div><dt>Позицій</dt><dd>${lines.length}</dd></div>
+            <div><dt>Сума</dt><dd><strong>${formatMoney(checkoutTotal(lines))}</strong></dd></div>
+          </dl>
+          ${bankBlocked ? '<p class="warning-note">Для оплати "Банк" потрібно вибрати клієнта з довідника. Роздрібний покупець не допускається.</p>' : ""}
+          <div class="toolbar">
+            <button class="secondary" type="button" data-cancel-sale-confirm>Скасувати</button>
+            <button class="primary" type="submit">Підтвердити і провести</button>
+          </div>
+        </form>
+      </section>
+    </div>
   `;
 }
 
@@ -1681,10 +1734,26 @@ function removeCartLine(index) {
   render();
 }
 
+function currentSaleLines() {
+  return cartLines().map((line) => {
+    const product = productById(line.productId);
+    return { ...line, price: Number(product.price || line.price || 0), total: lineTotal(line) };
+  });
+}
+
+function validateSaleStock(lines) {
+  for (const line of lines) {
+    if (stockQty(line.productId) < line.qty) {
+      alert(`Недостатньо залишку: ${productById(line.productId).name}`);
+      return false;
+    }
+  }
+  return true;
+}
+
 function createReceipt(form) {
   if (!canDo("sale_create")) return alert("Немає дозволу створювати продаж.");
-  const shift = openShift();
-  if (!shift) {
+  if (!openShift()) {
     alert("Спочатку відкрийте касову зміну.");
     return;
   }
@@ -1693,19 +1762,62 @@ function createReceipt(form) {
   state.checkout.customerId = data.customerId || state.checkout.customerId;
   state.checkout.paymentMethod = data.paymentMethod || state.checkout.paymentMethod;
   state.checkout.note = data.note || "";
-  const lines = cartLines().map((line) => {
-    const product = productById(line.productId);
-    return { ...line, price: Number(product.price || line.price || 0), total: lineTotal(line) };
-  });
+  const lines = currentSaleLines();
+  if (!validateSaleStock(lines)) return;
+  state.saleConfirm = {
+    open: true,
+    paymentMethod: state.checkout.paymentMethod
+  };
+  saveState();
+  render();
+}
+
+function updateSaleConfirmPayment(method) {
+  state.saleConfirm.paymentMethod = ["cash", "card", "bank"].includes(method) ? method : state.checkout.paymentMethod;
+  saveState();
+  render();
+}
+
+function cancelSalePaymentConfirm() {
+  state.saleConfirm = { open: false, paymentMethod: state.checkout.paymentMethod };
+  saveState();
+  render();
+}
+
+function confirmSalePayment(form) {
+  if (!canDo("sale_create")) return alert("Немає дозволу створювати продаж.");
+  const data = Object.fromEntries(new FormData(form).entries());
+  const paymentMethod = data.paymentMethod || state.saleConfirm.paymentMethod || state.checkout.paymentMethod;
+  if (paymentMethod === "bank" && !hasRegisteredCustomer()) {
+    alert("Для оплати Банк потрібно вибрати клієнта з довідника. Роздрібний покупець не допускається.");
+    state.saleConfirm = { open: true, paymentMethod };
+    saveState();
+    render();
+    return;
+  }
+  state.checkout.paymentMethod = paymentMethod;
+  state.saleConfirm = { open: false, paymentMethod };
+  postConfirmedReceipt();
+}
+
+function postConfirmedReceipt() {
+  const shift = openShift();
+  if (!shift) {
+    alert("Спочатку відкрийте касову зміну.");
+    return;
+  }
+  if (state.checkout.paymentMethod === "bank" && !hasRegisteredCustomer()) {
+    alert("Для оплати Банк потрібно вибрати клієнта з довідника. Роздрібний покупець не допускається.");
+    state.saleConfirm = { open: true, paymentMethod: "bank" };
+    saveState();
+    render();
+    return;
+  }
+  const lines = currentSaleLines();
   const subtotal = receiptSubtotal(lines);
   const loyalDiscount = loyaltyDiscount(lines, state.checkout.customerId);
   const total = checkoutTotal(lines, state.checkout.customerId);
-  for (const line of lines) {
-    if (stockQty(line.productId) < line.qty) {
-      alert(`Недостатньо залишку: ${productById(line.productId).name}`);
-      return;
-    }
-  }
+  if (!validateSaleStock(lines)) return;
   lines.forEach((line) => {
     stockRow(line.productId).qty -= line.qty;
   });
@@ -1726,6 +1838,7 @@ function createReceipt(form) {
   applyPaymentToShift(shift, receipt.paymentMethod, receipt.total, "sale");
   state.checkout.lines = [{ productId: state.products[0].id, qty: 1, discount: 0 }];
   state.checkout.note = "";
+  state.saleConfirm = { open: false, paymentMethod: state.checkout.paymentMethod };
   state.currentView = "pos";
   audit(`Проведено продаж ${receipt.id} на ${formatMoney(receipt.total)}`);
   saveState();
@@ -2290,9 +2403,10 @@ function render() {
     employees: renderEmployees,
     log: renderLog
   };
-  document.getElementById("app").innerHTML = canOpenBlock(state.currentView)
+  const pageHtml = canOpenBlock(state.currentView)
     ? (views[state.currentView] || renderDashboard)()
     : renderNoAccess();
+  document.getElementById("app").innerHTML = `${pageHtml}${renderSalePaymentConfirm()}`;
 }
 
 function renderNoAccess() {
@@ -2348,6 +2462,8 @@ document.addEventListener("click", (event) => {
   if (toggleEmployeeButton) return toggleEmployeeStatus(toggleEmployeeButton.dataset.toggleEmployee);
   const selectCustomerButton = event.target.closest("[data-select-customer]");
   if (selectCustomerButton) return selectCustomer(selectCustomerButton.dataset.selectCustomer);
+  const cancelSaleConfirmButton = event.target.closest("[data-cancel-sale-confirm]");
+  if (cancelSaleConfirmButton) return cancelSalePaymentConfirm();
   if (event.target.id === "reset-demo") {
     state = clone(seedState);
     audit("Скинуто demo-дані", "manager");
@@ -2380,6 +2496,7 @@ document.addEventListener("change", (event) => {
   if (event.target.dataset.rolePermission !== undefined) {
     toggleRolePermission(event.target.dataset.rolePermission, event.target.dataset.roleId, event.target.dataset.permissionId, event.target.checked);
   }
+  if (event.target.dataset.saleConfirmPayment !== undefined) updateSaleConfirmPayment(event.target.value);
   if (event.target.dataset.checkoutField !== undefined) updateCheckoutField(event.target);
   if (event.target.dataset.customerLookup !== undefined) selectCustomerFromLookup(event.target.value);
   if (event.target.dataset.checkoutScan !== undefined && event.target.value.trim()) scanCheckoutProduct(event.target.value);
@@ -2419,6 +2536,7 @@ document.addEventListener("submit", (event) => {
   if (!form) return;
   event.preventDefault();
   if (form.dataset.action === "create-receipt") createReceipt(form);
+  if (form.dataset.action === "confirm-sale-payment") confirmSalePayment(form);
   if (form.dataset.action === "sync-sql-products") syncProductsFromSql();
   if (form.dataset.action === "create-customer") createCustomer(form);
   if (form.dataset.action === "create-return") createPartialReturn(form);

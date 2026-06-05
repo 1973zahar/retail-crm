@@ -524,6 +524,36 @@ th {
   justify-content: flex-end;
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(17, 24, 39, 0.48);
+}
+
+.modal {
+  width: min(520px, 100%);
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 20px 46px rgba(17, 24, 39, 0.28);
+}
+
+.warning-note {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid #f3b36a;
+  border-radius: 8px;
+  background: #fff7ed;
+  color: var(--warn);
+}
+
 .inventory-diff {
   background: #fff7ed;
 }
