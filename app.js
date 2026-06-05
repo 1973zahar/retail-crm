@@ -1,7 +1,7 @@
 "use strict";
 
-const APP_VERSION = "2026.06.05.3";
-const APP_BUILD = "20260605-b2c-sale-search-fields";
+const APP_VERSION = "2026.06.05.4";
+const APP_BUILD = "20260605-b2c-inventory-add-products";
 const STORAGE_KEY = "retail-crm-b2c-v8";
 
 const nowIso = () => new Date().toISOString();
@@ -176,7 +176,8 @@ const seedState = {
     search: "",
     scan: "",
     printedAt: "",
-    lines: sqlProductSnapshot.map(inventoryLineFromProduct),
+    addSearch: "",
+    lines: [],
     resorts: []
   },
   inventoryDocs: [],
@@ -389,21 +390,25 @@ function normalizeStockReceipt(receipt) {
 
 function normalizeInventory(inventory, products, stockRows) {
   const sourceLines = Array.isArray(inventory?.lines) ? inventory.lines : [];
+  const lines = [];
+  sourceLines.forEach((line) => {
+    const product = products.find((item) => item.id === line.productId);
+    if (!product || lines.some((item) => item.productId === product.id)) return;
+    const actualValue = line.actualQty;
+    lines.push({
+      productId: product.id,
+      expectedQty: stockQtyFromRows(stockRows, product.id),
+      actualQty: actualValue === "" || actualValue === undefined || actualValue === null ? "" : Number(actualValue)
+    });
+  });
   return {
     id: inventory?.id || "INV-DRAFT",
     date: inventory?.date || today(),
     search: inventory?.search || "",
     scan: inventory?.scan || "",
+    addSearch: inventory?.addSearch || "",
     printedAt: inventory?.printedAt || "",
-    lines: products.map((product) => {
-      const existing = sourceLines.find((line) => line.productId === product.id);
-      const actualValue = existing?.actualQty;
-      return {
-        productId: product.id,
-        expectedQty: stockQtyFromRows(stockRows, product.id),
-        actualQty: actualValue === "" || actualValue === undefined || actualValue === null ? "" : Number(actualValue)
-      };
-    }),
+    lines,
     resorts: Array.isArray(inventory?.resorts) ? inventory.resorts.map(normalizeInventoryResort) : []
   };
 }
@@ -555,13 +560,17 @@ function findProductByScan(value) {
   )) || null;
 }
 
-function findProductForSale(value) {
+function findProductByLookup(value) {
   const raw = normalizeScanText(value);
   if (!raw) return null;
   return state.products.find((product) => normalizeScanText(productLookupValue(product)) === raw)
     || findProductByScan(value)
     || state.products.find((product) => productMatchesQuery(product, value))
     || null;
+}
+
+function findProductForSale(value) {
+  return findProductByLookup(value);
 }
 
 function findCustomerByLookup(value) {
@@ -927,12 +936,9 @@ function renderReturns() {
 }
 
 function inventoryRows() {
-  return state.products.map((product) => {
-    let line = state.inventory.lines.find((item) => item.productId === product.id);
-    if (!line) {
-      line = { productId: product.id, expectedQty: stockQty(product.id), actualQty: "" };
-      state.inventory.lines.push(line);
-    }
+  return state.inventory.lines.map((line) => {
+    const product = state.products.find((item) => item.id === line.productId);
+    if (!product) return null;
     const expectedQty = stockQty(product.id);
     const hasActual = line.actualQty !== "" && line.actualQty !== null && line.actualQty !== undefined;
     const actualQty = hasActual ? Number(line.actualQty || 0) : "";
@@ -942,7 +948,7 @@ function inventoryRows() {
     const actualAmount = hasActual ? Number(actualQty) * price : null;
     const diffAmount = hasActual ? Number(diff || 0) * price : null;
     return { product, line, expectedQty, actualQty, hasActual, diff, price, expectedAmount, actualAmount, diffAmount };
-  });
+  }).filter(Boolean);
 }
 
 function inventoryTotals(rows) {
@@ -1133,17 +1139,19 @@ function renderStock() {
         <span class="pill">${escapeHtml(state.inventory.id)}</span>
       </div>
       <section class="grid four">
-        <article class="card metric"><span>Позицій</span><strong>${rows.length}/${allRows.length}</strong><small>${inventorySearch ? "Відфільтровано по пошуку." : "SKU з SQL-довідника."}</small></article>
+        <article class="card metric"><span>Позицій</span><strong>${rows.length}/${allRows.length}</strong><small>${inventorySearch ? "Відфільтровано по пошуку." : "Додані товари інвентаризації."}</small></article>
         <article class="card metric"><span>Пораховано</span><strong>${totals.counted}</strong><small>Є фактичний залишок.</small></article>
         <article class="card metric"><span>Плюс</span><strong>${formatMoney(totals.positiveAmount)}</strong><small>${totals.positive} од. факт більше обліку.</small></article>
         <article class="card metric"><span>Мінус</span><strong>${formatMoney(Math.abs(totals.negativeAmount))}</strong><small>${Math.abs(totals.negative)} од. факт менше обліку.</small></article>
       </section>
       <form class="form-grid section-gap" data-action="post-inventory">
+        <label class="field wide"><span>Товар з довідника</span><input name="inventoryAddSearch" data-inventory-add-search list="inventory-product-options" value="${escapeHtml(state.inventory.addSearch || "")}" autocomplete="off" placeholder="назва, SKU, штрихкод або QR з довідника товарів"><datalist id="inventory-product-options">${state.products.map((product) => `<option value="${escapeHtml(productLookupValue(product))}"></option>`).join("")}</datalist></label>
+        <div class="field lookup-action no-print"><span>Додати</span><button class="secondary" type="button" data-add-inventory-product>Додати товар</button></div>
         <label class="field wide"><span>Пошук у інвентаризації</span><input name="inventorySearch" data-inventory-search value="${escapeHtml(state.inventory.search || "")}" placeholder="назва, SKU, штрихкод або QR"></label>
         <label class="field wide"><span>Сканер інвентаризації</span><input name="inventoryScan" data-inventory-scan autocomplete="off" placeholder="скануйте штрихкод або QR, Enter додає 1 до факту"></label>
         <div class="toolbar full no-print">
           <button class="secondary" type="button" data-print-inventory>Друк Інвентаризаційний лист</button>
-          <button class="secondary" type="button" data-reset-inventory>Очистити факт</button>
+          <button class="secondary" type="button" data-reset-inventory>Очистити лист</button>
           <button class="primary" type="submit">Провести і оновити склад</button>
         </div>
         <div class="table-wrap full">
@@ -1161,7 +1169,7 @@ function renderStock() {
                   <td><span class="pill ${row.diff === null ? "" : row.diff < 0 ? "danger" : row.diff > 0 ? "warn" : "good"}">${diffLabel(row.diff)}</span></td>
                   <td>${row.diffAmount === null ? "-" : formatMoney(row.diffAmount)}</td>
                 </tr>
-              `).join("") || '<tr><td colspan="8" class="muted">За цим пошуком позицій немає.</td></tr>'}
+              `).join("") || `<tr><td colspan="8" class="muted">${inventorySearch ? "За цим пошуком позицій немає." : "Додайте товар з довідника товарів або відскануйте штрихкод/QR."}</td></tr>`}
             </tbody>
           </table>
         </div>
@@ -1801,6 +1809,29 @@ function inventoryLineForProduct(productId) {
   return line;
 }
 
+function addInventoryProductFromLookup(value = state.inventory.addSearch) {
+  const query = String(value || "").trim();
+  if (!query) {
+    alert("Вкажіть товар з довідника товарів.");
+    return;
+  }
+  const product = findProductByLookup(query);
+  if (!product) {
+    state.inventory.addSearch = query;
+    saveState();
+    render();
+    alert("Товар не знайдено в довіднику товарів. Перевірте назву, SKU, штрихкод або QR.");
+    return;
+  }
+  const existed = state.inventory.lines.some((item) => item.productId === product.id);
+  inventoryLineForProduct(product.id);
+  state.inventory.addSearch = "";
+  state.inventory.search = product.sku;
+  audit(`${existed ? "Відкрито" : "Додано"} товар до інвентаризації: ${product.sku}`);
+  saveState();
+  render();
+}
+
 function inventoryActualBase(productId) {
   const line = inventoryLineForProduct(productId);
   return line.actualQty === "" || line.actualQty === null || line.actualQty === undefined ? stockQty(productId) : Number(line.actualQty || 0);
@@ -1862,18 +1893,18 @@ function scanInventoryProduct(value) {
     alert("Товар за штрихкодом або QR для інвентаризації не знайдено.");
     return;
   }
-  const line = state.inventory.lines.find((item) => item.productId === product.id);
-  if (!line) return;
+  const line = inventoryLineForProduct(product.id);
   line.expectedQty = stockQty(product.id);
   line.actualQty = Number(line.actualQty || 0) + 1;
   state.inventory.scan = "";
+  state.inventory.search = product.sku;
   saveState();
   render();
 }
 
 function resetInventoryDraft() {
   state.inventory = normalizeInventory({ id: "INV-DRAFT", date: today(), lines: [] }, state.products, state.stock);
-  audit("Очищено фактичні залишки інвентаризації");
+  audit("Очищено інвентаризаційний лист");
   saveState();
   render();
 }
@@ -2106,6 +2137,8 @@ document.addEventListener("click", (event) => {
   if (inventoryPrintButton) return printInventorySheet();
   const inventoryResetButton = event.target.closest("[data-reset-inventory]");
   if (inventoryResetButton) return resetInventoryDraft();
+  const addInventoryProductButton = event.target.closest("[data-add-inventory-product]");
+  if (addInventoryProductButton) return addInventoryProductFromLookup();
   const resortRemoveButton = event.target.closest("[data-remove-resort]");
   if (resortRemoveButton) return removeInventoryResort(Number(resortRemoveButton.dataset.removeResort));
   const selectCashierButton = event.target.closest("[data-select-cashier]");
@@ -2133,6 +2166,10 @@ document.addEventListener("input", (event) => {
     state.inventory.search = event.target.value;
     saveState();
     render();
+  }
+  if (event.target.dataset.inventoryAddSearch !== undefined) {
+    state.inventory.addSearch = event.target.value;
+    saveState();
   }
 });
 
@@ -2164,6 +2201,10 @@ document.addEventListener("keydown", (event) => {
   if (event.target.dataset.inventoryScan !== undefined) {
     event.preventDefault();
     if (event.target.value.trim()) scanInventoryProduct(event.target.value);
+  }
+  if (event.target.dataset.inventoryAddSearch !== undefined) {
+    event.preventDefault();
+    addInventoryProductFromLookup(event.target.value);
   }
 });
 
