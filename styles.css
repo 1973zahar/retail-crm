@@ -446,6 +446,106 @@ th {
   padding: 6px 9px;
 }
 
+.list-heading {
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.list-heading h2 {
+  margin-bottom: 4px;
+}
+
+.collapse-button {
+  min-width: 42px;
+  padding: 8px 10px;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.list-controls {
+  display: grid;
+  grid-template-columns: minmax(150px, 190px) minmax(180px, 1fr);
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.sort-controls {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sort-controls > span {
+  width: 100%;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.list-sort {
+  min-height: 34px;
+  padding: 7px 10px;
+  border-color: var(--border);
+  background: var(--surface-soft);
+}
+
+.list-sort.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: #ecfdf5;
+}
+
+.document-list {
+  display: grid;
+  gap: 8px;
+}
+
+.document-row {
+  display: grid;
+  grid-template-columns: minmax(118px, 0.8fr) minmax(160px, 1fr) minmax(170px, 1.2fr) minmax(92px, 0.7fr) minmax(105px, 0.8fr) minmax(110px, 0.8fr) minmax(158px, auto);
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.document-row:hover,
+.document-row:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 8px 20px rgba(18, 112, 106, 0.12);
+  outline: none;
+}
+
+.document-row.return-row {
+  background: #fff7ed;
+}
+
+.document-row.empty-row {
+  display: block;
+  cursor: default;
+}
+
+.document-main,
+.document-amount {
+  display: grid;
+  gap: 3px;
+}
+
+.document-main span,
+.document-amount span,
+.document-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.document-label {
+  display: block;
+  margin-bottom: 3px;
+}
+
 .muted {
   color: var(--muted);
 }
@@ -744,6 +844,15 @@ th {
 
   .summary-list div {
     grid-template-columns: 1fr;
+  }
+
+  .list-controls,
+  .document-row {
+    grid-template-columns: 1fr;
+  }
+
+  .sort-controls {
+    align-items: flex-start;
   }
 }
 

@@ -1,10 +1,10 @@
 "use strict";
 
-const APP_VERSION = "2026.06.05.11";
-const APP_BUILD = "20260605-b2c-drilldowns-return-refund";
+const APP_VERSION = "2026.06.05.12";
+const APP_BUILD = "20260605-b2c-document-lists";
 const STORAGE_KEY = "retail-crm-b2c-v8";
-const ROLE_PERMISSION_SCHEMA = "20260605-drilldowns-return-refund";
-const SCHEMA_DEFAULT_ACTIONS = ["drilldown_view", "document_edit"];
+const ROLE_PERMISSION_SCHEMA = "20260605-document-lists";
+const SCHEMA_DEFAULT_ACTIONS = ["drilldown_view", "document_edit", "document_list_view", "document_list_sort", "document_list_collapse"];
 
 const nowIso = () => new Date().toISOString();
 const today = () => nowIso().slice(0, 10);
@@ -30,6 +30,9 @@ const ROLE_ACTIONS = [
   { id: "return_create", label: "Повернення" },
   { id: "drilldown_view", label: "Розшифровки сум і карток" },
   { id: "document_edit", label: "Редагування документів" },
+  { id: "document_list_view", label: "Списки продажів і повернень" },
+  { id: "document_list_sort", label: "Пошук і сортування списків" },
+  { id: "document_list_collapse", label: "Згортання списків" },
   { id: "cash_open", label: "Відкрити зміну" },
   { id: "cash_close", label: "Закрити зміну" },
   { id: "inventory_post", label: "Провести інвентаризацію" },
@@ -48,17 +51,17 @@ const EMPLOYEE_ROLES = {
   admin: {
     label: "Адміністратор",
     blocks: ["dashboard", "pos", "returns", "catalog", "customers", "stock", "inventory", "reports", "employees", "log"],
-    actions: ["sale_create", "return_create", "drilldown_view", "document_edit", "cash_open", "cash_close", "inventory_post", "inventory_resort", "sql_import", "employee_manage", "reports_view", "audit_view"]
+    actions: ["sale_create", "return_create", "drilldown_view", "document_edit", "document_list_view", "document_list_sort", "document_list_collapse", "cash_open", "cash_close", "inventory_post", "inventory_resort", "sql_import", "employee_manage", "reports_view", "audit_view"]
   },
   seller: {
     label: "Продавець",
     blocks: ["dashboard", "pos", "catalog", "customers", "stock"],
-    actions: ["sale_create"]
+    actions: ["sale_create", "document_list_view", "document_list_sort", "document_list_collapse"]
   },
   cashier: {
     label: "Касир",
     blocks: ["dashboard", "pos", "returns"],
-    actions: ["sale_create", "return_create", "drilldown_view", "cash_open", "cash_close"]
+    actions: ["sale_create", "return_create", "drilldown_view", "document_list_view", "document_list_sort", "document_list_collapse", "cash_open", "cash_close"]
   }
 };
 const sqlProductSnapshot = [
@@ -175,6 +178,11 @@ const seedState = {
     open: false,
     type: "",
     id: ""
+  },
+  listUi: {
+    receipts: { collapsed: false, sortBy: "date", sortDir: "desc", date: "", customer: "" },
+    returns: { collapsed: false, sortBy: "date", sortDir: "desc", date: "", customer: "" },
+    drilldown: { collapsed: false, sortBy: "date", sortDir: "desc", date: "", customer: "" }
   },
   products: sqlProductSnapshot.map(productFromSql),
   customers: [
@@ -347,6 +355,7 @@ function normalizeState(input) {
     ...clone(seedState.documentEdit),
     ...(next.documentEdit || {})
   };
+  next.listUi = normalizeListUi(next.listUi);
   if (!canOpenBlock(next.currentView, next)) next.currentView = firstAllowedView(next);
   return next;
 }
@@ -422,6 +431,25 @@ function normalizeRolePermissions(input, schemaVersion = ROLE_PERMISSION_SCHEMA)
       {
         blocks: Array.isArray(source.blocks) ? source.blocks.filter((id) => knownBlocks.has(id)) : [...defaults.blocks],
         actions: Array.from(new Set([...sourceActions, ...schemaActions]))
+      }
+    ];
+  }));
+}
+
+function normalizeListUi(input) {
+  const sortFields = new Set(["id", "date", "customer", "amount", "method", "status"]);
+  return Object.fromEntries(Object.entries(seedState.listUi).map(([key, defaults]) => {
+    const source = input?.[key] || {};
+    const sortBy = sortFields.has(source.sortBy) ? source.sortBy : defaults.sortBy;
+    const sortDir = source.sortDir === "asc" ? "asc" : "desc";
+    return [
+      key,
+      {
+        collapsed: Boolean(source.collapsed),
+        sortBy,
+        sortDir,
+        date: source.date || "",
+        customer: source.customer || ""
       }
     ];
   }));
@@ -887,7 +915,8 @@ function receiptDrilldownRow(receipt, amount = Number(receipt.total || 0), note 
     amount,
     method: paymentLabel(receipt.paymentMethod),
     status: statusLabel(receipt.status),
-    note: note || receipt.note || ""
+    note: note || receipt.note || "",
+    canReturn: receipt.status !== "returned"
   };
 }
 
@@ -938,8 +967,8 @@ function drilldownData(type) {
       ]
     },
     pos_today_receipts: {
-      title: "Чеки сьогодні",
-      totalLabel: "Кількість чеків",
+      title: "Продажі сьогодні",
+      totalLabel: "Кількість продажів",
       totalType: "count",
       total: todayReceipts.length,
       rows: todayReceipts.map((receipt) => receiptDrilldownRow(receipt))
@@ -991,6 +1020,177 @@ function drilldownTotalValue(data) {
   return data.totalType === "count" ? String(data.total) : formatMoney(data.total);
 }
 
+function receiptListRow(receipt) {
+  return {
+    type: "receipt",
+    id: receipt.id,
+    date: receipt.date,
+    createdAt: receipt.createdAt,
+    customer: customerById(receipt.customerId).name,
+    customerSearch: customerLookupValue(customerById(receipt.customerId)),
+    lines: documentLineSummary(receipt.lines),
+    amount: Number(receipt.total || 0),
+    method: paymentLabel(receipt.paymentMethod),
+    status: statusLabel(receipt.status),
+    note: receipt.note || "",
+    canReturn: receipt.status !== "returned"
+  };
+}
+
+function returnListRow(returnDoc) {
+  const receipt = state.receipts.find((item) => item.id === returnDoc.receiptId);
+  const customer = receipt ? customerById(receipt.customerId) : null;
+  return {
+    type: "return",
+    id: returnDoc.id,
+    date: returnDoc.date,
+    createdAt: returnDoc.createdAt,
+    customer: customer?.name || "-",
+    customerSearch: customer ? customerLookupValue(customer) : "",
+    lines: documentLineSummary(returnDoc.lines),
+    amount: Number(returnDoc.total || 0),
+    method: refundLabel(returnDoc.refundMethod),
+    status: returnDoc.reason || "повернення",
+    note: `продаж ${returnDoc.receiptId}`
+  };
+}
+
+function normalizeDocumentListRow(row) {
+  return {
+    type: row.type,
+    id: row.id,
+    date: row.date,
+    createdAt: row.createdAt,
+    customer: row.customer || row.partner || "-",
+    customerSearch: row.customerSearch || row.partner || "",
+    lines: row.lines || "",
+    amount: Number(row.amount || 0),
+    method: row.method || "",
+    status: row.status || "",
+    note: row.note || "",
+    canReturn: row.canReturn !== false
+  };
+}
+
+function documentListPrefs(kind) {
+  return state.listUi?.[kind] || seedState.listUi.receipts;
+}
+
+function documentListSortLabel(kind, field, label) {
+  const prefs = documentListPrefs(kind);
+  const active = prefs.sortBy === field;
+  const dir = active ? (prefs.sortDir === "asc" ? " ↑" : " ↓") : "";
+  return `<button class="list-sort ${active ? "active" : ""}" type="button" data-list-sort="${escapeHtml(kind)}" data-sort-field="${escapeHtml(field)}">${escapeHtml(label + dir)}</button>`;
+}
+
+function rowMatchesDocumentList(row, prefs) {
+  if (prefs.date && row.date !== prefs.date) return false;
+  if (prefs.customer && !normalizeScanText(`${row.customer} ${row.customerSearch}`).includes(normalizeScanText(prefs.customer))) return false;
+  return true;
+}
+
+function sortedDocumentRows(rows, prefs) {
+  const accessors = {
+    id: (row) => row.id,
+    date: (row) => `${row.date || ""} ${row.createdAt || ""}`,
+    customer: (row) => row.customer,
+    amount: (row) => row.amount,
+    method: (row) => row.method,
+    status: (row) => row.status
+  };
+  const getter = accessors[prefs.sortBy] || accessors.date;
+  const direction = prefs.sortDir === "asc" ? 1 : -1;
+  return [...rows].sort((left, right) => {
+    const a = getter(left);
+    const b = getter(right);
+    if (typeof a === "number" || typeof b === "number") return (Number(a || 0) - Number(b || 0)) * direction;
+    return String(a || "").localeCompare(String(b || ""), "uk") * direction;
+  });
+}
+
+function documentListControls(kind) {
+  if (!canDo("document_list_sort")) return "";
+  const prefs = documentListPrefs(kind);
+  return `
+    <div class="list-controls">
+      <label class="field"><span>Дата</span><input type="date" data-list-filter="${escapeHtml(kind)}" data-filter-field="date" value="${escapeHtml(prefs.date || "")}"></label>
+      <label class="field"><span>Покупець</span><input data-list-filter="${escapeHtml(kind)}" data-filter-field="customer" value="${escapeHtml(prefs.customer || "")}" placeholder="ім'я або телефон"></label>
+      <div class="sort-controls">
+        <span>Сортування</span>
+        ${documentListSortLabel(kind, "id", "Документ")}
+        ${documentListSortLabel(kind, "date", "Дата")}
+        ${documentListSortLabel(kind, "customer", "Покупець")}
+        ${documentListSortLabel(kind, "amount", "Сума")}
+        ${documentListSortLabel(kind, "method", "Метод")}
+        ${documentListSortLabel(kind, "status", "Стан")}
+      </div>
+    </div>
+  `;
+}
+
+function documentListHeader(kind, title, countLabel) {
+  const prefs = documentListPrefs(kind);
+  const canCollapse = canDo("document_list_collapse");
+  return `
+    <div class="split list-heading">
+      <div>
+        <h2>${escapeHtml(title)}</h2>
+        <span class="muted">${escapeHtml(countLabel)}</span>
+      </div>
+      ${canCollapse ? `<button class="secondary collapse-button" type="button" data-toggle-list="${escapeHtml(kind)}" aria-expanded="${prefs.collapsed ? "false" : "true"}">${prefs.collapsed ? "▸" : "▾"}</button>` : ""}
+    </div>
+  `;
+}
+
+function renderDocumentStripList(kind, sourceRows, emptyText = "Документів немає.") {
+  if (!canDo("document_list_view")) {
+    return '<p class="muted">Для цієї ролі списки документів приховані.</p>';
+  }
+  const prefs = documentListPrefs(kind);
+  const rows = sortedDocumentRows(sourceRows.map(normalizeDocumentListRow).filter((row) => rowMatchesDocumentList(row, prefs)), prefs);
+  if (prefs.collapsed && canDo("document_list_collapse")) {
+    return '<p class="muted">Список згорнуто.</p>';
+  }
+  return `
+    ${documentListControls(kind)}
+    <div class="document-list">
+      ${rows.map((row) => `
+        <div class="document-row ${row.type === "return" ? "return-row" : ""} ${state.checkout.printReceiptId === row.id || state.selectedReturnId === row.id ? "selected-row" : ""}" role="button" tabindex="0" data-open-document="${escapeHtml(`${row.type}::${row.id}`)}">
+          <div class="document-main">
+            <strong>${escapeHtml(row.id)}</strong>
+            <span>${escapeHtml(row.date)} · ${formatDateTime(row.createdAt)}</span>
+          </div>
+          <div>
+            <span class="document-label">Покупець</span>
+            <strong>${escapeHtml(row.customer)}</strong>
+          </div>
+          <div>
+            <span class="document-label">Позиції</span>
+            <span>${escapeHtml(row.lines || "-")}</span>
+          </div>
+          <div>
+            <span class="document-label">Метод</span>
+            <span>${escapeHtml(row.method)}</span>
+          </div>
+          <div>
+            <span class="document-label">Стан</span>
+            <span>${escapeHtml(row.status)}</span>
+          </div>
+          <div class="document-amount">
+            <strong>${formatMoney(row.amount)}</strong>
+            ${row.note ? `<span>${escapeHtml(row.note)}</span>` : ""}
+          </div>
+          <div class="row-actions">
+            ${row.type === "receipt" ? `<button class="secondary" type="button" data-print-receipt="${escapeHtml(row.id)}">Друк</button>` : ""}
+            ${canDo("document_edit") ? `<button class="secondary" type="button" data-edit-document="${escapeHtml(`${row.type}::${row.id}`)}">Змінити</button>` : ""}
+            ${row.type === "receipt" && canDo("return_create") ? `<button class="secondary" type="button" data-return-receipt="${escapeHtml(row.id)}" ${row.canReturn ? "" : "disabled"}>Повернення</button>` : ""}
+          </div>
+        </div>
+      `).join("") || `<div class="document-row empty-row"><span class="muted">${escapeHtml(emptyText)}</span></div>`}
+    </div>
+  `;
+}
+
 function renderDrilldownModal() {
   if (!state.drilldown.open || !canDo("drilldown_view")) return "";
   const data = drilldownData(state.drilldown.type);
@@ -1008,27 +1208,8 @@ function renderDrilldownModal() {
           <div><dt>${escapeHtml(data.totalLabel)}</dt><dd><strong>${escapeHtml(drilldownTotalValue(data))}</strong></dd></div>
           <div><dt>Документів</dt><dd>${data.rows.length}</dd></div>
         </dl>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Документ</th><th>Дата</th><th>Клієнт</th><th>Позиції</th><th>Метод</th><th>Сума</th><th>Дії</th></tr></thead>
-            <tbody>
-              ${data.rows.map((row) => `
-                <tr>
-                  <td><strong>${escapeHtml(row.id)}</strong><br><span class="muted">${escapeHtml(row.type === "receipt" ? "чек" : "повернення")}</span></td>
-                  <td>${escapeHtml(row.date)}<br><span class="muted">${formatDateTime(row.createdAt)}</span></td>
-                  <td>${escapeHtml(row.partner)}</td>
-                  <td>${escapeHtml(row.lines || "-")}<br><span class="muted">${escapeHtml(row.note || row.status)}</span></td>
-                  <td>${escapeHtml(row.method)}</td>
-                  <td><strong class="${row.amount < 0 ? "danger-text" : ""}">${formatMoney(row.amount)}</strong></td>
-                  <td class="row-actions">
-                    <button class="secondary" type="button" data-open-document="${escapeHtml(`${row.type}::${row.id}`)}">Перейти</button>
-                    ${canDo("document_edit") ? `<button class="secondary" type="button" data-edit-document="${escapeHtml(`${row.type}::${row.id}`)}">Змінити</button>` : ""}
-                  </td>
-                </tr>
-              `).join("") || '<tr><td colspan="7" class="muted">Немає документів для цієї розшифровки.</td></tr>'}
-            </tbody>
-          </table>
-        </div>
+        ${documentListHeader("drilldown", "Документи у розшифровці", `${data.rows.length} рядків`)}
+        ${renderDocumentStripList("drilldown", data.rows, "Немає документів для цієї розшифровки.")}
       </section>
     </div>
   `;
@@ -1046,7 +1227,7 @@ function renderDocumentEditModal() {
           <div class="split">
             <div>
               <p class="eyebrow">Документ продажу</p>
-              <h2 id="document-edit-title">Змінити чек ${escapeHtml(receipt.id)}</h2>
+              <h2 id="document-edit-title">Змінити продаж ${escapeHtml(receipt.id)}</h2>
             </div>
             <button class="secondary" type="button" data-close-document-edit>Закрити</button>
           </div>
@@ -1084,7 +1265,7 @@ function renderDocumentEditModal() {
           <label class="field"><span>Метод повернення грошей</span><select name="refundMethod">${["card", "cash"].map((method) => option(method, refundLabel(method), method === returnDoc.refundMethod)).join("")}</select></label>
           <label class="field"><span>Причина</span><input name="reason" value="${escapeHtml(returnDoc.reason || "")}"></label>
           <dl class="summary-list">
-            <div><dt>Чек</dt><dd>${escapeHtml(returnDoc.receiptId)}</dd></div>
+            <div><dt>Продаж</dt><dd>${escapeHtml(returnDoc.receiptId)}</dd></div>
             <div><dt>Сума</dt><dd><strong>${formatMoney(returnDoc.total)}</strong></dd></div>
           </dl>
           <div class="toolbar">
@@ -1187,7 +1368,7 @@ function renderPos() {
     <section class="grid four">
       ${metricCard("Касова зміна", shift ? "Відкрита" : "Закрита", shift ? shift.id : "Можна відкрити в цьому блоці.")}
       ${metricCard("Касир", shift?.cashier || cashier.name, `${shift?.cashierRole || roleLabel(cashier.role)}.`)}
-      ${metricCard("Чеків сьогодні", String(todayReceipts.length), "Журнал чеків у цьому ж блоці.", "pos_today_receipts")}
+      ${metricCard("Продажів сьогодні", String(todayReceipts.length), "Список продажів у цьому ж блоці.", "pos_today_receipts")}
       ${metricCard("Виторг сьогодні", formatMoney(todayRevenue), "До повернень.", "pos_today_revenue")}
     </section>
     <div class="section-gap">${renderCheckoutPanel(true)}</div>
@@ -1321,7 +1502,7 @@ function renderReturnRefundConfirm() {
             <select name="refundMethod" data-return-confirm-refund>${["card", "cash"].map((item) => option(item, refundLabel(item), item === method)).join("")}</select>
           </label>
           <dl class="summary-list">
-            <div><dt>Чек</dt><dd>${escapeHtml(payload.receiptId)}</dd></div>
+            <div><dt>Продаж</dt><dd>${escapeHtml(payload.receiptId)}</dd></div>
             <div><dt>Початкова оплата</dt><dd>${escapeHtml(paymentLabel(receipt?.paymentMethod))}</dd></div>
             <div><dt>Сума повернення</dt><dd><strong>${formatMoney(payload.total)}</strong></dd></div>
           </dl>
@@ -1336,49 +1517,25 @@ function renderReturnRefundConfirm() {
 }
 
 function renderReceipts() {
-  setTitle("Чеки магазину");
+  setTitle("Продажі магазину");
   return renderReceiptsContent();
 }
 
 function renderReceiptsContent() {
   const selected = state.receipts.find((receipt) => receipt.id === state.checkout.printReceiptId) || state.receipts[0];
+  const receiptRows = state.receipts.map(receiptListRow);
   return `
     <section class="grid two">
       <article class="panel">
-        <div class="split">
-          <h2>B2C.2 Чеки</h2>
-          <span class="pill">${state.receipts.length} документів</span>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Чек</th><th>Дата</th><th>Покупець</th><th>Позиції</th><th>Сума</th><th>Оплата</th><th>Стан</th><th>Дії</th></tr></thead>
-            <tbody>
-              ${state.receipts.map((receipt) => `
-                <tr class="${state.checkout.printReceiptId === receipt.id ? "selected-row" : ""}">
-                  <td>${escapeHtml(receipt.id)}</td>
-                  <td>${escapeHtml(receipt.date)}<br><span class="muted">${formatDateTime(receipt.createdAt)}</span></td>
-                  <td>${escapeHtml(customerById(receipt.customerId).name)}</td>
-                  <td>${receipt.lines.map((line) => `${escapeHtml(productById(line.productId).sku)} x ${line.qty}`).join("<br>")}</td>
-                  <td><strong>${formatMoney(receipt.total)}</strong></td>
-                  <td>${escapeHtml(paymentLabel(receipt.paymentMethod))}</td>
-                  <td><span class="pill ${receipt.status === "returned" ? "warn" : "good"}">${escapeHtml(statusLabel(receipt.status))}</span></td>
-                  <td>
-                    <button class="secondary" type="button" data-print-receipt="${escapeHtml(receipt.id)}">Друк</button>
-                    ${canDo("document_edit") ? `<button class="secondary" type="button" data-edit-document="${escapeHtml(`receipt::${receipt.id}`)}">Змінити</button>` : ""}
-                    ${canDo("return_create") ? `<button class="secondary" type="button" data-return-receipt="${escapeHtml(receipt.id)}" ${receipt.status === "returned" ? "disabled" : ""}>Все назад</button>` : ""}
-                  </td>
-                </tr>
-              `).join("")}
-            </tbody>
-          </table>
-        </div>
+        ${documentListHeader("receipts", "B2C.2 Продажі", `${state.receipts.length} документів`)}
+        ${renderDocumentStripList("receipts", receiptRows, "Продажів ще немає.")}
       </article>
       <article class="panel">
         <div class="split">
-          <h2>Чек до друку</h2>
+          <h2>Продаж до друку</h2>
           <span class="pill">${selected ? escapeHtml(selected.id) : "немає"}</span>
         </div>
-        ${selected ? renderReceiptSlip(selected) : '<p class="muted">Оберіть чек для перегляду.</p>'}
+        ${selected ? renderReceiptSlip(selected) : '<p class="muted">Оберіть продаж для перегляду.</p>'}
       </article>
     </section>
   `;
@@ -1407,6 +1564,7 @@ function renderReceiptSlip(receipt) {
 function renderReturns() {
   setTitle("Повернення");
   const returnableReceipts = state.receipts.filter((receipt) => receipt.status !== "returned");
+  const returnRows = state.returns.map(returnListRow);
   return `
     <section class="grid two">
       <article class="panel">
@@ -1415,7 +1573,7 @@ function renderReturns() {
           <span class="pill">${state.returns.length} документів</span>
         </div>
         ${canDo("return_create") ? `<form class="form-grid one-col" data-action="create-return">
-          <label class="field"><span>Чек</span><select name="receiptId">${returnableReceipts.map((receipt) => option(receipt.id, `${receipt.id} · ${customerById(receipt.customerId).name} · ${formatMoney(receipt.total)}`)).join("")}</select></label>
+          <label class="field"><span>Продаж</span><select name="receiptId">${returnableReceipts.map((receipt) => option(receipt.id, `${receipt.id} · ${customerById(receipt.customerId).name} · ${formatMoney(receipt.total)}`)).join("")}</select></label>
           <label class="field"><span>Товар</span><select name="productId">${returnableReceipts.flatMap((receipt) => receiptReturnableLines(receipt).filter((line) => line.returnable > 0).map((line) => option(`${receipt.id}::${line.productId}`, `${receipt.id} · ${productById(line.productId).sku} · доступно ${line.returnable}`))).join("")}</select></label>
           <label class="field"><span>Кількість</span><input name="qty" type="number" min="1" value="1"></label>
           <label class="field"><span>Причина</span><input name="reason" value="часткове повернення"></label>
@@ -1427,28 +1585,8 @@ function renderReturns() {
           <h2>Журнал повернень</h2>
           ${drilldownPill("returns_journal", `${state.returns.length} документів`)}
         </div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Повернення</th><th>Чек</th><th>Дата</th><th>Позиції</th><th>Метод</th><th>Сума</th><th>Причина</th><th>Дії</th></tr></thead>
-            <tbody>
-              ${state.returns.map((item) => `
-                <tr class="${state.selectedReturnId === item.id ? "selected-row" : ""}">
-                  <td>${escapeHtml(item.id)}</td>
-                  <td>${escapeHtml(item.receiptId)}</td>
-                  <td>${escapeHtml(item.date)}</td>
-                  <td>${item.lines.map((line) => `${escapeHtml(productById(line.productId).sku)} x ${line.qty}`).join("<br>")}</td>
-                  <td>${escapeHtml(refundLabel(item.refundMethod))}</td>
-                  <td><strong>${formatMoney(item.total)}</strong></td>
-                  <td>${escapeHtml(item.reason || "повернення")}</td>
-                  <td class="row-actions">
-                    <button class="secondary" type="button" data-open-document="${escapeHtml(`return::${item.id}`)}">Перейти</button>
-                    ${canDo("document_edit") ? `<button class="secondary" type="button" data-edit-document="${escapeHtml(`return::${item.id}`)}">Змінити</button>` : ""}
-                  </td>
-                </tr>
-              `).join("") || '<tr><td colspan="8" class="muted">Повернень ще немає.</td></tr>'}
-            </tbody>
-          </table>
-        </div>
+        ${documentListHeader("returns", "Список повернень", `${state.returns.length} документів`)}
+        ${renderDocumentStripList("returns", returnRows, "Повернень ще немає.")}
       </article>
     </section>
   `;
@@ -2517,6 +2655,38 @@ function saveDocumentEdit(form) {
   render();
 }
 
+function setDocumentListSort(kind, field) {
+  if (!canDo("document_list_sort")) return alert("Немає дозволу сортувати списки.");
+  const prefs = state.listUi?.[kind];
+  if (!prefs) return;
+  if (prefs.sortBy === field) {
+    prefs.sortDir = prefs.sortDir === "asc" ? "desc" : "asc";
+  } else {
+    prefs.sortBy = field;
+    prefs.sortDir = field === "amount" ? "desc" : "asc";
+  }
+  saveState();
+  render();
+}
+
+function setDocumentListFilter(kind, field, value) {
+  if (!canDo("document_list_sort")) return;
+  const prefs = state.listUi?.[kind];
+  if (!prefs || !["date", "customer"].includes(field)) return;
+  prefs[field] = value;
+  saveState();
+  render();
+}
+
+function toggleDocumentList(kind) {
+  if (!canDo("document_list_collapse")) return alert("Немає дозволу згортати списки.");
+  const prefs = state.listUi?.[kind];
+  if (!prefs) return;
+  prefs.collapsed = !prefs.collapsed;
+  saveState();
+  render();
+}
+
 function syncStockReceiptsFromSql() {
   if (!canDo("sql_import")) return alert("Немає дозволу виконувати SQL-імпорт.");
   state.stockReceipts = sqlStockReceiptSnapshot.map((row) => normalizeStockReceipt(stockReceiptFromSql(row)));
@@ -2966,14 +3136,21 @@ document.addEventListener("click", (event) => {
   if (removeButton) return removeCartLine(Number(removeButton.dataset.removeCart));
   const drilldownButton = event.target.closest("[data-drilldown]");
   if (drilldownButton) return openDrilldown(drilldownButton.dataset.drilldown);
+  const listSortButton = event.target.closest("[data-list-sort]");
+  if (listSortButton) return setDocumentListSort(listSortButton.dataset.listSort, listSortButton.dataset.sortField);
+  const listToggleButton = event.target.closest("[data-toggle-list]");
+  if (listToggleButton) return toggleDocumentList(listToggleButton.dataset.toggleList);
   const closeDrilldownButton = event.target.closest("[data-close-drilldown]");
   if (closeDrilldownButton) return closeDrilldown();
-  const openDocumentButton = event.target.closest("[data-open-document]");
-  if (openDocumentButton) return openDocumentTarget(openDocumentButton.dataset.openDocument);
   const editDocumentButton = event.target.closest("[data-edit-document]");
   if (editDocumentButton) return editDocumentTarget(editDocumentButton.dataset.editDocument);
   const closeDocumentEditButton = event.target.closest("[data-close-document-edit]");
   if (closeDocumentEditButton) return closeDocumentEdit();
+  const openDocumentButton = event.target.closest("[data-open-document]");
+  if (openDocumentButton) {
+    const interactive = event.target.closest("button, a, input, select, textarea");
+    if (!interactive || interactive === openDocumentButton) return openDocumentTarget(openDocumentButton.dataset.openDocument);
+  }
   const returnButton = event.target.closest("[data-return-receipt]");
   if (returnButton) return createReturn(returnButton.dataset.returnReceipt);
   const printButton = event.target.closest("[data-print-receipt]");
@@ -3029,6 +3206,9 @@ document.addEventListener("input", (event) => {
     state.inventory.addSearch = event.target.value;
     saveState();
   }
+  if (event.target.dataset.listFilter !== undefined) {
+    setDocumentListFilter(event.target.dataset.listFilter, event.target.dataset.filterField, event.target.value);
+  }
 });
 
 document.addEventListener("change", (event) => {
@@ -3050,6 +3230,11 @@ document.addEventListener("change", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
+  if ((event.key === "Enter" || event.key === " ") && event.target.dataset.openDocument !== undefined) {
+    event.preventDefault();
+    openDocumentTarget(event.target.dataset.openDocument);
+    return;
+  }
   if ((event.key === "Enter" || event.key === " ") && event.target.dataset.drilldown !== undefined) {
     event.preventDefault();
     openDrilldown(event.target.dataset.drilldown);
