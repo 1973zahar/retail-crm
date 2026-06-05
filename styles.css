@@ -405,6 +405,56 @@ th {
   font-size: 13px;
 }
 
+.customer-pick {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.picker-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.customer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+}
+
+.customer-button {
+  display: grid;
+  gap: 5px;
+  align-content: start;
+  text-align: left;
+  min-height: 88px;
+  background: #ffffff;
+  border-color: var(--border);
+}
+
+.customer-button:hover,
+.customer-button.active {
+  border-color: var(--accent);
+  background: #eefaf7;
+}
+
+.customer-button span,
+.customer-button small {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.customer-button.active small {
+  color: var(--accent-strong);
+  font-weight: 700;
+}
+
 .loyalty-note {
   display: flex;
   align-items: center;

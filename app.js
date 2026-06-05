@@ -1,7 +1,7 @@
 "use strict";
 
-const APP_VERSION = "2026.06.04.13";
-const APP_BUILD = "20260604-b2c-directories-flyout";
+const APP_VERSION = "2026.06.05.1";
+const APP_BUILD = "20260605-b2c-buyer-list";
 const STORAGE_KEY = "retail-crm-b2c-v8";
 
 const nowIso = () => new Date().toISOString();
@@ -747,6 +747,21 @@ function renderCheckoutPanel(full = false) {
           <strong>${escapeHtml(customer.name)}</strong>
           <span>${loyaltyRate()}% автоматична знижка лояльності</span>
         </div>
+        <div class="customer-pick full" aria-label="Список покупців">
+          <div class="picker-header">
+            <strong>Список покупців</strong>
+            <span class="muted">Створення клієнта: Довідники -> Клієнти</span>
+          </div>
+          <div class="customer-grid">
+            ${state.customers.map((buyer) => `
+              <button class="customer-button ${buyer.id === state.checkout.customerId ? "active" : ""}" type="button" data-select-customer="${escapeHtml(buyer.id)}">
+                <strong>${escapeHtml(buyer.name)}</strong>
+                <span>${escapeHtml(buyer.phone || "без телефону")} · ${escapeHtml(LOYALTY_LABELS[buyer.loyalty] || buyer.loyalty)}</span>
+                <small>${buyer.id === state.checkout.customerId ? "вибрано" : "Додати в продаж"}</small>
+              </button>
+            `).join("") || '<p class="muted">Клієнтів ще немає. Створіть картку у Довідники -> Клієнти.</p>'}
+          </div>
+        </div>
         <label class="field full"><span>Коментар</span><input name="note" data-checkout-field value="${escapeHtml(state.checkout.note || "")}" placeholder="примітка до продажу"></label>
         <div class="product-pick full">
           ${products.map((product) => `
@@ -1200,7 +1215,7 @@ function renderCatalog() {
                   <td>${escapeHtml(product.category)}</td>
                   <td>${formatMoney(product.price)}</td>
                   <td>${stockQty(product.id)}</td>
-                  <td><button class="secondary" type="button" data-add-cart="${escapeHtml(product.id)}">У чек</button></td>
+                  <td><button class="secondary" type="button" data-add-cart="${escapeHtml(product.id)}">У продаж</button></td>
                 </tr>
               `).join("")}
             </tbody>
@@ -1259,7 +1274,7 @@ function renderCustomers() {
                     <td><span class="pill">${escapeHtml(LOYALTY_LABELS[customer.loyalty] || customer.loyalty)}</span></td>
                     <td>${receipts.length}</td>
                     <td>${formatMoney(total)}</td>
-                    <td><button class="secondary" type="button" data-select-customer="${escapeHtml(customer.id)}">У чек</button></td>
+                    <td><button class="secondary" type="button" data-select-customer="${escapeHtml(customer.id)}">У продаж</button></td>
                   </tr>
                 `;
               }).join("")}
