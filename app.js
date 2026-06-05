@@ -1,7 +1,7 @@
 "use strict";
 
-const APP_VERSION = "2026.06.05.1";
-const APP_BUILD = "20260605-b2c-buyer-list";
+const APP_VERSION = "2026.06.05.2";
+const APP_BUILD = "20260605-b2c-customer-create";
 const STORAGE_KEY = "retail-crm-b2c-v8";
 
 const nowIso = () => new Date().toISOString();
@@ -16,7 +16,7 @@ const ROLE_BLOCKS = [
   { id: "pos", label: "Продаж" },
   { id: "returns", label: "Повернення" },
   { id: "catalog", label: "Товари SQL" },
-  { id: "customers", label: "Клієнти" },
+  { id: "customers", label: "Клієнти і лояльність" },
   { id: "stock", label: "Залишки" },
   { id: "inventory", label: "Інвентаризація" },
   { id: "reports", label: "Звіти" },
@@ -224,7 +224,7 @@ const navItems = [
   ["pos", "Продаж"],
   { id: "directories", label: "Довідники", children: [
     ["catalog", "Товари"],
-    ["customers", "Клієнти"],
+    ["customers", "Клієнти і лояльність"],
     ["stock", "Залишки"]
   ] },
   ["returns", "Повернення"],
@@ -750,7 +750,7 @@ function renderCheckoutPanel(full = false) {
         <div class="customer-pick full" aria-label="Список покупців">
           <div class="picker-header">
             <strong>Список покупців</strong>
-            <span class="muted">Створення клієнта: Довідники -> Клієнти</span>
+            <span class="muted">Створення клієнта: Довідники -> Клієнти і лояльність</span>
           </div>
           <div class="customer-grid">
             ${state.customers.map((buyer) => `
@@ -759,7 +759,7 @@ function renderCheckoutPanel(full = false) {
                 <span>${escapeHtml(buyer.phone || "без телефону")} · ${escapeHtml(LOYALTY_LABELS[buyer.loyalty] || buyer.loyalty)}</span>
                 <small>${buyer.id === state.checkout.customerId ? "вибрано" : "Додати в продаж"}</small>
               </button>
-            `).join("") || '<p class="muted">Клієнтів ще немає. Створіть картку у Довідники -> Клієнти.</p>'}
+            `).join("") || '<p class="muted">Клієнтів ще немає. Створіть картку у Довідники -> Клієнти і лояльність.</p>'}
           </div>
         </div>
         <label class="field full"><span>Коментар</span><input name="note" data-checkout-field value="${escapeHtml(state.checkout.note || "")}" placeholder="примітка до продажу"></label>
@@ -1257,8 +1257,14 @@ function renderCustomers() {
     <section class="grid two">
       <article class="panel">
         <div class="split">
-          <h2>B2C.5 Клієнти</h2>
-          <span class="pill">${state.customers.length} карток</span>
+          <div>
+            <p class="eyebrow">Клієнти і лояльність</p>
+            <h2>B2C.5 Клієнти</h2>
+          </div>
+          <div class="panel-actions">
+            <span class="pill">${state.customers.length} карток</span>
+            <a class="button-link secondary" href="#new-customer-card">Новий клієнт</a>
+          </div>
         </div>
         <div class="table-wrap">
           <table>
@@ -1282,8 +1288,14 @@ function renderCustomers() {
           </table>
         </div>
       </article>
-      <article class="panel">
-        <h2>Нова картка клієнта</h2>
+      <article class="panel" id="new-customer-card">
+        <div class="split">
+          <div>
+            <p class="eyebrow">Клієнти</p>
+            <h2>Новий клієнт</h2>
+          </div>
+          <span class="pill">картка лояльності</span>
+        </div>
         <form class="form-grid one-col" data-action="create-customer">
           <label class="field"><span>Ім'я</span><input name="name" required placeholder="ПІБ або назва"></label>
           <label class="field"><span>Телефон</span><input name="phone" placeholder="+380..."></label>
