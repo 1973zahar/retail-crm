@@ -1,8 +1,10 @@
 "use strict";
 
-const APP_VERSION = "2026.06.05.10";
-const APP_BUILD = "20260605-b2c-sale-payment-confirm";
+const APP_VERSION = "2026.06.05.11";
+const APP_BUILD = "20260605-b2c-drilldowns-return-refund";
 const STORAGE_KEY = "retail-crm-b2c-v8";
+const ROLE_PERMISSION_SCHEMA = "20260605-drilldowns-return-refund";
+const SCHEMA_DEFAULT_ACTIONS = ["drilldown_view", "document_edit"];
 
 const nowIso = () => new Date().toISOString();
 const today = () => nowIso().slice(0, 10);
@@ -26,6 +28,8 @@ const ROLE_BLOCKS = [
 const ROLE_ACTIONS = [
   { id: "sale_create", label: "Створити продаж" },
   { id: "return_create", label: "Повернення" },
+  { id: "drilldown_view", label: "Розшифровки сум і карток" },
+  { id: "document_edit", label: "Редагування документів" },
   { id: "cash_open", label: "Відкрити зміну" },
   { id: "cash_close", label: "Закрити зміну" },
   { id: "inventory_post", label: "Провести інвентаризацію" },
@@ -44,7 +48,7 @@ const EMPLOYEE_ROLES = {
   admin: {
     label: "Адміністратор",
     blocks: ["dashboard", "pos", "returns", "catalog", "customers", "stock", "inventory", "reports", "employees", "log"],
-    actions: ["sale_create", "return_create", "cash_open", "cash_close", "inventory_post", "inventory_resort", "sql_import", "employee_manage", "reports_view", "audit_view"]
+    actions: ["sale_create", "return_create", "drilldown_view", "document_edit", "cash_open", "cash_close", "inventory_post", "inventory_resort", "sql_import", "employee_manage", "reports_view", "audit_view"]
   },
   seller: {
     label: "Продавець",
@@ -54,7 +58,7 @@ const EMPLOYEE_ROLES = {
   cashier: {
     label: "Касир",
     blocks: ["dashboard", "pos", "returns"],
-    actions: ["sale_create", "return_create", "cash_open", "cash_close"]
+    actions: ["sale_create", "return_create", "drilldown_view", "cash_open", "cash_close"]
   }
 };
 const sqlProductSnapshot = [
@@ -158,6 +162,20 @@ const seedState = {
     open: false,
     paymentMethod: "card"
   },
+  returnConfirm: {
+    open: false,
+    payload: null,
+    refundMethod: "card"
+  },
+  drilldown: {
+    open: false,
+    type: ""
+  },
+  documentEdit: {
+    open: false,
+    type: "",
+    id: ""
+  },
   products: sqlProductSnapshot.map(productFromSql),
   customers: [
     { id: "walk-in", name: "Роздрібний покупець", phone: "", loyalty: "standard" },
@@ -172,6 +190,8 @@ const seedState = {
   ],
   activeEmployeeId: "e-001",
   selectedCashierId: "e-004",
+  selectedReturnId: "",
+  rolePermissionSchema: ROLE_PERMISSION_SCHEMA,
   rolePermissions: defaultRolePermissions(),
   stock: sqlProductSnapshot.map(stockFromSql),
   productImport: {
@@ -278,7 +298,10 @@ function normalizeState(input) {
     ? next.activeEmployeeId
     : next.employees.find((employee) => employee.role === "director")?.id || next.employees[0]?.id || "";
   next.selectedCashierId = next.selectedCashierId || next.employees.find((item) => item.role === "cashier" && item.status === "active")?.id || seedState.selectedCashierId;
-  next.rolePermissions = normalizeRolePermissions(next.rolePermissions);
+  next.selectedReturnId = next.selectedReturnId || "";
+  const inputRoleSchema = next.rolePermissionSchema || "";
+  next.rolePermissions = normalizeRolePermissions(next.rolePermissions, inputRoleSchema);
+  next.rolePermissionSchema = ROLE_PERMISSION_SCHEMA;
   next.stock = Array.isArray(next.stock) ? next.stock : clone(seedState.stock);
   next.productImport = {
     ...clone(seedState.productImport),
@@ -289,7 +312,7 @@ function normalizeState(input) {
     ...(next.stockImport || {})
   };
   next.receipts = Array.isArray(next.receipts) ? next.receipts.map((receipt) => normalizeReceipt(receipt, next.products)) : [];
-  next.returns = Array.isArray(next.returns) ? next.returns : [];
+  next.returns = Array.isArray(next.returns) ? next.returns.map(normalizeReturnDoc) : [];
   next.cashShifts = Array.isArray(next.cashShifts) ? next.cashShifts.map(normalizeShift) : clone(seedState.cashShifts);
   next.stockReceipts = Array.isArray(next.stockReceipts) ? next.stockReceipts.map(normalizeStockReceipt) : clone(seedState.stockReceipts);
   next.inventory = normalizeInventory(next.inventory, next.products, next.stock);
@@ -308,6 +331,22 @@ function normalizeState(input) {
   next.saleConfirm.paymentMethod = ["cash", "card", "bank"].includes(next.saleConfirm.paymentMethod)
     ? next.saleConfirm.paymentMethod
     : next.checkout.paymentMethod;
+  next.returnConfirm = {
+    ...clone(seedState.returnConfirm),
+    ...(next.returnConfirm || {})
+  };
+  next.returnConfirm.refundMethod = ["cash", "card"].includes(next.returnConfirm.refundMethod)
+    ? next.returnConfirm.refundMethod
+    : "card";
+  if (!next.returnConfirm.open) next.returnConfirm.payload = null;
+  next.drilldown = {
+    ...clone(seedState.drilldown),
+    ...(next.drilldown || {})
+  };
+  next.documentEdit = {
+    ...clone(seedState.documentEdit),
+    ...(next.documentEdit || {})
+  };
   if (!canOpenBlock(next.currentView, next)) next.currentView = firstAllowedView(next);
   return next;
 }
@@ -367,24 +406,54 @@ function normalizeEmployee(employee) {
   };
 }
 
-function normalizeRolePermissions(input) {
+function normalizeRolePermissions(input, schemaVersion = ROLE_PERMISSION_SCHEMA) {
   const base = defaultRolePermissions();
   const knownBlocks = new Set(ROLE_BLOCKS.map((block) => block.id));
   const knownActions = new Set(ROLE_ACTIONS.map((action) => action.id));
+  const shouldBackfillSchemaActions = schemaVersion !== ROLE_PERMISSION_SCHEMA;
   return Object.fromEntries(Object.entries(base).map(([roleId, defaults]) => {
     const source = input?.[roleId] || defaults;
+    const sourceActions = Array.isArray(source.actions) ? source.actions.filter((id) => knownActions.has(id)) : [...defaults.actions];
+    const schemaActions = shouldBackfillSchemaActions
+      ? defaults.actions.filter((id) => SCHEMA_DEFAULT_ACTIONS.includes(id))
+      : [];
     return [
       roleId,
       {
         blocks: Array.isArray(source.blocks) ? source.blocks.filter((id) => knownBlocks.has(id)) : [...defaults.blocks],
-        actions: Array.isArray(source.actions) ? source.actions.filter((id) => knownActions.has(id)) : [...defaults.actions]
+        actions: Array.from(new Set([...sourceActions, ...schemaActions]))
       }
     ];
   }));
 }
 
 function normalizeReceipt(receipt, products) {
-  if (Array.isArray(receipt.lines)) return receipt;
+  if (Array.isArray(receipt.lines)) {
+    const lines = receipt.lines.map((line) => ({
+      productId: line.productId,
+      qty: Number(line.qty || 0),
+      price: Number(line.price || 0),
+      discount: Number(line.discount || 0),
+      total: Number(line.total || 0)
+    }));
+    const linesTotal = lines.reduce((sum, line) => {
+      const fallbackTotal = Math.max(0, Number(line.qty || 0) * Number(line.price || 0) - Number(line.discount || 0));
+      return sum + Number(line.total || fallbackTotal || 0);
+    }, 0);
+    return {
+      ...receipt,
+      customerId: receipt.customerId || "walk-in",
+      paymentMethod: receipt.paymentMethod || "card",
+      status: receipt.status || "posted",
+      lines,
+      total: Number(receipt.total || linesTotal),
+      subtotal: Number(receipt.subtotal || linesTotal),
+      loyaltyDiscount: Number(receipt.loyaltyDiscount || 0),
+      note: receipt.note || "",
+      shiftId: receipt.shiftId || "",
+      createdAt: receipt.createdAt || nowIso()
+    };
+  }
   const product = products.find((item) => item.id === receipt.productId) || products[0] || seedState.products[0];
   const qty = Number(receipt.qty || 1);
   const price = Number(receipt.price || product.price || 0);
@@ -397,7 +466,28 @@ function normalizeReceipt(receipt, products) {
     lines: [{ productId: receipt.productId || product.id, qty, price, discount: 0, total: qty * price }],
     total: Number(receipt.total || qty * price),
     note: receipt.note || "",
+    shiftId: receipt.shiftId || "",
     createdAt: receipt.createdAt || nowIso()
+  };
+}
+
+function normalizeReturnDoc(item) {
+  return {
+    id: item.id || nextId("RET", []),
+    date: item.date || today(),
+    receiptId: item.receiptId || "",
+    lines: Array.isArray(item.lines) ? item.lines.map((line) => ({
+      productId: line.productId,
+      qty: Number(line.qty || 0),
+      price: Number(line.price || 0),
+      total: Number(line.total || 0)
+    })) : [],
+    total: Number(item.total || 0),
+    reason: item.reason || "повернення",
+    refundMethod: ["cash", "card"].includes(item.refundMethod) ? item.refundMethod : (item.paymentMethod === "cash" ? "cash" : "card"),
+    sourcePaymentMethod: item.sourcePaymentMethod || item.paymentMethod || "",
+    shiftId: item.shiftId || "",
+    createdAt: item.createdAt || nowIso()
   };
 }
 
@@ -693,6 +783,10 @@ function statusLabel(status) {
   return { posted: "проведено", partial_return: "часткове повернення", returned: "повернено" }[status] || status || "-";
 }
 
+function refundLabel(method) {
+  return { cash: "Готівка", card: "POS" }[method] || paymentLabel(method);
+}
+
 function openShift() {
   return state.cashShifts.find((shift) => shift.opened);
 }
@@ -761,6 +855,248 @@ function nextId(prefix, collection) {
   return `${prefix}-${String(number).padStart(4, "0")}`;
 }
 
+function metricCard(label, value, note, drilldownType = "") {
+  const canDrilldown = drilldownType && canDo("drilldown_view");
+  return `
+    <article class="card metric ${canDrilldown ? "metric-clickable" : ""}" ${canDrilldown ? `role="button" tabindex="0" data-drilldown="${escapeHtml(drilldownType)}"` : ""}>
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      <small>${escapeHtml(note)}</small>
+    </article>
+  `;
+}
+
+function drilldownPill(type, label) {
+  return canDo("drilldown_view")
+    ? `<button class="pill pill-button" type="button" data-drilldown="${escapeHtml(type)}">${escapeHtml(label)}</button>`
+    : `<span class="pill">${escapeHtml(label)}</span>`;
+}
+
+function documentLineSummary(lines = []) {
+  return lines.map((line) => `${productById(line.productId).sku} x ${line.qty}`).join(", ");
+}
+
+function receiptDrilldownRow(receipt, amount = Number(receipt.total || 0), note = "") {
+  return {
+    type: "receipt",
+    id: receipt.id,
+    date: receipt.date,
+    createdAt: receipt.createdAt,
+    partner: customerById(receipt.customerId).name,
+    lines: documentLineSummary(receipt.lines),
+    amount,
+    method: paymentLabel(receipt.paymentMethod),
+    status: statusLabel(receipt.status),
+    note: note || receipt.note || ""
+  };
+}
+
+function returnDrilldownRow(returnDoc, amount = Number(returnDoc.total || 0), note = "") {
+  const receipt = state.receipts.find((item) => item.id === returnDoc.receiptId);
+  return {
+    type: "return",
+    id: returnDoc.id,
+    date: returnDoc.date,
+    createdAt: returnDoc.createdAt,
+    partner: receipt ? customerById(receipt.customerId).name : "-",
+    lines: documentLineSummary(returnDoc.lines),
+    amount,
+    method: refundLabel(returnDoc.refundMethod),
+    status: "повернення",
+    note: note || returnDoc.reason || ""
+  };
+}
+
+function receiptMargin(receipt) {
+  const cost = (receipt.lines || []).reduce((sum, line) => {
+    return sum + Number(productById(line.productId).cost || 0) * Number(line.qty || 0);
+  }, 0);
+  return Number(receipt.total || 0) - cost;
+}
+
+function drilldownData(type) {
+  const day = today();
+  const posted = state.receipts.filter((receipt) => receipt.status === "posted");
+  const todayReceipts = state.receipts.filter((receipt) => receipt.date === day);
+  const dayReceipts = posted.filter((receipt) => receipt.date === day);
+  const dayReturns = state.returns.filter((item) => item.date === day);
+  const allReturns = state.returns;
+  const allRevenue = posted.reduce((sum, receipt) => sum + Number(receipt.total || 0), 0);
+  const allReturnsTotal = allReturns.reduce((sum, item) => sum + Number(item.total || 0), 0);
+  const todayRevenue = todayReceipts.reduce((sum, receipt) => sum + Number(receipt.total || 0), 0);
+  const dayRevenue = dayReceipts.reduce((sum, receipt) => sum + Number(receipt.total || 0), 0);
+  const dayReturnsTotal = dayReturns.reduce((sum, item) => sum + Number(item.total || 0), 0);
+
+  const configs = {
+    dashboard_revenue: {
+      title: "Розшифровка виторгу",
+      totalLabel: "Виторг мінус повернення",
+      total: allRevenue - allReturnsTotal,
+      rows: [
+        ...posted.map((receipt) => receiptDrilldownRow(receipt)),
+        ...allReturns.map((item) => returnDrilldownRow(item, -Number(item.total || 0), "мінус повернення"))
+      ]
+    },
+    pos_today_receipts: {
+      title: "Чеки сьогодні",
+      totalLabel: "Кількість чеків",
+      totalType: "count",
+      total: todayReceipts.length,
+      rows: todayReceipts.map((receipt) => receiptDrilldownRow(receipt))
+    },
+    pos_today_revenue: {
+      title: "Виторг сьогодні",
+      totalLabel: "Виторг до повернень",
+      total: todayRevenue,
+      rows: todayReceipts.map((receipt) => receiptDrilldownRow(receipt))
+    },
+    returns_journal: {
+      title: "Журнал повернень",
+      totalLabel: "Сума повернень",
+      total: allReturnsTotal,
+      rows: allReturns.map((item) => returnDrilldownRow(item))
+    },
+    report_revenue: {
+      title: "Звіт дня: виторг",
+      totalLabel: "Виторг дня",
+      total: dayRevenue,
+      rows: dayReceipts.map((receipt) => receiptDrilldownRow(receipt))
+    },
+    report_returns: {
+      title: "Звіт дня: повернення",
+      totalLabel: "Повернення дня",
+      total: dayReturnsTotal,
+      rows: dayReturns.map((item) => returnDrilldownRow(item))
+    },
+    report_margin: {
+      title: "Звіт дня: маржа",
+      totalLabel: "Маржа мінус повернення",
+      total: dayReceipts.reduce((sum, receipt) => sum + receiptMargin(receipt), 0) - dayReturnsTotal,
+      rows: dayReceipts.map((receipt) => receiptDrilldownRow(receipt, receiptMargin(receipt), "маржа по чеку"))
+    },
+    report_net: {
+      title: "Звіт дня: чисто",
+      totalLabel: "Чисто за день",
+      total: dayRevenue - dayReturnsTotal,
+      rows: [
+        ...dayReceipts.map((receipt) => receiptDrilldownRow(receipt)),
+        ...dayReturns.map((item) => returnDrilldownRow(item, -Number(item.total || 0), "мінус повернення"))
+      ]
+    }
+  };
+  return configs[type] || configs.dashboard_revenue;
+}
+
+function drilldownTotalValue(data) {
+  return data.totalType === "count" ? String(data.total) : formatMoney(data.total);
+}
+
+function renderDrilldownModal() {
+  if (!state.drilldown.open || !canDo("drilldown_view")) return "";
+  const data = drilldownData(state.drilldown.type);
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="modal wide-modal" role="dialog" aria-modal="true" aria-labelledby="drilldown-title">
+        <div class="split">
+          <div>
+            <p class="eyebrow">Розшифровка</p>
+            <h2 id="drilldown-title">${escapeHtml(data.title)}</h2>
+          </div>
+          <button class="secondary" type="button" data-close-drilldown>Закрити</button>
+        </div>
+        <dl class="summary-list">
+          <div><dt>${escapeHtml(data.totalLabel)}</dt><dd><strong>${escapeHtml(drilldownTotalValue(data))}</strong></dd></div>
+          <div><dt>Документів</dt><dd>${data.rows.length}</dd></div>
+        </dl>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Документ</th><th>Дата</th><th>Клієнт</th><th>Позиції</th><th>Метод</th><th>Сума</th><th>Дії</th></tr></thead>
+            <tbody>
+              ${data.rows.map((row) => `
+                <tr>
+                  <td><strong>${escapeHtml(row.id)}</strong><br><span class="muted">${escapeHtml(row.type === "receipt" ? "чек" : "повернення")}</span></td>
+                  <td>${escapeHtml(row.date)}<br><span class="muted">${formatDateTime(row.createdAt)}</span></td>
+                  <td>${escapeHtml(row.partner)}</td>
+                  <td>${escapeHtml(row.lines || "-")}<br><span class="muted">${escapeHtml(row.note || row.status)}</span></td>
+                  <td>${escapeHtml(row.method)}</td>
+                  <td><strong class="${row.amount < 0 ? "danger-text" : ""}">${formatMoney(row.amount)}</strong></td>
+                  <td class="row-actions">
+                    <button class="secondary" type="button" data-open-document="${escapeHtml(`${row.type}::${row.id}`)}">Перейти</button>
+                    ${canDo("document_edit") ? `<button class="secondary" type="button" data-edit-document="${escapeHtml(`${row.type}::${row.id}`)}">Змінити</button>` : ""}
+                  </td>
+                </tr>
+              `).join("") || '<tr><td colspan="7" class="muted">Немає документів для цієї розшифровки.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderDocumentEditModal() {
+  if (!state.documentEdit.open || !canDo("document_edit")) return "";
+  const { type, id } = state.documentEdit;
+  if (type === "receipt") {
+    const receipt = state.receipts.find((item) => item.id === id);
+    if (!receipt) return "";
+    return `
+      <div class="modal-backdrop" role="presentation">
+        <section class="modal" role="dialog" aria-modal="true" aria-labelledby="document-edit-title">
+          <div class="split">
+            <div>
+              <p class="eyebrow">Документ продажу</p>
+              <h2 id="document-edit-title">Змінити чек ${escapeHtml(receipt.id)}</h2>
+            </div>
+            <button class="secondary" type="button" data-close-document-edit>Закрити</button>
+          </div>
+          <form class="form-grid one-col" data-action="save-document-edit">
+            <label class="field"><span>Клієнт</span><select name="customerId">${state.customers.map((customer) => option(customer.id, customerLookupValue(customer), customer.id === receipt.customerId)).join("")}</select></label>
+            <label class="field"><span>Метод оплати</span><select name="paymentMethod">${["cash", "card", "bank"].map((method) => option(method, paymentLabel(method), method === receipt.paymentMethod)).join("")}</select></label>
+            <label class="field"><span>Коментар</span><input name="note" value="${escapeHtml(receipt.note || "")}"></label>
+            <dl class="summary-list">
+              <div><dt>Сума</dt><dd><strong>${formatMoney(receipt.total)}</strong></dd></div>
+              <div><dt>Стан</dt><dd>${escapeHtml(statusLabel(receipt.status))}</dd></div>
+            </dl>
+            <div class="toolbar">
+              <button class="secondary" type="button" data-close-document-edit>Скасувати</button>
+              <button class="primary" type="submit">Зберегти зміни</button>
+            </div>
+          </form>
+        </section>
+      </div>
+    `;
+  }
+
+  const returnDoc = state.returns.find((item) => item.id === id);
+  if (!returnDoc) return "";
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="document-edit-title">
+        <div class="split">
+          <div>
+            <p class="eyebrow">Документ повернення</p>
+            <h2 id="document-edit-title">Змінити повернення ${escapeHtml(returnDoc.id)}</h2>
+          </div>
+          <button class="secondary" type="button" data-close-document-edit>Закрити</button>
+        </div>
+        <form class="form-grid one-col" data-action="save-document-edit">
+          <label class="field"><span>Метод повернення грошей</span><select name="refundMethod">${["card", "cash"].map((method) => option(method, refundLabel(method), method === returnDoc.refundMethod)).join("")}</select></label>
+          <label class="field"><span>Причина</span><input name="reason" value="${escapeHtml(returnDoc.reason || "")}"></label>
+          <dl class="summary-list">
+            <div><dt>Чек</dt><dd>${escapeHtml(returnDoc.receiptId)}</dd></div>
+            <div><dt>Сума</dt><dd><strong>${formatMoney(returnDoc.total)}</strong></dd></div>
+          </dl>
+          <div class="toolbar">
+            <button class="secondary" type="button" data-close-document-edit>Скасувати</button>
+            <button class="primary" type="submit">Зберегти зміни</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
 function setTitle(title) {
   document.getElementById("page-title").textContent = title;
 }
@@ -811,10 +1147,10 @@ function renderDashboard() {
   setTitle("Панель магазину");
   return `
     <section class="grid four">
-      <article class="card metric"><span>Виторг</span><strong>${formatMoney(revenue - returnsTotal)}</strong><small>${posted.length} чеків, ${returned.length} повернень.</small></article>
-      <article class="card metric"><span>Середній чек</span><strong>${formatMoney(posted.length ? revenue / posted.length : 0)}</strong><small>Тільки B2C роздріб.</small></article>
-      <article class="card metric"><span>Низький залишок</span><strong>${lowStock}</strong><small>Позиції для поповнення магазину.</small></article>
-      <article class="card metric"><span>Каса</span><strong>${shift ? "Відкрита" : "Закрита"}</strong><small>${shift ? `${shift.id} · очікувано ${formatMoney(shiftExpectedCash(shift))}` : "Немає активної зміни"}.</small></article>
+      ${metricCard("Виторг", formatMoney(revenue - returnsTotal), `${posted.length} чеків, ${returned.length} повернень.`, "dashboard_revenue")}
+      ${metricCard("Середній чек", formatMoney(posted.length ? revenue / posted.length : 0), "Тільки B2C роздріб.", "dashboard_revenue")}
+      ${metricCard("Низький залишок", String(lowStock), "Позиції для поповнення магазину.")}
+      ${metricCard("Каса", shift ? "Відкрита" : "Закрита", shift ? `${shift.id} · очікувано ${formatMoney(shiftExpectedCash(shift))}` : "Немає активної зміни")}
     </section>
     <section class="grid two section-gap">
       ${canOpenBlock("pos") && canDo("sale_create") ? renderCheckoutPanel() : ""}
@@ -849,10 +1185,10 @@ function renderPos() {
   const cashier = employeeById(state.selectedCashierId);
   return `
     <section class="grid four">
-      <article class="card metric"><span>Касова зміна</span><strong>${shift ? "Відкрита" : "Закрита"}</strong><small>${shift ? escapeHtml(shift.id) : "Можна відкрити в цьому блоці."}</small></article>
-      <article class="card metric"><span>Касир</span><strong>${escapeHtml(shift?.cashier || cashier.name)}</strong><small>${escapeHtml(shift?.cashierRole || roleLabel(cashier.role))}.</small></article>
-      <article class="card metric"><span>Чеків сьогодні</span><strong>${todayReceipts.length}</strong><small>Журнал чеків у цьому ж блоці.</small></article>
-      <article class="card metric"><span>Виторг сьогодні</span><strong>${formatMoney(todayRevenue)}</strong><small>До повернень.</small></article>
+      ${metricCard("Касова зміна", shift ? "Відкрита" : "Закрита", shift ? shift.id : "Можна відкрити в цьому блоці.")}
+      ${metricCard("Касир", shift?.cashier || cashier.name, `${shift?.cashierRole || roleLabel(cashier.role)}.`)}
+      ${metricCard("Чеків сьогодні", String(todayReceipts.length), "Журнал чеків у цьому ж блоці.", "pos_today_receipts")}
+      ${metricCard("Виторг сьогодні", formatMoney(todayRevenue), "До повернень.", "pos_today_revenue")}
     </section>
     <div class="section-gap">${renderCheckoutPanel(true)}</div>
     <div class="section-gap">${renderReceiptsContent()}</div>
@@ -964,6 +1300,41 @@ function renderSalePaymentConfirm() {
   `;
 }
 
+function renderReturnRefundConfirm() {
+  if (!state.returnConfirm.open || !state.returnConfirm.payload) return "";
+  const payload = state.returnConfirm.payload;
+  const receipt = state.receipts.find((item) => item.id === payload.receiptId);
+  const method = ["cash", "card"].includes(state.returnConfirm.refundMethod) ? state.returnConfirm.refundMethod : "card";
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="return-refund-title">
+        <div class="split">
+          <div>
+            <p class="eyebrow">Перед проведенням повернення</p>
+            <h2 id="return-refund-title">Як повернути гроші покупцю?</h2>
+          </div>
+          <button class="secondary" type="button" data-cancel-return-confirm>Скасувати</button>
+        </div>
+        <form class="form-grid one-col" data-action="confirm-return-refund">
+          <label class="field">
+            <span>Повернути гроші</span>
+            <select name="refundMethod" data-return-confirm-refund>${["card", "cash"].map((item) => option(item, refundLabel(item), item === method)).join("")}</select>
+          </label>
+          <dl class="summary-list">
+            <div><dt>Чек</dt><dd>${escapeHtml(payload.receiptId)}</dd></div>
+            <div><dt>Початкова оплата</dt><dd>${escapeHtml(paymentLabel(receipt?.paymentMethod))}</dd></div>
+            <div><dt>Сума повернення</dt><dd><strong>${formatMoney(payload.total)}</strong></dd></div>
+          </dl>
+          <div class="toolbar">
+            <button class="secondary" type="button" data-cancel-return-confirm>Скасувати</button>
+            <button class="primary" type="submit">Підтвердити повернення</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
 function renderReceipts() {
   setTitle("Чеки магазину");
   return renderReceiptsContent();
@@ -983,7 +1354,7 @@ function renderReceiptsContent() {
             <thead><tr><th>Чек</th><th>Дата</th><th>Покупець</th><th>Позиції</th><th>Сума</th><th>Оплата</th><th>Стан</th><th>Дії</th></tr></thead>
             <tbody>
               ${state.receipts.map((receipt) => `
-                <tr>
+                <tr class="${state.checkout.printReceiptId === receipt.id ? "selected-row" : ""}">
                   <td>${escapeHtml(receipt.id)}</td>
                   <td>${escapeHtml(receipt.date)}<br><span class="muted">${formatDateTime(receipt.createdAt)}</span></td>
                   <td>${escapeHtml(customerById(receipt.customerId).name)}</td>
@@ -993,6 +1364,7 @@ function renderReceiptsContent() {
                   <td><span class="pill ${receipt.status === "returned" ? "warn" : "good"}">${escapeHtml(statusLabel(receipt.status))}</span></td>
                   <td>
                     <button class="secondary" type="button" data-print-receipt="${escapeHtml(receipt.id)}">Друк</button>
+                    ${canDo("document_edit") ? `<button class="secondary" type="button" data-edit-document="${escapeHtml(`receipt::${receipt.id}`)}">Змінити</button>` : ""}
                     ${canDo("return_create") ? `<button class="secondary" type="button" data-return-receipt="${escapeHtml(receipt.id)}" ${receipt.status === "returned" ? "disabled" : ""}>Все назад</button>` : ""}
                   </td>
                 </tr>
@@ -1051,21 +1423,29 @@ function renderReturns() {
         </form>` : '<p class="muted">Для ролі активного працівника не увімкнено дію "Повернення".</p>'}
       </article>
       <article class="panel">
-        <h2>Журнал повернень</h2>
+        <div class="split">
+          <h2>Журнал повернень</h2>
+          ${drilldownPill("returns_journal", `${state.returns.length} документів`)}
+        </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Повернення</th><th>Чек</th><th>Дата</th><th>Позиції</th><th>Сума</th><th>Причина</th></tr></thead>
+            <thead><tr><th>Повернення</th><th>Чек</th><th>Дата</th><th>Позиції</th><th>Метод</th><th>Сума</th><th>Причина</th><th>Дії</th></tr></thead>
             <tbody>
               ${state.returns.map((item) => `
-                <tr>
+                <tr class="${state.selectedReturnId === item.id ? "selected-row" : ""}">
                   <td>${escapeHtml(item.id)}</td>
                   <td>${escapeHtml(item.receiptId)}</td>
                   <td>${escapeHtml(item.date)}</td>
                   <td>${item.lines.map((line) => `${escapeHtml(productById(line.productId).sku)} x ${line.qty}`).join("<br>")}</td>
+                  <td>${escapeHtml(refundLabel(item.refundMethod))}</td>
                   <td><strong>${formatMoney(item.total)}</strong></td>
                   <td>${escapeHtml(item.reason || "повернення")}</td>
+                  <td class="row-actions">
+                    <button class="secondary" type="button" data-open-document="${escapeHtml(`return::${item.id}`)}">Перейти</button>
+                    ${canDo("document_edit") ? `<button class="secondary" type="button" data-edit-document="${escapeHtml(`return::${item.id}`)}">Змінити</button>` : ""}
+                  </td>
                 </tr>
-              `).join("") || '<tr><td colspan="6" class="muted">Повернень ще немає.</td></tr>'}
+              `).join("") || '<tr><td colspan="8" class="muted">Повернень ще немає.</td></tr>'}
             </tbody>
           </table>
         </div>
@@ -1533,8 +1913,10 @@ function renderOpenShiftForm() {
 
 function renderReports() {
   setTitle("Звіт дня");
-  const receipts = state.receipts.filter((receipt) => receipt.status === "posted");
-  const returnsTotal = state.returns.reduce((sum, item) => sum + Number(item.total || 0), 0);
+  const reportDate = today();
+  const receipts = state.receipts.filter((receipt) => receipt.status === "posted" && receipt.date === reportDate);
+  const returns = state.returns.filter((item) => item.date === reportDate);
+  const returnsTotal = returns.reduce((sum, item) => sum + Number(item.total || 0), 0);
   const revenue = receipts.reduce((sum, receipt) => sum + Number(receipt.total || 0), 0);
   const margin = receipts.reduce((sum, receipt) => {
     const cost = receipt.lines.reduce((lineSum, line) => lineSum + Number(productById(line.productId).cost || 0) * Number(line.qty || 0), 0);
@@ -1546,10 +1928,10 @@ function renderReports() {
   }));
   return `
     <section class="grid four">
-      <article class="card metric"><span>Виторг</span><strong>${formatMoney(revenue)}</strong><small>До повернень.</small></article>
-      <article class="card metric"><span>Повернення</span><strong>${formatMoney(returnsTotal)}</strong><small>${state.returns.length} документів.</small></article>
-      <article class="card metric"><span>Маржа</span><strong>${formatMoney(margin - returnsTotal)}</strong><small>Оціночна за собівартістю.</small></article>
-      <article class="card metric"><span>Чисто</span><strong>${formatMoney(revenue - returnsTotal)}</strong><small>B2C день.</small></article>
+      ${metricCard("Виторг", formatMoney(revenue), "До повернень.", "report_revenue")}
+      ${metricCard("Повернення", formatMoney(returnsTotal), `${returns.length} документів.`, "report_returns")}
+      ${metricCard("Маржа", formatMoney(margin - returnsTotal), "Оціночна за собівартістю.", "report_margin")}
+      ${metricCard("Чисто", formatMoney(revenue - returnsTotal), "B2C день.", "report_net")}
     </section>
     <section class="panel section-gap">
       <h2>Оплати</h2>
@@ -1832,6 +2214,7 @@ function postConfirmedReceipt() {
     loyaltyDiscount: loyalDiscount,
     total,
     note: state.checkout.note,
+    shiftId: shift.id,
     createdAt: nowIso()
   };
   state.receipts.unshift(receipt);
@@ -1907,12 +2290,53 @@ function selectCustomerFromLookup(value, renderAfter = true) {
 }
 
 function applyPaymentToShift(shift, method, total, kind) {
+  const field = paymentShiftField(kind, method) || paymentShiftField(kind, "cash");
+  shift[field] = Number(shift[field] || 0) + Number(total || 0);
+}
+
+function paymentShiftField(kind, method) {
   const fieldMap = {
     sale: { cash: "cashSales", card: "cardSales", bank: "bankSales" },
     return: { cash: "cashReturns", card: "cardReturns", bank: "bankReturns" }
   };
-  const field = fieldMap[kind]?.[method] || fieldMap[kind]?.cash;
-  shift[field] = Number(shift[field] || 0) + Number(total || 0);
+  return fieldMap[kind]?.[method] || "";
+}
+
+function movePaymentInShift(shiftId, kind, oldMethod, newMethod, total) {
+  if (oldMethod === newMethod) return;
+  const shift = state.cashShifts.find((item) => item.id === shiftId) || openShift();
+  if (!shift) return;
+  const oldField = paymentShiftField(kind, oldMethod);
+  const newField = paymentShiftField(kind, newMethod);
+  if (!oldField || !newField) return;
+  shift[oldField] = Number(shift[oldField] || 0) - Number(total || 0);
+  shift[newField] = Number(shift[newField] || 0) + Number(total || 0);
+}
+
+function defaultRefundMethod(receipt) {
+  return receipt?.paymentMethod === "cash" ? "cash" : "card";
+}
+
+function openReturnRefundConfirm(payload, receipt) {
+  state.returnConfirm = {
+    open: true,
+    payload,
+    refundMethod: defaultRefundMethod(receipt)
+  };
+  saveState();
+  render();
+}
+
+function cancelReturnRefundConfirm() {
+  state.returnConfirm = clone(seedState.returnConfirm);
+  saveState();
+  render();
+}
+
+function updateReturnConfirmRefund(method) {
+  state.returnConfirm.refundMethod = ["cash", "card"].includes(method) ? method : "card";
+  saveState();
+  render();
 }
 
 function createReturn(receiptId) {
@@ -1921,31 +2345,17 @@ function createReturn(receiptId) {
   if (!receipt || receipt.status === "returned") return;
   const remaining = receiptReturnableLines(receipt).filter((line) => line.returnable > 0);
   if (!remaining.length) return;
-  const shift = openShift();
-  if (!shift) {
+  if (!openShift()) {
     alert("Для повернення потрібна відкрита касова зміна.");
     return;
   }
   const total = remaining.reduce((sum, line) => sum + returnLineTotal(receipt, line.productId, line.returnable), 0);
-  const returnDoc = {
-    id: nextId("RET", state.returns),
-    date: today(),
+  openReturnRefundConfirm({
     receiptId,
     lines: remaining.map((line) => ({ productId: line.productId, qty: line.returnable, price: line.price, total: returnLineTotal(receipt, line.productId, line.returnable) })),
     total,
-    reason: "повне повернення",
-    createdAt: nowIso()
-  };
-  returnDoc.lines.forEach((line) => {
-    stockRow(line.productId).qty += Number(line.qty || 0);
-  });
-  receipt.status = "returned";
-  state.returns.unshift(returnDoc);
-  applyPaymentToShift(shift, receipt.paymentMethod, returnDoc.total, "return");
-  audit(`Оформлено повернення ${returnDoc.id} по чеку ${receipt.id}`);
-  state.currentView = "returns";
-  saveState();
-  render();
+    reason: "повне повернення"
+  }, receipt);
 }
 
 function returnLineTotal(receipt, productId, qty) {
@@ -1965,25 +2375,144 @@ function createPartialReturn(form) {
   const line = receiptReturnableLines(receipt).find((item) => item.productId === productId);
   const qty = Math.max(1, Number(data.qty || 1));
   if (!line || line.returnable < qty) return alert("Кількість повернення більша за доступну.");
-  const shift = openShift();
-  if (!shift) return alert("Для повернення потрібна відкрита касова зміна.");
+  if (!openShift()) return alert("Для повернення потрібна відкрита касова зміна.");
   const total = returnLineTotal(receipt, productId, qty);
-  const returnDoc = {
-    id: nextId("RET", state.returns),
-    date: today(),
+  openReturnRefundConfirm({
     receiptId,
     lines: [{ productId, qty, price: line.price, total }],
     total,
-    reason: data.reason || "часткове повернення",
+    reason: data.reason || "часткове повернення"
+  }, receipt);
+}
+
+function confirmReturnRefund(form) {
+  if (!canDo("return_create")) return alert("Немає дозволу оформлювати повернення.");
+  const data = Object.fromEntries(new FormData(form).entries());
+  const refundMethod = ["cash", "card"].includes(data.refundMethod) ? data.refundMethod : state.returnConfirm.refundMethod;
+  const payload = state.returnConfirm.payload;
+  if (!payload) return;
+  postReturnPayload(payload, refundMethod);
+}
+
+function postReturnPayload(payload, refundMethod) {
+  const receipt = state.receipts.find((item) => item.id === payload.receiptId);
+  if (!receipt) return alert("Чек для повернення не знайдено.");
+  const shift = openShift();
+  if (!shift) return alert("Для повернення потрібна відкрита касова зміна.");
+  const returnable = receiptReturnableLines(receipt);
+  const valid = payload.lines.every((line) => {
+    const current = returnable.find((item) => item.productId === line.productId);
+    return current && current.returnable >= Number(line.qty || 0);
+  });
+  if (!valid) return alert("Повернення вже не відповідає доступним залишкам по чеку.");
+  const returnDoc = {
+    id: nextId("RET", state.returns),
+    date: today(),
+    receiptId: payload.receiptId,
+    lines: payload.lines.map((line) => ({ ...line, qty: Number(line.qty || 0), total: Number(line.total || 0) })),
+    total: Number(payload.total || 0),
+    reason: payload.reason || "повернення",
+    refundMethod,
+    sourcePaymentMethod: receipt.paymentMethod,
+    shiftId: shift.id,
     createdAt: nowIso()
   };
-  stockRow(productId).qty += qty;
+  returnDoc.lines.forEach((line) => {
+    stockRow(line.productId).qty += Number(line.qty || 0);
+  });
   state.returns.unshift(returnDoc);
   const stillReturnable = receiptReturnableLines(receipt).some((item) => item.returnable > 0);
   receipt.status = stillReturnable ? "partial_return" : "returned";
-  applyPaymentToShift(shift, receipt.paymentMethod, returnDoc.total, "return");
-  audit(`Оформлено повернення ${returnDoc.id} по чеку ${receipt.id}: ${productById(productId).sku} x ${qty}`);
+  applyPaymentToShift(shift, refundMethod, returnDoc.total, "return");
+  state.returnConfirm = clone(seedState.returnConfirm);
+  state.selectedReturnId = returnDoc.id;
+  audit(`Оформлено повернення ${returnDoc.id} по чеку ${receipt.id}: ${returnDoc.lines.map((line) => `${productById(line.productId).sku} x ${line.qty}`).join(", ")}, гроші ${refundLabel(refundMethod)}`);
   state.currentView = "returns";
+  saveState();
+  render();
+}
+
+function parseDocumentTarget(value) {
+  const [type, id] = String(value || "").split("::");
+  return { type, id };
+}
+
+function openDrilldown(type) {
+  if (!canDo("drilldown_view")) return alert("Немає дозволу відкривати розшифровки сум.");
+  state.drilldown = { open: true, type };
+  saveState();
+  render();
+}
+
+function closeDrilldown() {
+  state.drilldown = clone(seedState.drilldown);
+  saveState();
+  render();
+}
+
+function openDocumentTarget(value) {
+  const { type, id } = parseDocumentTarget(value);
+  if (type === "receipt") {
+    if (!canOpenBlock("pos")) return alert("Немає дозволу відкривати блок продажу.");
+    state.checkout.printReceiptId = id;
+    state.currentView = "pos";
+  } else if (type === "return") {
+    if (!canOpenBlock("returns")) return alert("Немає дозволу відкривати блок повернень.");
+    state.selectedReturnId = id;
+    state.currentView = "returns";
+  }
+  state.drilldown = clone(seedState.drilldown);
+  saveState();
+  render();
+}
+
+function editDocumentTarget(value) {
+  if (!canDo("document_edit")) return alert("Немає дозволу редагувати документи.");
+  const { type, id } = parseDocumentTarget(value);
+  if (!["receipt", "return"].includes(type) || !id) return;
+  state.documentEdit = { open: true, type, id };
+  state.drilldown = clone(seedState.drilldown);
+  saveState();
+  render();
+}
+
+function closeDocumentEdit() {
+  state.documentEdit = clone(seedState.documentEdit);
+  saveState();
+  render();
+}
+
+function saveDocumentEdit(form) {
+  if (!canDo("document_edit")) return alert("Немає дозволу редагувати документи.");
+  const data = Object.fromEntries(new FormData(form).entries());
+  const { type, id } = state.documentEdit;
+  if (type === "receipt") {
+    const receipt = state.receipts.find((item) => item.id === id);
+    if (!receipt) return alert("Чек не знайдено.");
+    const nextCustomerId = state.customers.some((customer) => customer.id === data.customerId) ? data.customerId : receipt.customerId;
+    const nextPaymentMethod = ["cash", "card", "bank"].includes(data.paymentMethod) ? data.paymentMethod : receipt.paymentMethod;
+    if (nextPaymentMethod === "bank" && !hasRegisteredCustomer(nextCustomerId)) {
+      return alert("Для оплати Банк у чеку має бути вибраний клієнт з довідника, не Роздрібний покупець.");
+    }
+    const oldPaymentMethod = receipt.paymentMethod;
+    receipt.customerId = nextCustomerId;
+    receipt.paymentMethod = nextPaymentMethod;
+    receipt.note = data.note || "";
+    if (!receipt.shiftId && openShift()) receipt.shiftId = openShift().id;
+    movePaymentInShift(receipt.shiftId, "sale", oldPaymentMethod, nextPaymentMethod, receipt.total);
+    audit(`Змінено чек ${receipt.id}`);
+  } else if (type === "return") {
+    const returnDoc = state.returns.find((item) => item.id === id);
+    if (!returnDoc) return alert("Повернення не знайдено.");
+    const nextRefundMethod = ["cash", "card"].includes(data.refundMethod) ? data.refundMethod : returnDoc.refundMethod;
+    const oldRefundMethod = returnDoc.refundMethod;
+    returnDoc.refundMethod = nextRefundMethod;
+    returnDoc.reason = data.reason || "повернення";
+    if (!returnDoc.shiftId && openShift()) returnDoc.shiftId = openShift().id;
+    movePaymentInShift(returnDoc.shiftId, "return", oldRefundMethod, nextRefundMethod, returnDoc.total);
+    audit(`Змінено повернення ${returnDoc.id}`);
+  }
+  state.documentEdit = clone(seedState.documentEdit);
   saveState();
   render();
 }
@@ -2406,7 +2935,7 @@ function render() {
   const pageHtml = canOpenBlock(state.currentView)
     ? (views[state.currentView] || renderDashboard)()
     : renderNoAccess();
-  document.getElementById("app").innerHTML = `${pageHtml}${renderSalePaymentConfirm()}`;
+  document.getElementById("app").innerHTML = `${pageHtml}${renderSalePaymentConfirm()}${renderReturnRefundConfirm()}${renderDrilldownModal()}${renderDocumentEditModal()}`;
 }
 
 function renderNoAccess() {
@@ -2435,6 +2964,16 @@ document.addEventListener("click", (event) => {
   if (addSelectedButton) return addSelectedCheckoutProduct();
   const removeButton = event.target.closest("[data-remove-cart]");
   if (removeButton) return removeCartLine(Number(removeButton.dataset.removeCart));
+  const drilldownButton = event.target.closest("[data-drilldown]");
+  if (drilldownButton) return openDrilldown(drilldownButton.dataset.drilldown);
+  const closeDrilldownButton = event.target.closest("[data-close-drilldown]");
+  if (closeDrilldownButton) return closeDrilldown();
+  const openDocumentButton = event.target.closest("[data-open-document]");
+  if (openDocumentButton) return openDocumentTarget(openDocumentButton.dataset.openDocument);
+  const editDocumentButton = event.target.closest("[data-edit-document]");
+  if (editDocumentButton) return editDocumentTarget(editDocumentButton.dataset.editDocument);
+  const closeDocumentEditButton = event.target.closest("[data-close-document-edit]");
+  if (closeDocumentEditButton) return closeDocumentEdit();
   const returnButton = event.target.closest("[data-return-receipt]");
   if (returnButton) return createReturn(returnButton.dataset.returnReceipt);
   const printButton = event.target.closest("[data-print-receipt]");
@@ -2464,6 +3003,8 @@ document.addEventListener("click", (event) => {
   if (selectCustomerButton) return selectCustomer(selectCustomerButton.dataset.selectCustomer);
   const cancelSaleConfirmButton = event.target.closest("[data-cancel-sale-confirm]");
   if (cancelSaleConfirmButton) return cancelSalePaymentConfirm();
+  const cancelReturnConfirmButton = event.target.closest("[data-cancel-return-confirm]");
+  if (cancelReturnConfirmButton) return cancelReturnRefundConfirm();
   if (event.target.id === "reset-demo") {
     state = clone(seedState);
     audit("Скинуто demo-дані", "manager");
@@ -2497,6 +3038,7 @@ document.addEventListener("change", (event) => {
     toggleRolePermission(event.target.dataset.rolePermission, event.target.dataset.roleId, event.target.dataset.permissionId, event.target.checked);
   }
   if (event.target.dataset.saleConfirmPayment !== undefined) updateSaleConfirmPayment(event.target.value);
+  if (event.target.dataset.returnConfirmRefund !== undefined) updateReturnConfirmRefund(event.target.value);
   if (event.target.dataset.checkoutField !== undefined) updateCheckoutField(event.target);
   if (event.target.dataset.customerLookup !== undefined) selectCustomerFromLookup(event.target.value);
   if (event.target.dataset.checkoutScan !== undefined && event.target.value.trim()) scanCheckoutProduct(event.target.value);
@@ -2508,6 +3050,11 @@ document.addEventListener("change", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
+  if ((event.key === "Enter" || event.key === " ") && event.target.dataset.drilldown !== undefined) {
+    event.preventDefault();
+    openDrilldown(event.target.dataset.drilldown);
+    return;
+  }
   if (event.key !== "Enter") return;
   if (event.target.dataset.checkoutScan !== undefined) {
     event.preventDefault();
@@ -2537,6 +3084,8 @@ document.addEventListener("submit", (event) => {
   event.preventDefault();
   if (form.dataset.action === "create-receipt") createReceipt(form);
   if (form.dataset.action === "confirm-sale-payment") confirmSalePayment(form);
+  if (form.dataset.action === "confirm-return-refund") confirmReturnRefund(form);
+  if (form.dataset.action === "save-document-edit") saveDocumentEdit(form);
   if (form.dataset.action === "sync-sql-products") syncProductsFromSql();
   if (form.dataset.action === "create-customer") createCustomer(form);
   if (form.dataset.action === "create-return") createPartialReturn(form);
