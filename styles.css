@@ -91,6 +91,26 @@ button {
   background: #243447;
 }
 
+.access-switch {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: #111827;
+}
+
+.access-switch span,
+.access-switch small {
+  color: #b6c3d2;
+  font-size: 12px;
+}
+
+.access-switch select {
+  min-height: 36px;
+  padding: 7px 8px;
+}
+
 .nav-group {
   position: relative;
 }
@@ -444,6 +464,24 @@ th {
 .mini-input {
   max-width: 96px;
   padding: 7px 8px;
+}
+
+.mini-select {
+  min-width: 160px;
+  padding: 7px 8px;
+}
+
+.check-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 64px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.check-cell input {
+  width: auto;
 }
 
 .stack {

@@ -1,7 +1,7 @@
 "use strict";
 
-const APP_VERSION = "2026.06.05.8";
-const APP_BUILD = "20260605-b2c-customer-input-only";
+const APP_VERSION = "2026.06.05.9";
+const APP_BUILD = "20260605-b2c-role-permissions";
 const STORAGE_KEY = "retail-crm-b2c-v8";
 
 const nowIso = () => new Date().toISOString();
@@ -123,6 +123,16 @@ function seedEmployee(id, code, name, role, phone, email, login, status = "activ
   };
 }
 
+function defaultRolePermissions() {
+  return Object.fromEntries(Object.entries(EMPLOYEE_ROLES).map(([id, role]) => [
+    id,
+    {
+      blocks: [...role.blocks],
+      actions: [...role.actions]
+    }
+  ]));
+}
+
 function inventoryLineFromProduct(row) {
   return {
     productId: row.id,
@@ -156,7 +166,9 @@ const seedState = {
     seedEmployee("e-003", "EMP-003", "Марія Продавець", "seller", "+380671110003", "seller@retail.local", "seller"),
     seedEmployee("e-004", "EMP-004", "Петро Касир", "cashier", "+380671110004", "cashier@retail.local", "cashier")
   ],
+  activeEmployeeId: "e-001",
   selectedCashierId: "e-004",
+  rolePermissions: defaultRolePermissions(),
   stock: sqlProductSnapshot.map(stockFromSql),
   productImport: {
     source: SQL_PRODUCT_SOURCE,
@@ -258,7 +270,11 @@ function normalizeState(input) {
   next.products = Array.isArray(next.products) ? next.products.map(normalizeProduct) : clone(seedState.products);
   next.customers = Array.isArray(next.customers) ? next.customers.map(normalizeCustomer) : clone(seedState.customers);
   next.employees = Array.isArray(next.employees) ? next.employees.map(normalizeEmployee) : clone(seedState.employees);
+  next.activeEmployeeId = next.employees.some((employee) => employee.id === next.activeEmployeeId)
+    ? next.activeEmployeeId
+    : next.employees.find((employee) => employee.role === "director")?.id || next.employees[0]?.id || "";
   next.selectedCashierId = next.selectedCashierId || next.employees.find((item) => item.role === "cashier" && item.status === "active")?.id || seedState.selectedCashierId;
+  next.rolePermissions = normalizeRolePermissions(next.rolePermissions);
   next.stock = Array.isArray(next.stock) ? next.stock : clone(seedState.stock);
   next.productImport = {
     ...clone(seedState.productImport),
@@ -281,6 +297,7 @@ function normalizeState(input) {
   };
   next.checkout.lines = Array.isArray(next.checkout.lines) && next.checkout.lines.length ? next.checkout.lines : clone(seedState.checkout.lines);
   next.checkout.printReceiptId = next.checkout.printReceiptId || next.receipts[0]?.id || "";
+  if (!canOpenBlock(next.currentView, next)) next.currentView = firstAllowedView(next);
   return next;
 }
 
@@ -337,6 +354,22 @@ function normalizeEmployee(employee) {
     note: employee.note || "",
     createdAt: employee.createdAt || nowIso()
   };
+}
+
+function normalizeRolePermissions(input) {
+  const base = defaultRolePermissions();
+  const knownBlocks = new Set(ROLE_BLOCKS.map((block) => block.id));
+  const knownActions = new Set(ROLE_ACTIONS.map((action) => action.id));
+  return Object.fromEntries(Object.entries(base).map(([roleId, defaults]) => {
+    const source = input?.[roleId] || defaults;
+    return [
+      roleId,
+      {
+        blocks: Array.isArray(source.blocks) ? source.blocks.filter((id) => knownBlocks.has(id)) : [...defaults.blocks],
+        actions: Array.isArray(source.actions) ? source.actions.filter((id) => knownActions.has(id)) : [...defaults.actions]
+      }
+    ];
+  }));
 }
 
 function normalizeReceipt(receipt, products) {
@@ -494,8 +527,40 @@ function employeeStatusLabel(status) {
   return EMPLOYEE_STATUSES[status] || status || "-";
 }
 
-function roleHas(role, type, id) {
-  return Boolean(EMPLOYEE_ROLES[role]?.[type]?.includes(id));
+function currentEmployee(source = state) {
+  return source.employees.find((employee) => employee.id === source.activeEmployeeId)
+    || source.employees.find((employee) => employee.role === "director")
+    || source.employees[0];
+}
+
+function rolePermissionSet(role, source = state) {
+  return source.rolePermissions?.[role] || EMPLOYEE_ROLES[role] || { blocks: [], actions: [] };
+}
+
+function roleHas(role, type, id, source = state) {
+  return Boolean(rolePermissionSet(role, source)?.[type]?.includes(id));
+}
+
+function canOpenBlock(blockId, source = state) {
+  return roleHas(currentEmployee(source)?.role, "blocks", VIEW_ALIASES[blockId] || blockId, source);
+}
+
+function canDo(actionId, source = state) {
+  return roleHas(currentEmployee(source)?.role, "actions", actionId, source);
+}
+
+function firstAllowedView(source = state) {
+  return flatNavItems().find(([id]) => canOpenBlock(id, source))?.[0] || "dashboard";
+}
+
+function rolePermissionCheckbox(roleId, type, permissionId) {
+  const checked = roleHas(roleId, type, permissionId);
+  return `
+    <label class="check-cell">
+      <input type="checkbox" data-role-permission="${escapeHtml(type)}" data-role-id="${escapeHtml(roleId)}" data-permission-id="${escapeHtml(permissionId)}" ${checked ? "checked" : ""} ${canDo("employee_manage") ? "" : "disabled"}>
+      <span>${checked ? "так" : "ні"}</span>
+    </label>
+  `;
 }
 
 function stockRow(productId) {
@@ -685,13 +750,25 @@ function setTitle(title) {
 }
 
 function renderNav() {
-  document.getElementById("nav").innerHTML = navItems.map((item) => {
+  const employee = currentEmployee();
+  const employeeSwitch = `
+    <div class="access-switch">
+      <span>Працівник</span>
+      <select data-active-employee>
+        ${state.employees.map((item) => option(item.id, `${item.name} · ${roleLabel(item.role)}`, item.id === employee?.id)).join("")}
+      </select>
+      <small>${escapeHtml(roleLabel(employee?.role))}</small>
+    </div>
+  `;
+  const itemsHtml = navItems.map((item) => {
     if (Array.isArray(item)) {
       const [id, label] = item;
+      if (!canOpenBlock(id)) return "";
       return `<button type="button" class="${state.currentView === id ? "active" : ""}" data-view="${id}">${escapeHtml(label)}</button>`;
     }
 
-    const children = item.children || [];
+    const children = (item.children || []).filter(([id]) => canOpenBlock(id));
+    if (!children.length) return "";
     const active = children.some(([id]) => state.currentView === id);
     return `
       <div class="nav-group ${active ? "open" : ""}">
@@ -705,6 +782,7 @@ function renderNav() {
       </div>
     `;
   }).join("");
+  document.getElementById("nav").innerHTML = `${employeeSwitch}${itemsHtml}`;
 }
 
 function renderDashboard() {
@@ -723,19 +801,19 @@ function renderDashboard() {
       <article class="card metric"><span>Каса</span><strong>${shift ? "Відкрита" : "Закрита"}</strong><small>${shift ? `${shift.id} · очікувано ${formatMoney(shiftExpectedCash(shift))}` : "Немає активної зміни"}.</small></article>
     </section>
     <section class="grid two section-gap">
-      ${renderCheckoutPanel()}
+      ${canOpenBlock("pos") && canDo("sale_create") ? renderCheckoutPanel() : ""}
       <article class="panel">
         <div class="split">
           <h2>Операції сьогодні</h2>
           <span class="pill">B2C prototype</span>
         </div>
         <div class="stack">
-          ${state.auditLog.slice(0, 6).map((row) => `
+          ${canDo("audit_view") ? state.auditLog.slice(0, 6).map((row) => `
             <div class="log-row">
               <strong>${escapeHtml(row.event)}</strong>
               <span>${formatDateTime(row.at)} · ${escapeHtml(row.actor)}</span>
             </div>
-          `).join("")}
+          `).join("") : '<p class="muted">Журнал дій приховано для цієї ролі.</p>'}
         </div>
       </article>
     </section>
@@ -767,6 +845,14 @@ function renderPos() {
 }
 
 function renderCheckoutPanel(full = false) {
+  if (!canDo("sale_create")) {
+    return `
+      <section class="panel ${full ? "" : "compact-panel"}">
+        <h2>B2C.1 Продаж</h2>
+        <p class="muted">Для ролі активного працівника не увімкнено дію "Створити продаж".</p>
+      </section>
+    `;
+  }
   const lines = cartLines();
   const subtotal = receiptSubtotal(lines);
   const loyalDiscount = loyaltyDiscount(lines);
@@ -854,7 +940,7 @@ function renderReceiptsContent() {
                   <td><span class="pill ${receipt.status === "returned" ? "warn" : "good"}">${escapeHtml(statusLabel(receipt.status))}</span></td>
                   <td>
                     <button class="secondary" type="button" data-print-receipt="${escapeHtml(receipt.id)}">Друк</button>
-                    <button class="secondary" type="button" data-return-receipt="${escapeHtml(receipt.id)}" ${receipt.status === "returned" ? "disabled" : ""}>Все назад</button>
+                    ${canDo("return_create") ? `<button class="secondary" type="button" data-return-receipt="${escapeHtml(receipt.id)}" ${receipt.status === "returned" ? "disabled" : ""}>Все назад</button>` : ""}
                   </td>
                 </tr>
               `).join("")}
@@ -903,13 +989,13 @@ function renderReturns() {
           <h2>B2C.3 Повернення</h2>
           <span class="pill">${state.returns.length} документів</span>
         </div>
-        <form class="form-grid one-col" data-action="create-return">
+        ${canDo("return_create") ? `<form class="form-grid one-col" data-action="create-return">
           <label class="field"><span>Чек</span><select name="receiptId">${returnableReceipts.map((receipt) => option(receipt.id, `${receipt.id} · ${customerById(receipt.customerId).name} · ${formatMoney(receipt.total)}`)).join("")}</select></label>
           <label class="field"><span>Товар</span><select name="productId">${returnableReceipts.flatMap((receipt) => receiptReturnableLines(receipt).filter((line) => line.returnable > 0).map((line) => option(`${receipt.id}::${line.productId}`, `${receipt.id} · ${productById(line.productId).sku} · доступно ${line.returnable}`))).join("")}</select></label>
           <label class="field"><span>Кількість</span><input name="qty" type="number" min="1" value="1"></label>
           <label class="field"><span>Причина</span><input name="reason" value="часткове повернення"></label>
           <button class="primary" type="submit" ${returnableReceipts.length ? "" : "disabled"}>Оформити повернення</button>
-        </form>
+        </form>` : '<p class="muted">Для ролі активного працівника не увімкнено дію "Повернення".</p>'}
       </article>
       <article class="panel">
         <h2>Журнал повернень</h2>
@@ -1068,6 +1154,9 @@ function renderStock() {
   const totals = inventoryTotals(allRows);
   const printTotals = inventoryTotals(rows);
   const resortTotals = inventoryResortTotals();
+  const canImportSql = canDo("sql_import");
+  const canPostInventory = canDo("inventory_post");
+  const canResortInventory = canDo("inventory_resort");
   return `
     <section class="grid two">
       <article class="panel">
@@ -1109,9 +1198,9 @@ function renderStock() {
           </div>
           <p class="muted">Надходження в магазин не вводяться вручну. Оприбуткування, постачальник, кількість і поточні залишки приходять тільки з SQL-джерела.</p>
         </div>
-        <form class="form-grid one-col" data-action="sync-sql-stock-receipts">
+        ${canImportSql ? `<form class="form-grid one-col" data-action="sync-sql-stock-receipts">
           <button class="primary" type="submit">Імпортувати надходження з SQL</button>
-        </form>
+        </form>` : '<p class="muted">SQL-імпорт надходжень приховано для цієї ролі.</p>'}
         <div class="table-wrap section-gap">
           <table>
             <thead><tr><th>SQL док.</th><th>Дата</th><th>SKU</th><th>К-сть</th><th>Постачальник</th></tr></thead>
@@ -1130,7 +1219,7 @@ function renderStock() {
         </div>
       </article>
     </section>
-    <section class="panel section-gap inventory-panel">
+    ${canOpenBlock("inventory") ? `<section class="panel section-gap inventory-panel">
       <div class="split">
         <div>
           <h2>Інвентаризація</h2>
@@ -1144,7 +1233,7 @@ function renderStock() {
         <article class="card metric"><span>Плюс</span><strong>${formatMoney(totals.positiveAmount)}</strong><small>${totals.positive} од. факт більше обліку.</small></article>
         <article class="card metric"><span>Мінус</span><strong>${formatMoney(Math.abs(totals.negativeAmount))}</strong><small>${Math.abs(totals.negative)} од. факт менше обліку.</small></article>
       </section>
-      <form class="form-grid section-gap" data-action="post-inventory">
+      <form class="form-grid section-gap" data-action="${canPostInventory ? "post-inventory" : "inventory-draft"}">
         <label class="field wide"><span>Товар з довідника</span><input name="inventoryAddSearch" data-inventory-add-search list="inventory-product-options" value="${escapeHtml(state.inventory.addSearch || "")}" autocomplete="off" placeholder="назва, SKU, штрихкод або QR з довідника товарів"><datalist id="inventory-product-options">${state.products.map((product) => `<option value="${escapeHtml(productLookupValue(product))}"></option>`).join("")}</datalist></label>
         <div class="field lookup-action no-print"><span>Додати</span><button class="secondary" type="button" data-add-inventory-product>Додати товар</button></div>
         <label class="field wide"><span>Пошук у інвентаризації</span><input name="inventorySearch" data-inventory-search value="${escapeHtml(state.inventory.search || "")}" placeholder="назва, SKU, штрихкод або QR"></label>
@@ -1153,7 +1242,7 @@ function renderStock() {
           <button class="secondary" type="button" data-add-all-stock-inventory>Додати всі товари із залишками</button>
           <button class="secondary" type="button" data-print-inventory>Друк Інвентаризаційний лист</button>
           <button class="secondary" type="button" data-reset-inventory>Очистити лист</button>
-          <button class="primary" type="submit">Провести і оновити склад</button>
+          ${canPostInventory ? '<button class="primary" type="submit">Провести і оновити склад</button>' : ""}
         </div>
         <div class="table-wrap full">
           <table>
@@ -1176,7 +1265,7 @@ function renderStock() {
           </table>
         </div>
       </form>
-      <section class="inventory-resort no-print">
+      ${canResortInventory ? `<section class="inventory-resort no-print">
         <div class="split">
           <h2>Пересорт</h2>
           <span class="pill ${resortTotals.netAmount < 0 ? "danger" : resortTotals.netAmount > 0 ? "warn" : "good"}">${formatMoney(resortTotals.netAmount)}</span>
@@ -1191,7 +1280,7 @@ function renderStock() {
           </div>
         </form>
         ${renderInventoryResorts(true)}
-      </section>
+      </section>` : ""}
       ${renderInventorySheet(rows, printTotals)}
       <div class="table-wrap section-gap">
         <table>
@@ -1211,7 +1300,7 @@ function renderStock() {
           </tbody>
         </table>
       </div>
-    </section>
+    </section>` : ""}
   `;
 }
 
@@ -1237,7 +1326,7 @@ function renderCatalog() {
                   <td>${escapeHtml(product.category)}</td>
                   <td>${formatMoney(product.price)}</td>
                   <td>${stockQty(product.id)}</td>
-                  <td><button class="secondary" type="button" data-add-cart="${escapeHtml(product.id)}">У продаж</button></td>
+                  <td>${canDo("sale_create") ? `<button class="secondary" type="button" data-add-cart="${escapeHtml(product.id)}">У продаж</button>` : ""}</td>
                 </tr>
               `).join("")}
             </tbody>
@@ -1265,9 +1354,9 @@ function renderCatalog() {
           </div>
           <p class="muted">SKU у роздробі не створюється вручну. Товари, ціни, штрихкоди та базові залишки приходять тільки з SQL-джерела.</p>
         </div>
-        <form class="form-grid one-col" data-action="sync-sql-products">
+        ${canDo("sql_import") ? `<form class="form-grid one-col" data-action="sync-sql-products">
           <button class="primary" type="submit">Синхронізувати з SQL</button>
-        </form>
+        </form>` : '<p class="muted">SQL-імпорт приховано для цієї ролі.</p>'}
       </article>
     </section>
   `;
@@ -1302,7 +1391,7 @@ function renderCustomers() {
                     <td><span class="pill">${escapeHtml(LOYALTY_LABELS[customer.loyalty] || customer.loyalty)}</span></td>
                     <td>${receipts.length}</td>
                     <td>${formatMoney(total)}</td>
-                    <td><button class="secondary" type="button" data-select-customer="${escapeHtml(customer.id)}">У продаж</button></td>
+                    <td>${canDo("sale_create") ? `<button class="secondary" type="button" data-select-customer="${escapeHtml(customer.id)}">У продаж</button>` : ""}</td>
                   </tr>
                 `;
               }).join("")}
@@ -1370,10 +1459,10 @@ function renderOpenShift(shift) {
       <div><dt>Повернення</dt><dd>${formatMoney(shift.cashReturns + shift.cardReturns + shift.bankReturns)}</dd></div>
       <div><dt>Готівка очікувана</dt><dd><strong>${formatMoney(shiftExpectedCash(shift))}</strong></dd></div>
     </dl>
-    <form class="form-grid one-col" data-action="close-shift">
+    ${canDo("cash_close") ? `<form class="form-grid one-col" data-action="close-shift">
       <label class="field"><span>Фактична готівка в касі</span><input name="actualCash" type="number" min="0" value="${shiftExpectedCash(shift)}"></label>
       <button class="primary" type="submit">Закрити зміну</button>
-    </form>
+    </form>` : '<p class="muted">Закриття касової зміни приховано для цієї ролі.</p>'}
   `;
 }
 
@@ -1381,11 +1470,11 @@ function renderOpenShiftForm() {
   const employees = activeEmployees();
   const selectedId = employees.some((employee) => employee.id === state.selectedCashierId) ? state.selectedCashierId : employees[0]?.id;
   return `
-    <form class="form-grid one-col" data-action="open-shift">
+    ${canDo("cash_open") ? `<form class="form-grid one-col" data-action="open-shift">
       <label class="field"><span>Касир / відповідальний</span><select name="cashierId">${employees.map((employee) => option(employee.id, `${employee.name} · ${roleLabel(employee.role)}`, employee.id === selectedId)).join("")}</select></label>
       <label class="field"><span>Розмінна готівка</span><input name="openingCash" type="number" min="0" value="3000"></label>
       <button class="primary" type="submit">Відкрити зміну</button>
-    </form>
+    </form>` : '<p class="muted">Відкриття касової зміни приховано для цієї ролі.</p>'}
   `;
 }
 
@@ -1425,6 +1514,7 @@ function renderEmployees() {
   setTitle("Працівники і ролі");
   const activeCount = state.employees.filter((employee) => employee.status === "active").length;
   const roleRows = Object.entries(EMPLOYEE_ROLES);
+  const canManageEmployees = canDo("employee_manage");
   return `
     <section class="grid four">
       <article class="card metric"><span>Працівники</span><strong>${state.employees.length}</strong><small>${activeCount} активних.</small></article>
@@ -1446,13 +1536,13 @@ function renderEmployees() {
                 <tr>
                   <td>${escapeHtml(employee.code)}</td>
                   <td><strong>${escapeHtml(employee.name)}</strong><br><span class="muted">${escapeHtml(employee.login || "-")} · ${escapeHtml(employee.schedule || "-")}</span></td>
-                  <td><span class="pill">${escapeHtml(roleLabel(employee.role))}</span></td>
+                  <td>${canManageEmployees ? `<select class="mini-select" data-employee-role="${escapeHtml(employee.id)}">${roleRows.map(([id, role]) => option(id, role.label, id === employee.role)).join("")}</select>` : `<span class="pill">${escapeHtml(roleLabel(employee.role))}</span>`}</td>
                   <td>${escapeHtml(employee.phone || "-")}<br><span class="muted">${escapeHtml(employee.email || "-")}</span></td>
                   <td><span class="pill ${employee.status === "active" ? "good" : employee.status === "vacation" ? "warn" : "danger"}">${escapeHtml(employeeStatusLabel(employee.status))}</span></td>
                   <td>${escapeHtml(employee.store || "-")}<br><span class="muted">з ${escapeHtml(employee.hireDate || "-")}</span></td>
                   <td>
-                    <button class="secondary" type="button" data-select-cashier="${escapeHtml(employee.id)}" ${employee.status === "active" ? "" : "disabled"}>У касу</button>
-                    <button class="secondary" type="button" data-toggle-employee="${escapeHtml(employee.id)}">${employee.status === "active" ? "Вимкнути" : "Активувати"}</button>
+                    ${canDo("cash_open") ? `<button class="secondary" type="button" data-select-cashier="${escapeHtml(employee.id)}" ${employee.status === "active" ? "" : "disabled"}>У касу</button>` : ""}
+                    ${canManageEmployees ? `<button class="secondary" type="button" data-toggle-employee="${escapeHtml(employee.id)}">${employee.status === "active" ? "Вимкнути" : "Активувати"}</button>` : ""}
                   </td>
                 </tr>
               `).join("")}
@@ -1460,7 +1550,7 @@ function renderEmployees() {
           </table>
         </div>
       </article>
-      <article class="panel">
+      ${canManageEmployees ? `<article class="panel">
         <h2>Нова картка працівника</h2>
         <form class="form-grid one-col" data-action="create-employee">
           <label class="field"><span>ПІБ</span><input name="name" required placeholder="ПІБ працівника"></label>
@@ -1476,7 +1566,7 @@ function renderEmployees() {
           <label class="field"><span>Коментар</span><input name="note" placeholder="зона відповідальності, умови, примітка"></label>
           <button class="primary" type="submit">Створити працівника</button>
         </form>
-      </article>
+      </article>` : ""}
     </section>
     <section class="grid two section-gap">
       <article class="panel">
@@ -1491,7 +1581,7 @@ function renderEmployees() {
               ${ROLE_BLOCKS.map((block) => `
                 <tr>
                   <td>${escapeHtml(block.label)}</td>
-                  ${roleRows.map(([roleId]) => `<td><span class="pill ${roleHas(roleId, "blocks", block.id) ? "good" : "danger"}">${roleHas(roleId, "blocks", block.id) ? "так" : "ні"}</span></td>`).join("")}
+                  ${roleRows.map(([roleId]) => `<td>${rolePermissionCheckbox(roleId, "blocks", block.id)}</td>`).join("")}
                 </tr>
               `).join("")}
             </tbody>
@@ -1510,7 +1600,7 @@ function renderEmployees() {
               ${ROLE_ACTIONS.map((action) => `
                 <tr>
                   <td>${escapeHtml(action.label)}</td>
-                  ${roleRows.map(([roleId]) => `<td><span class="pill ${roleHas(roleId, "actions", action.id) ? "good" : "danger"}">${roleHas(roleId, "actions", action.id) ? "так" : "ні"}</span></td>`).join("")}
+                  ${roleRows.map(([roleId]) => `<td>${rolePermissionCheckbox(roleId, "actions", action.id)}</td>`).join("")}
                 </tr>
               `).join("")}
             </tbody>
@@ -1540,6 +1630,7 @@ function renderLog() {
 }
 
 function addCartProduct(productId) {
+  if (!canDo("sale_create")) return alert("Немає дозволу створювати продаж.");
   const existing = state.checkout.lines.find((line) => line.productId === productId);
   if (existing) {
     existing.qty = Number(existing.qty || 1) + 1;
@@ -1552,6 +1643,7 @@ function addCartProduct(productId) {
 }
 
 function addSelectedCheckoutProduct(value = state.checkout.search) {
+  if (!canDo("sale_create")) return alert("Немає дозволу створювати продаж.");
   const query = String(value || "").trim();
   if (!query) {
     alert("Вкажіть товар, SKU, штрихкод або QR.");
@@ -1570,6 +1662,7 @@ function addSelectedCheckoutProduct(value = state.checkout.search) {
 }
 
 function scanCheckoutProduct(value) {
+  if (!canDo("sale_create")) return alert("Немає дозволу створювати продаж.");
   const product = findProductByScan(value);
   if (!product) {
     state.checkout.search = String(value || "").trim();
@@ -1589,6 +1682,7 @@ function removeCartLine(index) {
 }
 
 function createReceipt(form) {
+  if (!canDo("sale_create")) return alert("Немає дозволу створювати продаж.");
   const shift = openShift();
   if (!shift) {
     alert("Спочатку відкрийте касову зміну.");
@@ -1639,6 +1733,7 @@ function createReceipt(form) {
 }
 
 function syncProductsFromSql() {
+  if (!canDo("sql_import")) return alert("Немає дозволу виконувати SQL-імпорт.");
   state.products = sqlProductSnapshot.map((row) => normalizeProduct(productFromSql(row)));
   state.stock = sqlProductSnapshot.map(stockFromSql);
   state.productImport = {
@@ -1708,6 +1803,7 @@ function applyPaymentToShift(shift, method, total, kind) {
 }
 
 function createReturn(receiptId) {
+  if (!canDo("return_create")) return alert("Немає дозволу оформлювати повернення.");
   const receipt = state.receipts.find((item) => item.id === receiptId);
   if (!receipt || receipt.status === "returned") return;
   const remaining = receiptReturnableLines(receipt).filter((line) => line.returnable > 0);
@@ -1748,6 +1844,7 @@ function returnLineTotal(receipt, productId, qty) {
 }
 
 function createPartialReturn(form) {
+  if (!canDo("return_create")) return alert("Немає дозволу оформлювати повернення.");
   const data = Object.fromEntries(new FormData(form).entries());
   const [receiptId, productId] = String(data.productId || "").split("::");
   const receipt = state.receipts.find((item) => item.id === receiptId);
@@ -1779,6 +1876,7 @@ function createPartialReturn(form) {
 }
 
 function syncStockReceiptsFromSql() {
+  if (!canDo("sql_import")) return alert("Немає дозволу виконувати SQL-імпорт.");
   state.stockReceipts = sqlStockReceiptSnapshot.map((row) => normalizeStockReceipt(stockReceiptFromSql(row)));
   state.stock = sqlProductSnapshot.map(stockFromSql);
   state.stockImport = {
@@ -1873,6 +1971,7 @@ function inventoryActualBase(productId) {
 }
 
 function createInventoryResort(form) {
+  if (!canDo("inventory_resort")) return alert("Немає дозволу проводити пересорт.");
   const data = Object.fromEntries(new FormData(form).entries());
   const fromProduct = productById(data.fromProductId);
   const toProduct = productById(data.toProductId);
@@ -1954,6 +2053,7 @@ function printInventorySheet() {
 }
 
 function postInventory() {
+  if (!canDo("inventory_post")) return alert("Немає дозволу проводити інвентаризацію.");
   const rows = inventoryRows().filter((row) => row.hasActual);
   if (!rows.length) {
     alert("Введіть фактичний залишок або проскануйте товар для інвентаризації.");
@@ -2002,6 +2102,7 @@ function postInventory() {
 }
 
 function createEmployee(form) {
+  if (!canDo("employee_manage")) return alert("Немає дозволу керувати працівниками.");
   const data = Object.fromEntries(new FormData(form).entries());
   const name = String(data.name || "").trim();
   if (!name) return alert("Вкажіть ПІБ працівника.");
@@ -2033,6 +2134,7 @@ function createEmployee(form) {
 }
 
 function toggleEmployeeStatus(employeeId) {
+  if (!canDo("employee_manage")) return alert("Немає дозволу керувати працівниками.");
   const employee = employeeById(employeeId);
   employee.status = employee.status === "active" ? "inactive" : "active";
   if (employee.status !== "active" && state.selectedCashierId === employee.id) {
@@ -2046,7 +2148,44 @@ function toggleEmployeeStatus(employeeId) {
   render();
 }
 
+function changeEmployeeRole(employeeId, role) {
+  if (!canDo("employee_manage")) return alert("Немає дозволу керувати працівниками.");
+  const employee = employeeById(employeeId);
+  if (!EMPLOYEE_ROLES[role]) return;
+  employee.role = role;
+  audit(`Змінено роль працівника ${employee.name}: ${roleLabel(role)}`);
+  saveState();
+  render();
+}
+
+function toggleRolePermission(type, roleId, permissionId, checked) {
+  if (!canDo("employee_manage")) return alert("Немає дозволу керувати ролями.");
+  if (!EMPLOYEE_ROLES[roleId] || !["blocks", "actions"].includes(type)) return;
+  const allowedIds = type === "blocks" ? ROLE_BLOCKS.map((item) => item.id) : ROLE_ACTIONS.map((item) => item.id);
+  if (!allowedIds.includes(permissionId)) return;
+  const role = state.rolePermissions[roleId] || { blocks: [], actions: [] };
+  const values = new Set(role[type] || []);
+  if (checked) values.add(permissionId);
+  if (!checked) values.delete(permissionId);
+  role[type] = [...values];
+  state.rolePermissions[roleId] = role;
+  audit(`Оновлено права ролі ${roleLabel(roleId)}: ${type}/${permissionId} = ${checked ? "так" : "ні"}`);
+  saveState();
+  render();
+}
+
+function setActiveEmployee(employeeId) {
+  const employee = state.employees.find((item) => item.id === employeeId);
+  if (!employee) return;
+  state.activeEmployeeId = employee.id;
+  if (!canOpenBlock(state.currentView)) state.currentView = firstAllowedView();
+  audit(`Перегляд перемкнено на працівника ${employee.name}: ${roleLabel(employee.role)}`);
+  saveState();
+  render();
+}
+
 function selectCashier(employeeId) {
+  if (!canDo("cash_open")) return alert("Немає дозволу вибирати відповідального за касу.");
   const employee = employeeById(employeeId);
   if (employee.status !== "active") return alert("Для касової зміни можна вибрати тільки активного працівника.");
   state.selectedCashierId = employee.id;
@@ -2057,6 +2196,7 @@ function selectCashier(employeeId) {
 }
 
 function openCashShift(form) {
+  if (!canDo("cash_open")) return alert("Немає дозволу відкривати касову зміну.");
   const data = Object.fromEntries(new FormData(form).entries());
   if (openShift()) return alert("Вже є відкрита касова зміна.");
   const cashier = employeeById(data.cashierId || state.selectedCashierId);
@@ -2085,6 +2225,7 @@ function openCashShift(form) {
 }
 
 function closeCashShift(form) {
+  if (!canDo("cash_close")) return alert("Немає дозволу закривати касову зміну.");
   const shift = openShift();
   if (!shift) return;
   const data = Object.fromEntries(new FormData(form).entries());
@@ -2127,6 +2268,13 @@ function updateCartField(target) {
 }
 
 function render() {
+  if (!canOpenBlock(state.currentView)) {
+    const allowedView = firstAllowedView();
+    if (canOpenBlock(allowedView)) {
+      state.currentView = allowedView;
+      saveState();
+    }
+  }
   renderNav();
   const views = {
     dashboard: renderDashboard,
@@ -2142,13 +2290,27 @@ function render() {
     employees: renderEmployees,
     log: renderLog
   };
-  document.getElementById("app").innerHTML = (views[state.currentView] || renderDashboard)();
+  document.getElementById("app").innerHTML = canOpenBlock(state.currentView)
+    ? (views[state.currentView] || renderDashboard)()
+    : renderNoAccess();
+}
+
+function renderNoAccess() {
+  setTitle("Немає доступу");
+  return `
+    <section class="panel">
+      <h2>Немає доступних блоків</h2>
+      <p class="muted">Для активного працівника не увімкнено жодного блоку в матриці ролей.</p>
+    </section>
+  `;
 }
 
 document.addEventListener("click", (event) => {
   const viewButton = event.target.closest("[data-view]");
   if (viewButton) {
-    state.currentView = normalizeView(viewButton.dataset.view);
+    const nextView = normalizeView(viewButton.dataset.view);
+    if (!canOpenBlock(nextView)) return;
+    state.currentView = nextView;
     saveState();
     render();
     return;
@@ -2213,6 +2375,11 @@ document.addEventListener("input", (event) => {
 });
 
 document.addEventListener("change", (event) => {
+  if (event.target.dataset.activeEmployee !== undefined) setActiveEmployee(event.target.value);
+  if (event.target.dataset.employeeRole !== undefined) changeEmployeeRole(event.target.dataset.employeeRole, event.target.value);
+  if (event.target.dataset.rolePermission !== undefined) {
+    toggleRolePermission(event.target.dataset.rolePermission, event.target.dataset.roleId, event.target.dataset.permissionId, event.target.checked);
+  }
   if (event.target.dataset.checkoutField !== undefined) updateCheckoutField(event.target);
   if (event.target.dataset.customerLookup !== undefined) selectCustomerFromLookup(event.target.value);
   if (event.target.dataset.checkoutScan !== undefined && event.target.value.trim()) scanCheckoutProduct(event.target.value);
