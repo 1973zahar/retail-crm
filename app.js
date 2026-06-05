@@ -1,7 +1,7 @@
 "use strict";
 
-const APP_VERSION = "2026.06.05.7";
-const APP_BUILD = "20260605-b2c-sale-customer-lookup";
+const APP_VERSION = "2026.06.05.8";
+const APP_BUILD = "20260605-b2c-customer-input-only";
 const STORAGE_KEY = "retail-crm-b2c-v8";
 
 const nowIso = () => new Date().toISOString();
@@ -551,38 +551,6 @@ function customerMatchesQuery(customer, query) {
   return normalizeScanText(`${customer.name} ${customer.phone} ${customer.id} ${LOYALTY_LABELS[customer.loyalty] || customer.loyalty}`).includes(raw);
 }
 
-function customerLookupRows(query = "") {
-  const raw = normalizeScanText(query);
-  const selectedId = state.checkout.customerId;
-  return state.customers
-    .filter((customer) => !raw || normalizeScanText(customerLookupValue(customer)).includes(raw) || customerMatchesQuery(customer, raw))
-    .slice()
-    .sort((left, right) => {
-      if (left.id === selectedId) return -1;
-      if (right.id === selectedId) return 1;
-      return left.name.localeCompare(right.name, "uk");
-    })
-    .slice(0, 8);
-}
-
-function customerLookupResultsHtml(query = "") {
-  const rows = customerLookupRows(query);
-  if (!rows.length) {
-    return `<p class="lookup-empty">Клієнтів за пошуком немає. Створіть клієнта у Довідники -> Клієнти і лояльність.</p>`;
-  }
-  return rows.map((customer) => `
-    <button class="lookup-result ${customer.id === state.checkout.customerId ? "active" : ""}" type="button" data-select-customer="${escapeHtml(customer.id)}">
-      <strong>${escapeHtml(customer.name)}</strong>
-      <span>${escapeHtml(customer.phone || "без телефону")} · ${escapeHtml(LOYALTY_LABELS[customer.loyalty] || customer.loyalty)}</span>
-    </button>
-  `).join("");
-}
-
-function refreshCustomerLookupResults(query = "") {
-  const container = document.querySelector("[data-customer-results]");
-  if (container) container.innerHTML = customerLookupResultsHtml(query);
-}
-
 function findProductByScan(value) {
   const raw = normalizeScanText(value);
   if (!raw) return null;
@@ -804,9 +772,9 @@ function renderCheckoutPanel(full = false) {
   const loyalDiscount = loyaltyDiscount(lines);
   const total = checkoutTotal(lines);
   const customer = customerById(state.checkout.customerId);
-  const customerLookup = state.checkout.customerSearch || customerLookupValue(customer);
-  const selectedCustomerLookup = customerLookupValue(customer);
-  const customerResultsQuery = normalizeScanText(customerLookup) === normalizeScanText(selectedCustomerLookup) ? "" : customerLookup;
+  const customerLookup = state.checkout.customerSearch && findCustomerByLookup(state.checkout.customerSearch)?.id === customer.id
+    ? state.checkout.customerSearch
+    : customerLookupValue(customer);
   return `
     <section class="panel ${full ? "" : "compact-panel"}">
       <div class="split">
@@ -814,12 +782,7 @@ function renderCheckoutPanel(full = false) {
         <span class="pill ${openShift() ? "good" : "danger"}">${openShift() ? "каса відкрита" : "відкрийте касу"}</span>
       </div>
       <form class="form-grid checkout-form" data-action="create-receipt">
-        <div class="field wide lookup-field">
-          <span>Покупець</span>
-          <input name="customerSearch" data-customer-lookup list="customer-options" value="${escapeHtml(customerLookup)}" autocomplete="off" placeholder="ім'я або телефон з довідника">
-          <datalist id="customer-options">${state.customers.map((item) => `<option value="${escapeHtml(customerLookupValue(item))}"></option>`).join("")}</datalist>
-          <div class="lookup-results" data-customer-results>${customerLookupResultsHtml(customerResultsQuery)}</div>
-        </div>
+        <label class="field wide"><span>Покупець</span><input name="customerSearch" data-customer-lookup list="customer-options" value="${escapeHtml(customerLookup)}" autocomplete="off" placeholder="ім'я або телефон з довідника"><datalist id="customer-options">${state.customers.map((item) => `<option value="${escapeHtml(customerLookupValue(item))}"></option>`).join("")}</datalist></label>
         <label class="field"><span>Оплата</span><select name="paymentMethod" data-checkout-field>${["cash", "card", "bank"].map((method) => option(method, paymentLabel(method), method === state.checkout.paymentMethod)).join("")}</select></label>
         <label class="field wide"><span>Товар / штрихкод / QR</span><input name="search" data-product-lookup list="product-options" value="${escapeHtml(state.checkout.search)}" autocomplete="off" placeholder="назва, SKU, штрихкод або QR з довідника"><datalist id="product-options">${state.products.map((product) => `<option value="${escapeHtml(productLookupValue(product))}"></option>`).join("")}</datalist></label>
         <div class="field lookup-action"><span>Додати</span><button class="secondary" type="button" data-add-selected-product>Додати товар</button></div>
@@ -2142,7 +2105,6 @@ function updateCheckoutField(target) {
   if (target.dataset.customerLookup !== undefined) {
     state.checkout.customerSearch = target.value;
     saveState();
-    refreshCustomerLookupResults(target.value);
     return;
   }
   if (target.dataset.checkoutField !== undefined) {
