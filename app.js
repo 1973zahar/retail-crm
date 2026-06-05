@@ -1,7 +1,7 @@
 "use strict";
 
-const APP_VERSION = "2026.06.05.4";
-const APP_BUILD = "20260605-b2c-inventory-add-products";
+const APP_VERSION = "2026.06.05.5";
+const APP_BUILD = "20260605-b2c-inventory-add-stock-products";
 const STORAGE_KEY = "retail-crm-b2c-v8";
 
 const nowIso = () => new Date().toISOString();
@@ -1150,6 +1150,7 @@ function renderStock() {
         <label class="field wide"><span>Пошук у інвентаризації</span><input name="inventorySearch" data-inventory-search value="${escapeHtml(state.inventory.search || "")}" placeholder="назва, SKU, штрихкод або QR"></label>
         <label class="field wide"><span>Сканер інвентаризації</span><input name="inventoryScan" data-inventory-scan autocomplete="off" placeholder="скануйте штрихкод або QR, Enter додає 1 до факту"></label>
         <div class="toolbar full no-print">
+          <button class="secondary" type="button" data-add-all-stock-inventory>Додати всі товари із залишками</button>
           <button class="secondary" type="button" data-print-inventory>Друк Інвентаризаційний лист</button>
           <button class="secondary" type="button" data-reset-inventory>Очистити лист</button>
           <button class="primary" type="submit">Провести і оновити склад</button>
@@ -1832,6 +1833,24 @@ function addInventoryProductFromLookup(value = state.inventory.addSearch) {
   render();
 }
 
+function addAllInventoryStockProducts() {
+  const productsWithStock = state.products.filter((product) => stockQty(product.id) > 0);
+  const before = state.inventory.lines.length;
+  productsWithStock.forEach((product) => {
+    inventoryLineForProduct(product.id);
+  });
+  const added = state.inventory.lines.length - before;
+  state.inventory.addSearch = "";
+  state.inventory.search = "";
+  if (!productsWithStock.length) {
+    alert("У довіднику немає товарів із залишками.");
+    return;
+  }
+  audit(`Додано товари із залишками до інвентаризації: ${added} нових із ${productsWithStock.length}`);
+  saveState();
+  render();
+}
+
 function inventoryActualBase(productId) {
   const line = inventoryLineForProduct(productId);
   return line.actualQty === "" || line.actualQty === null || line.actualQty === undefined ? stockQty(productId) : Number(line.actualQty || 0);
@@ -2139,6 +2158,8 @@ document.addEventListener("click", (event) => {
   if (inventoryResetButton) return resetInventoryDraft();
   const addInventoryProductButton = event.target.closest("[data-add-inventory-product]");
   if (addInventoryProductButton) return addInventoryProductFromLookup();
+  const addAllStockInventoryButton = event.target.closest("[data-add-all-stock-inventory]");
+  if (addAllStockInventoryButton) return addAllInventoryStockProducts();
   const resortRemoveButton = event.target.closest("[data-remove-resort]");
   if (resortRemoveButton) return removeInventoryResort(Number(resortRemoveButton.dataset.removeResort));
   const selectCashierButton = event.target.closest("[data-select-cashier]");
