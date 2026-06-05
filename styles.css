@@ -288,7 +288,9 @@ h1 {
   grid-template-columns: 1fr;
 }
 
-label span {
+label span,
+.field > span,
+.field > label {
   color: var(--muted);
   font-size: 13px;
 }
@@ -394,11 +396,57 @@ th {
 }
 
 .checkout-form {
-  align-items: end;
+  align-items: start;
+}
+
+.lookup-action {
+  align-self: end;
 }
 
 .lookup-action button {
   width: 100%;
+}
+
+.lookup-field {
+  align-self: stretch;
+}
+
+.lookup-results {
+  display: grid;
+  gap: 6px;
+  max-height: 188px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.lookup-result {
+  display: grid;
+  gap: 3px;
+  min-height: 46px;
+  padding: 8px 10px;
+  text-align: left;
+  background: #f8fbfc;
+  border-color: var(--border);
+}
+
+.lookup-result:hover,
+.lookup-result.active {
+  border-color: var(--accent);
+  background: #edf8f5;
+}
+
+.lookup-result span,
+.lookup-empty {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.lookup-empty {
+  margin: 0;
+  padding: 6px 2px;
 }
 
 .loyalty-note {
