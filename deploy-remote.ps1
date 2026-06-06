@@ -11,8 +11,9 @@ $ErrorActionPreference = "Stop"
 
 $ProjectRoot = $PSScriptRoot
 $PublicHostValue = if ($PublicHost) { $PublicHost } else { $ComputerName }
-$StageRoot = Join-Path $env:TEMP "retail-crm-deploy-stage"
-$PackagePath = Join-Path $env:TEMP "retail-crm-deploy.zip"
+$DeployId = [guid]::NewGuid().ToString("N")
+$StageRoot = Join-Path $env:TEMP "retail-crm-deploy-stage-$DeployId"
+$PackagePath = Join-Path $env:TEMP "retail-crm-deploy-$DeployId.zip"
 $BundledNodeExe = "C:\Users\User\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe"
 
 Write-Host "Preparing B2C Retail CRM deployment package..."
@@ -109,4 +110,6 @@ try {
   Write-Host "Open: http://$PublicHostValue`:$Port/index.html"
 } finally {
   Remove-PSSession $Session
+  Remove-Item -LiteralPath $StageRoot -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $PackagePath -Force -ErrorAction SilentlyContinue
 }
