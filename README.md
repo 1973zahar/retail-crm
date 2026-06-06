@@ -37,6 +37,7 @@ MVP-прототип містить:
 ## PostgreSQL one_c_mirror
 
 - B2C використовує SQL-шар PostgreSQL `one_c_mirror`, а не прямі запити до 1C, якщо дані вже є в SQL.
+- Прототип стартує без локально створених товарів, клієнтів, залишків, серійних номерів, чеків і касових змін. Довідникові та складські дані з'являються тільки після SQL-імпорту.
 - Товари прив'язані до `crm_products`, `crm_product_price_summary`, `crm_product_characteristics`, `crm_product_kinds`, `crm_product_series`, `crm_product_groups`, `crm_product_folders` і показують `product_code`, `product_group_path`, `product_full_path`, `product_group_code_path`, `product_group_level`, ціни, валюти, характеристики, вид, серію та групу.
 - Залишки беруться з `crm_stock_balances` і `crm_warehouses`: окремо показуються `Склад №1` (`warehouse_code = 2`), `Склад Гуртовий` і загальний залишок по всіх складах.
 - Серійні номери прив'язані до `crm_serial_stock_current`, `crm_serial_stock_by_serial`, `crm_serial_stock_summary` і показують товар, склад, серійний номер, кількість, знак залишку, `product_code` та `warehouse_code`.

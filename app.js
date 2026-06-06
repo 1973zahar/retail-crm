@@ -1,8 +1,8 @@
 "use strict";
 
-const APP_VERSION = "2026.06.06.1";
-const APP_BUILD = "20260606-b2c-postgres-one-c-mirror";
-const STORAGE_KEY = "retail-crm-b2c-v9";
+const APP_VERSION = "2026.06.06.2";
+const APP_BUILD = "20260606-b2c-sql-import-only";
+const STORAGE_KEY = "retail-crm-b2c-v10";
 const ROLE_PERMISSION_SCHEMA = "20260605-document-lists";
 const SCHEMA_DEFAULT_ACTIONS = ["drilldown_view", "document_edit", "document_list_view", "document_list_sort", "document_list_collapse"];
 
@@ -10,6 +10,8 @@ const nowIso = () => new Date().toISOString();
 const today = () => nowIso().slice(0, 10);
 const LOYALTY_DISCOUNTS = { standard: 0, silver: 3, gold: 5 };
 const LOYALTY_LABELS = { standard: "Стандарт", silver: "Silver 3%", gold: "Gold 5%" };
+const WALK_IN_CUSTOMER = { id: "walk-in", name: "Роздрібний покупець", phone: "", loyalty: "standard", source: "system" };
+const EMPTY_PRODUCT = { id: "", name: "Товар не вибрано", sku: "", productCode: "", barcode: "", qr: "", sqlId: "", price: 0, cost: 0 };
 const SQL_SCHEMA = "one_c_mirror";
 const SQL_MAIN_WAREHOUSE_CODE = "2";
 const SQL_MAIN_WAREHOUSE_NAME = "Склад №1";
@@ -403,10 +405,8 @@ const seedState = {
     paymentMethod: "card",
     search: "",
     note: "",
-    printReceiptId: "B2C-0001",
-    lines: [
-      { productId: "p-102", qty: 1, discount: 0 }
-    ]
+    printReceiptId: "",
+    lines: []
   },
   saleConfirm: {
     open: false,
@@ -431,11 +431,8 @@ const seedState = {
     returns: { collapsed: false, sortBy: "date", sortDir: "desc", date: "", customer: "" },
     drilldown: { collapsed: false, sortBy: "date", sortDir: "desc", date: "", customer: "" }
   },
-  products: sqlProductSnapshot.map(productFromSql),
-  customers: [
-    { id: "walk-in", name: "Роздрібний покупець", phone: "", loyalty: "standard" },
-    ...sqlCustomerSnapshot
-  ],
+  products: [],
+  customers: [],
   employees: [
     seedEmployee("e-001", "EMP-001", "Олена Директор", "director", "+380671110001", "director@retail.local", "director"),
     seedEmployee("e-002", "EMP-002", "Іван Адміністратор", "admin", "+380671110002", "admin@retail.local", "admin"),
@@ -447,32 +444,39 @@ const seedState = {
   selectedReturnId: "",
   rolePermissionSchema: ROLE_PERMISSION_SCHEMA,
   rolePermissions: defaultRolePermissions(),
-  stock: sqlStockBalanceSnapshot.map(stockFromSql),
-  serialStock: sqlSerialStockSnapshot.map(serialStockFromSql),
-  references: clone(sqlReferenceSnapshot),
+  stock: [],
+  serialStock: [],
+  references: {
+    units: [],
+    currencies: [],
+    priceTypes: [],
+    organizations: [],
+    persons: [],
+    bankAccounts: []
+  },
   productImport: {
     source: SQL_PRODUCT_SOURCE,
-    rows: sqlProductSnapshot.length,
-    lastRunAt: nowIso(),
-    mode: "seed"
+    rows: 0,
+    lastRunAt: "",
+    mode: "not-imported"
   },
   stockImport: {
     source: SQL_STOCK_RECEIPT_SOURCE,
-    rows: sqlStockBalanceSnapshot.length,
-    lastRunAt: nowIso(),
-    mode: "seed"
+    rows: 0,
+    lastRunAt: "",
+    mode: "not-imported"
   },
   serialImport: {
     source: SQL_SERIAL_STOCK_SOURCE,
-    rows: sqlSerialStockSnapshot.length,
-    lastRunAt: nowIso(),
-    mode: "seed"
+    rows: 0,
+    lastRunAt: "",
+    mode: "not-imported"
   },
   counterpartyImport: {
     source: SQL_COUNTERPARTY_SOURCE,
-    rows: sqlCustomerSnapshot.length,
-    lastRunAt: nowIso(),
-    mode: "seed"
+    rows: 0,
+    lastRunAt: "",
+    mode: "not-imported"
   },
   inventory: {
     id: "INV-DRAFT",
@@ -485,43 +489,12 @@ const seedState = {
     resorts: []
   },
   inventoryDocs: [],
-  receipts: [
-    {
-      id: "B2C-0001",
-      date: today(),
-      customerId: "walk-in",
-      paymentMethod: "card",
-      status: "posted",
-      lines: [{ productId: "p-102", qty: 2, price: 860, discount: 0, total: 1720 }],
-      total: 1720,
-      note: "demo чек",
-      createdAt: nowIso()
-    }
-  ],
+  receipts: [],
   returns: [],
-  cashShifts: [
-    {
-      id: "SHIFT-001",
-      date: today(),
-      cashierId: "e-004",
-      cashier: "Петро Касир",
-      cashierRole: "Касир",
-      opened: true,
-      openedAt: nowIso(),
-      closedAt: "",
-      openingCash: 3000,
-      cashSales: 0,
-      cardSales: 1720,
-      bankSales: 0,
-      cashReturns: 0,
-      cardReturns: 0,
-      bankReturns: 0,
-      actualCash: 0
-    }
-  ],
-  stockReceipts: sqlStockReceiptSnapshot.map(stockReceiptFromSql),
+  cashShifts: [],
+  stockReceipts: [],
   auditLog: [
-    { at: nowIso(), actor: "system", event: "Створено demo-дані B2C прототипу" }
+    { at: nowIso(), actor: "system", event: "B2C стартує без локально створених товарів, клієнтів, залишків і чеків. Дані завантажуються тільки через SQL-імпорт." }
   ]
 };
 
@@ -694,7 +667,7 @@ function normalizeCustomer(customer) {
 
 function normalizeStockBalance(row) {
   return {
-    productId: row.productId || seedState.products[0]?.id || "",
+    productId: row.productId || "",
     productCode: row.productCode || "",
     warehouseCode: row.warehouseCode || SQL_MAIN_WAREHOUSE_CODE,
     warehouseName: row.warehouseName || SQL_MAIN_WAREHOUSE_NAME,
@@ -804,7 +777,7 @@ function normalizeReceipt(receipt, products) {
       createdAt: receipt.createdAt || nowIso()
     };
   }
-  const product = products.find((item) => item.id === receipt.productId) || products[0] || seedState.products[0];
+  const product = products.find((item) => item.id === receipt.productId) || products[0] || EMPTY_PRODUCT;
   const qty = Number(receipt.qty || 1);
   const price = Number(receipt.price || product.price || 0);
   return {
@@ -813,7 +786,7 @@ function normalizeReceipt(receipt, products) {
     customerId: receipt.customerId || "walk-in",
     paymentMethod: receipt.paymentMethod || "card",
     status: receipt.status || "posted",
-    lines: [{ productId: receipt.productId || product.id, qty, price, discount: 0, total: qty * price }],
+    lines: product.id ? [{ productId: receipt.productId || product.id, qty, price, discount: 0, total: qty * price }] : [],
     total: Number(receipt.total || qty * price),
     note: receipt.note || "",
     shiftId: receipt.shiftId || "",
@@ -865,7 +838,7 @@ function normalizeStockReceipt(receipt) {
     source: receipt.source || "sql",
     date: receipt.date || today(),
     supplier: receipt.supplier || SQL_STOCK_RECEIPT_SOURCE,
-    productId: receipt.productId || seedState.products[0].id,
+    productId: receipt.productId || "",
     qty: Number(receipt.qty || 0),
     warehouseCode: receipt.warehouseCode || SQL_MAIN_WAREHOUSE_CODE,
     warehouseName: receipt.warehouseName || SQL_MAIN_WAREHOUSE_NAME,
@@ -920,8 +893,8 @@ function normalizeInventoryDoc(doc) {
 function normalizeInventoryResort(item) {
   return {
     id: item.id || `RSRT-${Date.now()}`,
-    fromProductId: item.fromProductId || seedState.products[0].id,
-    toProductId: item.toProductId || seedState.products[1]?.id || seedState.products[0].id,
+    fromProductId: item.fromProductId || "",
+    toProductId: item.toProductId || "",
     qty: Number(item.qty || 1),
     fromPrice: Number(item.fromPrice || 0),
     toPrice: Number(item.toPrice || 0),
@@ -951,11 +924,11 @@ function audit(event, actor = "manager") {
 }
 
 function productById(id) {
-  return state.products.find((product) => product.id === id) || state.products[0];
+  return state.products.find((product) => product.id === id) || EMPTY_PRODUCT;
 }
 
 function customerById(id) {
-  return state.customers.find((customer) => customer.id === id) || state.customers[0];
+  return state.customers.find((customer) => customer.id === id) || WALK_IN_CUSTOMER;
 }
 
 function hasRegisteredCustomer(customerId = state.checkout.customerId) {
@@ -964,7 +937,8 @@ function hasRegisteredCustomer(customerId = state.checkout.customerId) {
 }
 
 function customerLookupValue(customer) {
-  return `${customer.name} · ${customer.phone || "без телефону"} · ${LOYALTY_LABELS[customer.loyalty] || customer.loyalty}`;
+  const source = customer || WALK_IN_CUSTOMER;
+  return `${source.name} · ${source.phone || "без телефону"} · ${LOYALTY_LABELS[source.loyalty] || source.loyalty}`;
 }
 
 function productLookupValue(product) {
@@ -1226,13 +1200,14 @@ function lineTotal(line) {
 function cartLines() {
   return state.checkout.lines.map((line) => {
     const product = productById(line.productId);
+    if (!product.id) return null;
     return {
       productId: product.id,
       qty: Math.max(1, Number(line.qty || 1)),
       price: Number(line.price ?? product.price),
       discount: Math.max(0, Number(line.discount || 0))
     };
-  });
+  }).filter(Boolean);
 }
 
 function nextId(prefix, collection) {
@@ -1784,7 +1759,7 @@ function renderCheckoutPanel(full = false) {
                     <td><button class="secondary" type="button" data-remove-cart="${index}">Прибрати</button></td>
                   </tr>
                 `;
-              }).join("")}
+              }).join("") || '<tr><td colspan="8" class="muted">Залишків ще не імпортовано з SQL. Локальні демо-залишки вимкнено.</td></tr>'}
             </tbody>
           </table>
         </div>
@@ -2126,7 +2101,7 @@ function renderStock() {
                   <td>${row.quantity}</td>
                   <td><span class="pill ${row.balanceSign === "negative" ? "danger" : row.balanceSign === "zero" ? "warn" : "good"}">${escapeHtml(row.balanceSign)}</span></td>
                 </tr>
-              `).join("") || '<tr><td colspan="7" class="muted">Серійних залишків ще немає в SQL snapshot.</td></tr>'}
+              `).join("") || '<tr><td colspan="7" class="muted">Серійних залишків ще не імпортовано з SQL.</td></tr>'}
             </tbody>
           </table>
         </div>
@@ -2285,7 +2260,7 @@ function renderCatalog() {
                   <td>${stockQty(product.id)}</td>
                   <td>${canDo("sale_create") ? `<button class="secondary" type="button" data-add-cart="${escapeHtml(product.id)}">У продаж</button>` : ""}</td>
                 </tr>
-              `).join("")}
+              `).join("") || '<tr><td colspan="9" class="muted">Товарів ще не імпортовано з SQL. Ручне створення SKU вимкнено.</td></tr>'}
             </tbody>
           </table>
         </div>
@@ -2362,7 +2337,6 @@ function renderCustomers() {
           </div>
           <div class="panel-actions">
             <span class="pill">${state.customers.length} карток</span>
-            <a class="button-link secondary" href="#new-customer-card">Новий клієнт</a>
           </div>
         </div>
         <div class="table-wrap">
@@ -2384,7 +2358,7 @@ function renderCustomers() {
                     <td>${canDo("sale_create") ? `<button class="secondary" type="button" data-select-customer="${escapeHtml(customer.id)}">У продаж</button>` : ""}</td>
                   </tr>
                 `;
-              }).join("")}
+              }).join("") || '<tr><td colspan="8" class="muted">Клієнтів ще не імпортовано з SQL. Ручне створення клієнтів вимкнено.</td></tr>'}
             </tbody>
           </table>
         </div>
@@ -2409,21 +2383,9 @@ function renderCustomers() {
             LEFT JOIN one_c_mirror.crm_counterparty_balance_summary b USING (enterprise_code, counterparty_code)
           </div>
         </div>
-      </article>
-      <article class="panel" id="new-customer-card">
-        <div class="split">
-          <div>
-            <p class="eyebrow">Клієнти</p>
-            <h2>Новий клієнт</h2>
-          </div>
-          <span class="pill">картка лояльності</span>
-        </div>
-        <form class="form-grid one-col" data-action="create-customer">
-          <label class="field"><span>Ім'я</span><input name="name" required placeholder="ПІБ або назва"></label>
-          <label class="field"><span>Телефон</span><input name="phone" placeholder="+380..."></label>
-          <label class="field"><span>Лояльність</span><select name="loyalty">${Object.entries(LOYALTY_LABELS).map(([id, label]) => option(id, label)).join("")}</select></label>
-          <button class="primary" type="submit">Створити клієнта</button>
-        </form>
+        ${canDo("sql_import") ? `<form class="form-grid one-col" data-action="sync-sql-counterparties">
+          <button class="primary" type="submit">Імпортувати клієнтів з SQL</button>
+        </form>` : '<p class="muted">SQL-імпорт клієнтів приховано для цієї ролі.</p>'}
       </article>
     </section>
   `;
@@ -2689,7 +2651,6 @@ function scanCheckoutProduct(value) {
 
 function removeCartLine(index) {
   state.checkout.lines.splice(index, 1);
-  if (!state.checkout.lines.length) state.checkout.lines.push({ productId: state.products[0].id, qty: 1, discount: 0 });
   saveState();
   render();
 }
@@ -2797,7 +2758,7 @@ function postConfirmedReceipt() {
   };
   state.receipts.unshift(receipt);
   applyPaymentToShift(shift, receipt.paymentMethod, receipt.total, "sale");
-  state.checkout.lines = [{ productId: state.products[0].id, qty: 1, discount: 0 }];
+  state.checkout.lines = [];
   state.checkout.note = "";
   state.saleConfirm = { open: false, paymentMethod: state.checkout.paymentMethod };
   state.currentView = "pos";
@@ -2811,14 +2772,18 @@ function syncProductsFromSql() {
   state.products = sqlProductSnapshot.map((row) => normalizeProduct(productFromSql(row)));
   state.stock = sqlStockBalanceSnapshot.map((row) => normalizeStockBalance(stockFromSql(row)));
   state.serialStock = sqlSerialStockSnapshot.map((row) => normalizeSerialStock(serialStockFromSql(row)));
-  state.customers = [
-    normalizeCustomer({ id: "walk-in", name: "Роздрібний покупець", phone: "", loyalty: "standard" }),
-    ...sqlCustomerSnapshot.map(normalizeCustomer)
-  ];
+  state.customers = sqlCustomerSnapshot.map(normalizeCustomer);
   state.references = clone(sqlReferenceSnapshot);
+  state.stockReceipts = sqlStockReceiptSnapshot.map((row) => normalizeStockReceipt(stockReceiptFromSql(row)));
   state.productImport = {
     source: SQL_PRODUCT_SOURCE,
     rows: sqlProductSnapshot.length,
+    lastRunAt: nowIso(),
+    mode: "manual-sync"
+  };
+  state.stockImport = {
+    source: SQL_STOCK_RECEIPT_SOURCE,
+    rows: state.stock.length,
     lastRunAt: nowIso(),
     mode: "manual-sync"
   };
@@ -2840,26 +2805,26 @@ function syncProductsFromSql() {
   render();
 }
 
-function createCustomer(form) {
-  const data = Object.fromEntries(new FormData(form).entries());
-  const name = String(data.name || "").trim();
-  if (!name) return alert("Вкажіть ім'я клієнта.");
-  const phone = String(data.phone || "").trim();
-  if (phone && state.customers.some((customer) => customer.phone === phone)) {
-    return alert("Клієнт з таким телефоном вже існує.");
+function syncCounterpartiesFromSql() {
+  if (!canDo("sql_import")) return alert("Немає дозволу виконувати SQL-імпорт.");
+  state.customers = sqlCustomerSnapshot.map(normalizeCustomer);
+  state.counterpartyImport = {
+    source: SQL_COUNTERPARTY_SOURCE,
+    rows: state.customers.length,
+    lastRunAt: nowIso(),
+    mode: "manual-sync"
+  };
+  if (state.checkout.customerId !== "walk-in" && !state.customers.some((customer) => customer.id === state.checkout.customerId)) {
+    state.checkout.customerId = "walk-in";
+    state.checkout.customerSearch = "";
   }
-  const customer = normalizeCustomer({
-    id: `c-${Date.now()}`,
-    name,
-    phone,
-    loyalty: data.loyalty || "standard"
-  });
-  state.customers.push(customer);
-  state.checkout.customerId = customer.id;
-  state.checkout.customerSearch = customerLookupValue(customer);
-  audit(`Створено клієнта ${customer.name} (${LOYALTY_LABELS[customer.loyalty]})`);
+  audit(`Імпортовано ${state.customers.length} клієнтів/контрагентів з PostgreSQL ${SQL_SCHEMA} (${SQL_COUNTERPARTY_SOURCE})`);
   saveState();
   render();
+}
+
+function createCustomer(form) {
+  alert("Ручне створення клієнтів вимкнено. Клієнти/контрагенти надходять тільки через SQL-імпорт one_c_mirror.");
 }
 
 function selectCustomer(customerId) {
@@ -3647,9 +3612,9 @@ document.addEventListener("click", (event) => {
   if (cancelSaleConfirmButton) return cancelSalePaymentConfirm();
   const cancelReturnConfirmButton = event.target.closest("[data-cancel-return-confirm]");
   if (cancelReturnConfirmButton) return cancelReturnRefundConfirm();
-  if (event.target.id === "reset-demo") {
+  if (event.target.id === "reset-local-state") {
     state = clone(seedState);
-    audit("Скинуто demo-дані", "manager");
+    audit("Скинуто локальний стан B2C. Товари, клієнти, залишки й чеки очищені до нового SQL-імпорту.", "manager");
     saveState();
     render();
   }
@@ -3737,6 +3702,7 @@ document.addEventListener("submit", (event) => {
   if (form.dataset.action === "confirm-return-refund") confirmReturnRefund(form);
   if (form.dataset.action === "save-document-edit") saveDocumentEdit(form);
   if (form.dataset.action === "sync-sql-products") syncProductsFromSql();
+  if (form.dataset.action === "sync-sql-counterparties") syncCounterpartiesFromSql();
   if (form.dataset.action === "create-customer") createCustomer(form);
   if (form.dataset.action === "create-return") createPartialReturn(form);
   if (form.dataset.action === "sync-sql-stock-receipts") syncStockReceiptsFromSql();
