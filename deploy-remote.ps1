@@ -13,7 +13,7 @@ $ProjectRoot = $PSScriptRoot
 $PublicHostValue = if ($PublicHost) { $PublicHost } else { $ComputerName }
 $StageRoot = Join-Path $env:TEMP "retail-crm-deploy-stage"
 $PackagePath = Join-Path $env:TEMP "retail-crm-deploy.zip"
-$BundledNode = "C:\Users\User\.cache\codex-runtimes\codex-primary-runtime\dependencies\node"
+$BundledNodeExe = "C:\Users\User\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe"
 
 Write-Host "Preparing B2C Retail CRM deployment package..."
 Remove-Item -LiteralPath $StageRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -33,15 +33,12 @@ if ($LASTEXITCODE -gt 7) {
 }
 
 if ($IncludeBundledNode) {
-  if (-not (Test-Path $BundledNode)) {
-    throw "Bundled Node was not found at $BundledNode"
+  if (-not (Test-Path $BundledNodeExe)) {
+    throw "Bundled Node executable was not found at $BundledNodeExe"
   }
-  $RuntimeNode = Join-Path $StageRoot ".runtime\node"
-  New-Item -ItemType Directory -Path $RuntimeNode -Force | Out-Null
-  & robocopy $BundledNode $RuntimeNode /MIR | Out-Null
-  if ($LASTEXITCODE -gt 7) {
-    throw "Node robocopy failed with exit code $LASTEXITCODE"
-  }
+  $RuntimeNodeBin = Join-Path $StageRoot ".runtime\node\bin"
+  New-Item -ItemType Directory -Path $RuntimeNodeBin -Force | Out-Null
+  Copy-Item -LiteralPath $BundledNodeExe -Destination (Join-Path $RuntimeNodeBin "node.exe") -Force
 }
 
 Compress-Archive -Path (Join-Path $StageRoot "*") -DestinationPath $PackagePath -Force
