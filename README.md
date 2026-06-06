@@ -44,6 +44,7 @@ MVP-прототип містить:
 - Клієнти/контрагенти прив'язані до `crm_counterparties`, `crm_counterparty_contracts`, `crm_counterparty_settlements`, `crm_counterparty_balance_summary`.
 - Для категорій із папок B2C використовує views `one_c_mirror.crm_product_folder_attributes` і `one_c_mirror.crm_products_enriched`, які додані SQL-міграцією `005_one_c_product_folder_attributes.sql`.
 - Окремий блок `Обмін даними` показує імпортоване, експортоване, перебіг процесу, журнал обміну і налаштування автоматизації. Доступ до перегляду, імпорту, експорту й автоматизації керується матрицею ролей.
+- Імпортні дії зібрані тільки в блоці `Обмін даними`; у довідниках `Товари`, `Клієнти і лояльність` та `Залишки` блоки запуску імпорту не показуються.
 
 ## GitHub
 

@@ -1,7 +1,7 @@
 "use strict";
 
-const APP_VERSION = "2026.06.06.3";
-const APP_BUILD = "20260606-b2c-data-exchange";
+const APP_VERSION = "2026.06.06.4";
+const APP_BUILD = "20260606-b2c-directories-no-import";
 const STORAGE_KEY = "retail-crm-b2c-v11";
 const ROLE_PERMISSION_SCHEMA = "20260606-data-exchange";
 const SCHEMA_DEFAULT_ACTIONS = ["drilldown_view", "document_edit", "document_list_view", "document_list_sort", "document_list_collapse", "exchange_view"];
@@ -2249,14 +2249,12 @@ function renderInventorySheet(rows, totals) {
 
 function renderStock() {
   setTitle("Залишки магазину");
-  const receiptRows = state.stockReceipts.slice(0, 6);
   const allRows = inventoryRows();
   const inventorySearch = String(state.inventory.search || "").trim();
   const rows = allRows.filter((row) => productMatchesQuery(row.product, inventorySearch));
   const totals = inventoryTotals(allRows);
   const printTotals = inventoryTotals(rows);
   const resortTotals = inventoryResortTotals();
-  const canImportSql = canDo("sql_import");
   const canPostInventory = canDo("inventory_post");
   const canResortInventory = canDo("inventory_resort");
   return `
@@ -2301,49 +2299,6 @@ function renderStock() {
                   <td><span class="pill ${row.balanceSign === "negative" ? "danger" : row.balanceSign === "zero" ? "warn" : "good"}">${escapeHtml(row.balanceSign)}</span></td>
                 </tr>
               `).join("") || '<tr><td colspan="7" class="muted">Серійних залишків ще не імпортовано з SQL.</td></tr>'}
-            </tbody>
-          </table>
-        </div>
-      </article>
-      <article class="panel">
-        <div class="split">
-          <h2>Імпорт залишків з SQL</h2>
-          <span class="pill good">ручне оприбуткування вимкнено</span>
-        </div>
-        <div class="stack">
-          <div class="log-row">
-            <strong>Джерело</strong>
-            <span>${escapeHtml(state.stockImport.source || SQL_STOCK_RECEIPT_SOURCE)}</span>
-          </div>
-          <div class="log-row">
-            <strong>Останній імпорт</strong>
-            <span>${formatDateTime(state.stockImport.lastRunAt)} · ${state.stockImport.rows || 0} рядків</span>
-          </div>
-          <div class="sql-box">
-            SELECT b.product_code, b.product_name, b.warehouse_code, w.warehouse_name,
-                   b.quantity, b.reserved_quantity
-            FROM one_c_mirror.crm_stock_balances b
-            LEFT JOIN one_c_mirror.crm_warehouses w USING (enterprise_code, warehouse_code)
-            WHERE b.warehouse_code IN ('2') OR w.warehouse_name ILIKE '%Гуртовий%'
-          </div>
-          <p class="muted">Надходження в магазин не вводяться вручну. Поточні залишки, склади, серійні номери і кількість приходять тільки з SQL-джерела.</p>
-        </div>
-        ${canImportSql ? `<form class="form-grid one-col" data-action="sync-sql-stock-receipts">
-          <button class="primary" type="submit">Імпортувати залишки з SQL</button>
-        </form>` : '<p class="muted">SQL-імпорт залишків приховано для цієї ролі.</p>'}
-        <div class="table-wrap section-gap">
-          <table>
-            <thead><tr><th>SQL джерело</th><th>Дата</th><th>product_code</th><th>Склад</th><th>К-сть</th></tr></thead>
-            <tbody>
-              ${receiptRows.map((item) => `
-                <tr>
-                  <td>${escapeHtml(item.sqlId || item.id)}</td>
-                  <td>${escapeHtml(item.date)}</td>
-                  <td>${escapeHtml(productById(item.productId).productCode || productById(item.productId).sku)}</td>
-                  <td>${escapeHtml(warehouseLabel(item.warehouseCode, item.warehouseName))}</td>
-                  <td><strong>${item.qty}</strong></td>
-                </tr>
-              `).join("") || '<tr><td colspan="5" class="muted">SQL-залишків ще немає.</td></tr>'}
             </tbody>
           </table>
         </div>
@@ -2466,43 +2421,6 @@ function renderCatalog() {
       </article>
       <article class="panel">
         <div class="split">
-          <h2>Імпорт товарів з SQL</h2>
-          <span class="pill good">ручне SKU вимкнено</span>
-        </div>
-        <div class="stack">
-          <div class="log-row">
-            <strong>Джерело</strong>
-            <span>${escapeHtml(state.productImport.source || SQL_PRODUCT_SOURCE)}</span>
-          </div>
-          <div class="log-row">
-            <strong>Останній імпорт</strong>
-            <span>${formatDateTime(state.productImport.lastRunAt)} · ${state.productImport.rows || 0} рядків</span>
-          </div>
-          <div class="sql-box">
-            SELECT p.product_code, p.product_name, p.product_group_path,
-                   p.product_full_path, p.product_group_code_path, p.product_group_level,
-                   ps.price_summary, ps.price_currencies, ps.price_types,
-                   f.category_primary, f.supply_channel, f.is_spare_part
-            FROM one_c_mirror.crm_products p
-            LEFT JOIN one_c_mirror.crm_product_price_summary ps USING (enterprise_code, product_code)
-            LEFT JOIN one_c_mirror.crm_products_enriched f USING (enterprise_code, product_code)
-          </div>
-          <p class="muted">SKU у роздробі не створюється вручну. Товари, ціни, штрихкоди та базові залишки приходять тільки з SQL-джерела.</p>
-          <div class="log-row">
-            <strong>Готові views</strong>
-            <span>${SQL_READY_VIEWS.map((name) => `${SQL_SCHEMA}.${name}`).join(", ")}</span>
-          </div>
-          <div class="log-row">
-            <strong>Папкові характеристики</strong>
-            <span>${SQL_PENDING_VIEWS.length ? SQL_PENDING_VIEWS.map((name) => `${SQL_SCHEMA}.${name}`).join(", ") : `${SQL_SCHEMA}.crm_product_folder_attributes, ${SQL_SCHEMA}.crm_products_enriched готові у міграції 005`}</span>
-          </div>
-        </div>
-        ${canDo("sql_import") ? `<form class="form-grid one-col" data-action="sync-sql-products">
-          <button class="primary" type="submit">Синхронізувати з SQL</button>
-        </form>` : '<p class="muted">SQL-імпорт приховано для цієї ролі.</p>'}
-      </article>
-      <article class="panel">
-        <div class="split">
           <h2>SQL довідники</h2>
           <span class="pill">${escapeHtml(SQL_REFERENCE_SOURCE)}</span>
         </div>
@@ -2561,30 +2479,6 @@ function renderCustomers() {
             </tbody>
           </table>
         </div>
-      </article>
-      <article class="panel">
-        <div class="split">
-          <h2>SQL джерело контрагентів</h2>
-          <span class="pill">${state.counterpartyImport.rows || 0} контрагентів</span>
-        </div>
-        <div class="stack">
-          <div class="log-row">
-            <strong>Джерело</strong>
-            <span>${escapeHtml(state.counterpartyImport.source || SQL_COUNTERPARTY_SOURCE)}</span>
-          </div>
-          <div class="sql-box">
-            SELECT c.counterparty_code, c.counterparty_name,
-                   co.contract_code, co.contract_name,
-                   s.amount, b.balance_sign
-            FROM one_c_mirror.crm_counterparties c
-            LEFT JOIN one_c_mirror.crm_counterparty_contracts co USING (enterprise_code, counterparty_code)
-            LEFT JOIN one_c_mirror.crm_counterparty_settlements s USING (enterprise_code, counterparty_code)
-            LEFT JOIN one_c_mirror.crm_counterparty_balance_summary b USING (enterprise_code, counterparty_code)
-          </div>
-        </div>
-        ${canDo("sql_import") ? `<form class="form-grid one-col" data-action="sync-sql-counterparties">
-          <button class="primary" type="submit">Імпортувати клієнтів з SQL</button>
-        </form>` : '<p class="muted">SQL-імпорт клієнтів приховано для цієї ролі.</p>'}
       </article>
     </section>
   `;
