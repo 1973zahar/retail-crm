@@ -65,10 +65,22 @@ try {
   Invoke-Command -Session $Session -ArgumentList $RemotePath, $RemoteZip -ScriptBlock {
     param($TargetPath, $ZipPath)
     $Parent = Split-Path -Parent $TargetPath
+    $ExtractPath = Join-Path $env:TEMP ("retail-crm-extract-" + [guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Path $Parent -Force | Out-Null
     New-Item -ItemType Directory -Path $TargetPath -Force | Out-Null
-    Expand-Archive -Path $ZipPath -DestinationPath $TargetPath -Force
-    Remove-Item -LiteralPath $ZipPath -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Path $ExtractPath -Force | Out-Null
+    try {
+      if (Get-Command Expand-Archive -ErrorAction SilentlyContinue) {
+        Expand-Archive -Path $ZipPath -DestinationPath $ExtractPath -Force
+      } else {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [System.IO.Compression.ZipFile]::ExtractToDirectory($ZipPath, $ExtractPath)
+      }
+      Copy-Item -Path (Join-Path $ExtractPath "*") -Destination $TargetPath -Recurse -Force
+    } finally {
+      Remove-Item -LiteralPath $ExtractPath -Recurse -Force -ErrorAction SilentlyContinue
+      Remove-Item -LiteralPath $ZipPath -Force -ErrorAction SilentlyContinue
+    }
   }
 
   $NodeStatus = Invoke-Command -Session $Session -ArgumentList $RemotePath -ScriptBlock {
