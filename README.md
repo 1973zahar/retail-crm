@@ -43,6 +43,7 @@ MVP-прототип містить:
 - Серійні номери прив'язані до `crm_serial_stock_current`, `crm_serial_stock_by_serial`, `crm_serial_stock_summary` і показують товар, склад, серійний номер, кількість, знак залишку, `product_code` та `warehouse_code`.
 - Клієнти/контрагенти прив'язані до `crm_counterparties`, `crm_counterparty_contracts`, `crm_counterparty_settlements`, `crm_counterparty_balance_summary`.
 - Для категорій із папок B2C використовує views `one_c_mirror.crm_product_folder_attributes` і `one_c_mirror.crm_products_enriched`, які додані SQL-міграцією `005_one_c_product_folder_attributes.sql`.
+- Окремий блок `Обмін даними` показує імпортоване, експортоване, перебіг процесу, журнал обміну і налаштування автоматизації. Доступ до перегляду, імпорту, експорту й автоматизації керується матрицею ролей.
 
 ## GitHub
 

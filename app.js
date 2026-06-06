@@ -1,10 +1,10 @@
 "use strict";
 
-const APP_VERSION = "2026.06.06.2";
-const APP_BUILD = "20260606-b2c-sql-import-only";
-const STORAGE_KEY = "retail-crm-b2c-v10";
-const ROLE_PERMISSION_SCHEMA = "20260605-document-lists";
-const SCHEMA_DEFAULT_ACTIONS = ["drilldown_view", "document_edit", "document_list_view", "document_list_sort", "document_list_collapse"];
+const APP_VERSION = "2026.06.06.3";
+const APP_BUILD = "20260606-b2c-data-exchange";
+const STORAGE_KEY = "retail-crm-b2c-v11";
+const ROLE_PERMISSION_SCHEMA = "20260606-data-exchange";
+const SCHEMA_DEFAULT_ACTIONS = ["drilldown_view", "document_edit", "document_list_view", "document_list_sort", "document_list_collapse", "exchange_view"];
 
 const nowIso = () => new Date().toISOString();
 const today = () => nowIso().slice(0, 10);
@@ -58,6 +58,7 @@ const ROLE_BLOCKS = [
   { id: "customers", label: "Клієнти і лояльність" },
   { id: "stock", label: "Залишки" },
   { id: "inventory", label: "Інвентаризація" },
+  { id: "exchange", label: "Обмін даними" },
   { id: "reports", label: "Звіти" },
   { id: "employees", label: "Працівники" },
   { id: "log", label: "Журнал" }
@@ -75,6 +76,10 @@ const ROLE_ACTIONS = [
   { id: "inventory_post", label: "Провести інвентаризацію" },
   { id: "inventory_resort", label: "Пересорт" },
   { id: "sql_import", label: "SQL імпорт" },
+  { id: "exchange_view", label: "Перегляд обміну даними" },
+  { id: "exchange_import", label: "Керувати імпортом" },
+  { id: "exchange_export", label: "Керувати експортом" },
+  { id: "exchange_automation", label: "Налаштування автоматизації" },
   { id: "employee_manage", label: "Керувати працівниками" },
   { id: "reports_view", label: "Звіти" },
   { id: "audit_view", label: "Журнал дій" }
@@ -87,8 +92,8 @@ const EMPLOYEE_ROLES = {
   },
   admin: {
     label: "Адміністратор",
-    blocks: ["dashboard", "pos", "returns", "catalog", "customers", "stock", "inventory", "reports", "employees", "log"],
-    actions: ["sale_create", "return_create", "drilldown_view", "document_edit", "document_list_view", "document_list_sort", "document_list_collapse", "cash_open", "cash_close", "inventory_post", "inventory_resort", "sql_import", "employee_manage", "reports_view", "audit_view"]
+    blocks: ["dashboard", "pos", "returns", "catalog", "customers", "stock", "inventory", "exchange", "reports", "employees", "log"],
+    actions: ["sale_create", "return_create", "drilldown_view", "document_edit", "document_list_view", "document_list_sort", "document_list_collapse", "cash_open", "cash_close", "inventory_post", "inventory_resort", "sql_import", "exchange_view", "exchange_import", "exchange_export", "exchange_automation", "employee_manage", "reports_view", "audit_view"]
   },
   seller: {
     label: "Продавець",
@@ -478,6 +483,28 @@ const seedState = {
     lastRunAt: "",
     mode: "not-imported"
   },
+  exchange: {
+    process: {
+      status: "idle",
+      label: "Очікує запуску",
+      progress: 0,
+      startedAt: "",
+      finishedAt: ""
+    },
+    automation: {
+      enabled: false,
+      interval: "manual",
+      importProducts: true,
+      importStock: true,
+      importCounterparties: true,
+      exportSales: false,
+      exportInventory: false,
+      notifyResponsible: true,
+      responsibleRole: "admin",
+      lastRunAt: ""
+    },
+    records: []
+  },
   inventory: {
     id: "INV-DRAFT",
     date: today(),
@@ -506,6 +533,7 @@ const navItems = [
     ["customers", "Клієнти і лояльність"],
     ["stock", "Залишки"]
   ] },
+  ["exchange", "Обмін даними"],
   ["returns", "Повернення"],
   ["reports", "Звіт дня"],
   ["employees", "Працівники"],
@@ -565,6 +593,7 @@ function normalizeState(input) {
     ...clone(seedState.counterpartyImport),
     ...(next.counterpartyImport || {})
   };
+  next.exchange = normalizeExchange(next.exchange);
   next.receipts = Array.isArray(next.receipts) ? next.receipts.map((receipt) => normalizeReceipt(receipt, next.products)) : [];
   next.returns = Array.isArray(next.returns) ? next.returns.map(normalizeReturnDoc) : [];
   next.cashShifts = Array.isArray(next.cashShifts) ? next.cashShifts.map(normalizeShift) : clone(seedState.cashShifts);
@@ -750,6 +779,50 @@ function normalizeListUi(input) {
   }));
 }
 
+function normalizeExchange(input) {
+  const source = input || {};
+  const automation = source.automation || {};
+  const intervals = new Set(["manual", "hourly", "daily", "weekly"]);
+  const responsibleRoles = new Set(Object.keys(EMPLOYEE_ROLES));
+  return {
+    process: {
+      ...clone(seedState.exchange.process),
+      ...(source.process || {}),
+      progress: Math.max(0, Math.min(100, Number(source.process?.progress || 0)))
+    },
+    automation: {
+      ...clone(seedState.exchange.automation),
+      ...automation,
+      enabled: Boolean(automation.enabled),
+      interval: intervals.has(automation.interval) ? automation.interval : seedState.exchange.automation.interval,
+      importProducts: automation.importProducts !== false,
+      importStock: automation.importStock !== false,
+      importCounterparties: automation.importCounterparties !== false,
+      exportSales: Boolean(automation.exportSales),
+      exportInventory: Boolean(automation.exportInventory),
+      notifyResponsible: automation.notifyResponsible !== false,
+      responsibleRole: responsibleRoles.has(automation.responsibleRole) ? automation.responsibleRole : seedState.exchange.automation.responsibleRole
+    },
+    records: Array.isArray(source.records) ? source.records.map(normalizeExchangeRecord).slice(0, 80) : []
+  };
+}
+
+function normalizeExchangeRecord(record) {
+  return {
+    id: record.id || nextId("EXCH", []),
+    direction: ["import", "export"].includes(record.direction) ? record.direction : "import",
+    dataset: record.dataset || "Дані",
+    source: record.source || "",
+    destination: record.destination || "",
+    status: ["queued", "running", "done", "error"].includes(record.status) ? record.status : "done",
+    rows: Number(record.rows || 0),
+    startedAt: record.startedAt || nowIso(),
+    finishedAt: record.finishedAt || record.startedAt || nowIso(),
+    actor: record.actor || "system",
+    details: record.details || ""
+  };
+}
+
 function normalizeReceipt(receipt, products) {
   if (Array.isArray(receipt.lines)) {
     const lines = receipt.lines.map((line) => ({
@@ -921,6 +994,132 @@ function saveState() {
 function audit(event, actor = "manager") {
   state.auditLog.unshift({ at: nowIso(), actor, event });
   state.auditLog = state.auditLog.slice(0, 100);
+}
+
+function exchangeStatusLabel(status) {
+  return { idle: "Очікує", running: "Виконується", done: "Завершено", error: "Помилка", queued: "У черзі" }[status] || status || "-";
+}
+
+function exchangeDirectionLabel(direction) {
+  return direction === "export" ? "Експорт" : "Імпорт";
+}
+
+function exchangeIntervalLabel(interval) {
+  return { manual: "Ручний запуск", hourly: "Щогодини", daily: "Щодня", weekly: "Щотижня" }[interval] || interval || "-";
+}
+
+function exchangeRecordStatusClass(status) {
+  return status === "error" ? "danger" : status === "running" || status === "queued" ? "warn" : "good";
+}
+
+function setExchangeProcess(label, progress = 0, status = "running") {
+  state.exchange.process = {
+    status,
+    label,
+    progress: Math.max(0, Math.min(100, Number(progress || 0))),
+    startedAt: status === "running" ? nowIso() : state.exchange.process.startedAt,
+    finishedAt: status === "running" ? "" : nowIso()
+  };
+}
+
+function finishExchangeProcess(label, status = "done") {
+  state.exchange.process = {
+    ...state.exchange.process,
+    status,
+    label,
+    progress: status === "done" ? 100 : state.exchange.process.progress,
+    finishedAt: nowIso()
+  };
+}
+
+function addExchangeRecord(record) {
+  const normalized = normalizeExchangeRecord({
+    id: nextId(record.direction === "export" ? "EXP" : "IMP", state.exchange.records),
+    actor: currentEmployee()?.name || "manager",
+    startedAt: nowIso(),
+    finishedAt: nowIso(),
+    status: "done",
+    ...record
+  });
+  state.exchange.records.unshift(normalized);
+  state.exchange.records = state.exchange.records.slice(0, 80);
+  return normalized;
+}
+
+function importSummaryRows() {
+  return Number(state.productImport.rows || 0)
+    + Number(state.stockImport.rows || 0)
+    + Number(state.serialImport.rows || 0)
+    + Number(state.counterpartyImport.rows || 0);
+}
+
+function exportSalesToSql(renderAfter = true) {
+  if (!canDo("exchange_export")) return alert("Немає дозволу керувати експортом.");
+  setExchangeProcess("Експорт продажів у SQL-чергу", 65);
+  const rows = state.receipts.length;
+  const record = addExchangeRecord({
+    direction: "export",
+    dataset: "Продажі B2C",
+    destination: `${SQL_SCHEMA}.b2c_sales_export_queue`,
+    rows,
+    details: rows ? "Чеки підготовлено до експорту в SQL-шар." : "Немає чеків для експорту."
+  });
+  finishExchangeProcess(`Експорт продажів завершено: ${rows} рядків`);
+  audit(`Експортовано ${rows} продажів у SQL-чергу (${record.destination})`);
+  saveState();
+  if (renderAfter) render();
+}
+
+function exportInventoryToSql(renderAfter = true) {
+  if (!canDo("exchange_export")) return alert("Немає дозволу керувати експортом.");
+  setExchangeProcess("Експорт інвентаризацій у SQL-чергу", 65);
+  const rows = state.inventoryDocs.length;
+  const record = addExchangeRecord({
+    direction: "export",
+    dataset: "Інвентаризації B2C",
+    destination: `${SQL_SCHEMA}.b2c_inventory_export_queue`,
+    rows,
+    details: rows ? "Документи інвентаризації підготовлено до експорту в SQL-шар." : "Немає проведених інвентаризацій для експорту."
+  });
+  finishExchangeProcess(`Експорт інвентаризацій завершено: ${rows} рядків`);
+  audit(`Експортовано ${rows} інвентаризацій у SQL-чергу (${record.destination})`);
+  saveState();
+  if (renderAfter) render();
+}
+
+function updateExchangeAutomation(form) {
+  if (!canDo("exchange_automation")) return alert("Немає дозволу налаштовувати автоматизацію.");
+  const data = Object.fromEntries(new FormData(form).entries());
+  state.exchange.automation = normalizeExchange({
+    automation: {
+      enabled: data.enabled === "on",
+      interval: data.interval,
+      importProducts: data.importProducts === "on",
+      importStock: data.importStock === "on",
+      importCounterparties: data.importCounterparties === "on",
+      exportSales: data.exportSales === "on",
+      exportInventory: data.exportInventory === "on",
+      notifyResponsible: data.notifyResponsible === "on",
+      responsibleRole: data.responsibleRole
+    }
+  }).automation;
+  audit(`Оновлено автоматизацію обміну даними: ${state.exchange.automation.enabled ? "увімкнено" : "вимкнено"}, ${state.exchange.automation.interval}`);
+  saveState();
+  render();
+}
+
+function runExchangeAutomationNow() {
+  if (!canDo("exchange_automation")) return alert("Немає дозволу запускати автоматизацію.");
+  const automation = state.exchange.automation;
+  if (automation.importProducts) syncProductsFromSql("automation", false);
+  if (automation.importStock) syncStockReceiptsFromSql("automation", false);
+  if (automation.importCounterparties) syncCounterpartiesFromSql("automation", false);
+  if (automation.exportSales) exportSalesToSql(false);
+  if (automation.exportInventory) exportInventoryToSql(false);
+  state.exchange.automation.lastRunAt = nowIso();
+  audit("Автоматизацію обміну даними запущено вручну");
+  saveState();
+  render();
 }
 
 function productById(id) {
@@ -2586,6 +2785,144 @@ function renderEmployees() {
   `;
 }
 
+function renderExchange() {
+  setTitle("Обмін даними");
+  if (!canDo("exchange_view")) {
+    return `
+      <section class="panel">
+        <h2>Обмін даними</h2>
+        <p class="muted">Роль має пункт меню, але не має дозволу "Перегляд обміну даними". Увімкніть його в матриці ролей.</p>
+      </section>
+    `;
+  }
+  const process = state.exchange.process;
+  const automation = state.exchange.automation;
+  const records = state.exchange.records;
+  const importedRows = importSummaryRows();
+  const exportedSales = records.filter((item) => item.direction === "export" && item.dataset.includes("Продаж")).reduce((sum, item) => sum + Number(item.rows || 0), 0);
+  const exportedInventory = records.filter((item) => item.direction === "export" && item.dataset.includes("Інвентариза")).reduce((sum, item) => sum + Number(item.rows || 0), 0);
+  const canImport = canDo("exchange_import") || canDo("sql_import");
+  const canExport = canDo("exchange_export");
+  const canAutomation = canDo("exchange_automation");
+  return `
+    <section class="grid four">
+      <article class="card metric"><span>Імпортовано</span><strong>${importedRows}</strong><small>Товари, залишки, серії, клієнти.</small></article>
+      <article class="card metric"><span>Експорт продажів</span><strong>${exportedSales}</strong><small>Рядків у SQL-чергу.</small></article>
+      <article class="card metric"><span>Експорт інвентаризацій</span><strong>${exportedInventory}</strong><small>Проведені документи.</small></article>
+      <article class="card metric"><span>Автоматизація</span><strong>${automation.enabled ? "Увімкнено" : "Вимкнено"}</strong><small>${exchangeIntervalLabel(automation.interval)} · ${roleLabel(automation.responsibleRole)}</small></article>
+    </section>
+
+    <section class="stacked-panels section-gap">
+      <article class="panel">
+        <div class="split">
+          <div>
+            <p class="eyebrow">B2C. Обмін даними</p>
+            <h2>Перебіг процесу</h2>
+          </div>
+          <span class="pill ${exchangeRecordStatusClass(process.status)}">${escapeHtml(exchangeStatusLabel(process.status))}</span>
+        </div>
+        <div class="stack">
+          <div class="log-row">
+            <strong>${escapeHtml(process.label || "Очікує запуску")}</strong>
+            <span>${process.startedAt ? `старт ${formatDateTime(process.startedAt)}` : "ще не запускався"}${process.finishedAt ? ` · фініш ${formatDateTime(process.finishedAt)}` : ""}</span>
+          </div>
+          <progress max="100" value="${Number(process.progress || 0)}"></progress>
+          <div class="log-row">
+            <strong>Готові SQL views</strong>
+            <span>${SQL_READY_VIEWS.map((name) => `${SQL_SCHEMA}.${name}`).join(", ")}</span>
+          </div>
+        </div>
+      </article>
+
+      <article class="panel">
+        <div class="split">
+          <h2>Керування імпортом</h2>
+          <span class="pill">${canImport ? "дозволено роллю" : "заборонено роллю"}</span>
+        </div>
+        <div class="grid four">
+          <article class="card metric"><span>Товари</span><strong>${state.productImport.rows || 0}</strong><small>${state.productImport.lastRunAt ? formatDateTime(state.productImport.lastRunAt) : "не імпортовано"}</small></article>
+          <article class="card metric"><span>Залишки</span><strong>${state.stockImport.rows || 0}</strong><small>${state.stockImport.lastRunAt ? formatDateTime(state.stockImport.lastRunAt) : "не імпортовано"}</small></article>
+          <article class="card metric"><span>Серійні</span><strong>${state.serialImport.rows || 0}</strong><small>${state.serialImport.lastRunAt ? formatDateTime(state.serialImport.lastRunAt) : "не імпортовано"}</small></article>
+          <article class="card metric"><span>Клієнти</span><strong>${state.counterpartyImport.rows || 0}</strong><small>${state.counterpartyImport.lastRunAt ? formatDateTime(state.counterpartyImport.lastRunAt) : "не імпортовано"}</small></article>
+        </div>
+        ${canImport ? `<div class="toolbar section-gap">
+          <form data-action="exchange-full-import"><button class="primary" type="submit">Повний SQL-імпорт</button></form>
+          <form data-action="sync-sql-products"><button class="secondary" type="submit">Імпорт товарів</button></form>
+          <form data-action="sync-sql-stock-receipts"><button class="secondary" type="submit">Імпорт залишків</button></form>
+          <form data-action="sync-sql-counterparties"><button class="secondary" type="submit">Імпорт клієнтів</button></form>
+        </div>` : '<p class="muted section-gap">Роль не має дозволу на керування імпортом.</p>'}
+      </article>
+
+      <article class="panel">
+        <div class="split">
+          <h2>Керування експортом</h2>
+          <span class="pill">${canExport ? "дозволено роллю" : "заборонено роллю"}</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Що експортується</th><th>Кількість</th><th>Призначення</th><th>Стан</th></tr></thead>
+            <tbody>
+              <tr><td>Продажі B2C</td><td>${state.receipts.length}</td><td>${SQL_SCHEMA}.b2c_sales_export_queue</td><td>${state.receipts.length ? "готово" : "немає документів"}</td></tr>
+              <tr><td>Інвентаризації B2C</td><td>${state.inventoryDocs.length}</td><td>${SQL_SCHEMA}.b2c_inventory_export_queue</td><td>${state.inventoryDocs.length ? "готово" : "немає документів"}</td></tr>
+            </tbody>
+          </table>
+        </div>
+        ${canExport ? `<div class="toolbar section-gap">
+          <form data-action="exchange-export-sales"><button class="secondary" type="submit">Експорт продажів</button></form>
+          <form data-action="exchange-export-inventory"><button class="secondary" type="submit">Експорт інвентаризацій</button></form>
+        </div>` : '<p class="muted section-gap">Роль не має дозволу на керування експортом.</p>'}
+      </article>
+
+      <article class="panel">
+        <div class="split">
+          <h2>Налаштування автоматизації</h2>
+          <span class="pill ${automation.enabled ? "good" : ""}">${automation.enabled ? "активна" : "ручний режим"}</span>
+        </div>
+        ${canAutomation ? `<form class="form-grid" data-action="save-exchange-automation">
+          <label class="check-line"><input type="checkbox" name="enabled" ${automation.enabled ? "checked" : ""}> Увімкнути автоматизацію</label>
+          <label class="field"><span>Періодичність</span><select name="interval">${["manual", "hourly", "daily", "weekly"].map((id) => option(id, exchangeIntervalLabel(id), id === automation.interval)).join("")}</select></label>
+          <label class="field"><span>Відповідальна роль</span><select name="responsibleRole">${Object.entries(EMPLOYEE_ROLES).map(([id, role]) => option(id, role.label, id === automation.responsibleRole)).join("")}</select></label>
+          <label class="check-line"><input type="checkbox" name="importProducts" ${automation.importProducts ? "checked" : ""}> Імпорт товарів/цін/довідників</label>
+          <label class="check-line"><input type="checkbox" name="importStock" ${automation.importStock ? "checked" : ""}> Імпорт залишків і серійних номерів</label>
+          <label class="check-line"><input type="checkbox" name="importCounterparties" ${automation.importCounterparties ? "checked" : ""}> Імпорт клієнтів/контрагентів</label>
+          <label class="check-line"><input type="checkbox" name="exportSales" ${automation.exportSales ? "checked" : ""}> Експорт продажів</label>
+          <label class="check-line"><input type="checkbox" name="exportInventory" ${automation.exportInventory ? "checked" : ""}> Експорт інвентаризацій</label>
+          <label class="check-line"><input type="checkbox" name="notifyResponsible" ${automation.notifyResponsible ? "checked" : ""}> Позначати відповідального у журналі</label>
+          <div class="toolbar full">
+            <button class="primary" type="submit">Зберегти автоматизацію</button>
+            <button class="secondary" type="button" data-run-exchange-automation>Запустити зараз</button>
+          </div>
+        </form>` : '<p class="muted">Роль не має дозволу змінювати автоматизацію.</p>'}
+      </article>
+
+      <article class="panel">
+        <div class="split">
+          <h2>Журнал обміну</h2>
+          <span class="pill">${records.length} подій</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Час</th><th>Тип</th><th>Набір даних</th><th>Рядків</th><th>Джерело/призначення</th><th>Стан</th><th>Деталі</th></tr></thead>
+            <tbody>
+              ${records.map((record) => `
+                <tr>
+                  <td>${formatDateTime(record.finishedAt || record.startedAt)}</td>
+                  <td>${escapeHtml(exchangeDirectionLabel(record.direction))}</td>
+                  <td><strong>${escapeHtml(record.dataset)}</strong><br><span class="muted">${escapeHtml(record.actor)}</span></td>
+                  <td>${record.rows}</td>
+                  <td>${escapeHtml(record.direction === "export" ? record.destination : record.source)}</td>
+                  <td><span class="pill ${exchangeRecordStatusClass(record.status)}">${escapeHtml(exchangeStatusLabel(record.status))}</span></td>
+                  <td>${escapeHtml(record.details || "-")}</td>
+                </tr>
+              `).join("") || '<tr><td colspan="7" class="muted">Обмін ще не запускався.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+  `;
+}
+
 function renderLog() {
   setTitle("Операційний журнал");
   return `
@@ -2767,60 +3104,56 @@ function postConfirmedReceipt() {
   render();
 }
 
-function syncProductsFromSql() {
-  if (!canDo("sql_import")) return alert("Немає дозволу виконувати SQL-імпорт.");
+function syncProductsFromSql(mode = "manual-sync", renderAfter = true) {
+  if (!canDo("sql_import") && !canDo("exchange_import")) return alert("Немає дозволу виконувати SQL-імпорт.");
+  setExchangeProcess("Імпорт товарів, цін і довідників з SQL", 45);
   state.products = sqlProductSnapshot.map((row) => normalizeProduct(productFromSql(row)));
-  state.stock = sqlStockBalanceSnapshot.map((row) => normalizeStockBalance(stockFromSql(row)));
-  state.serialStock = sqlSerialStockSnapshot.map((row) => normalizeSerialStock(serialStockFromSql(row)));
-  state.customers = sqlCustomerSnapshot.map(normalizeCustomer);
   state.references = clone(sqlReferenceSnapshot);
-  state.stockReceipts = sqlStockReceiptSnapshot.map((row) => normalizeStockReceipt(stockReceiptFromSql(row)));
   state.productImport = {
     source: SQL_PRODUCT_SOURCE,
     rows: sqlProductSnapshot.length,
     lastRunAt: nowIso(),
-    mode: "manual-sync"
-  };
-  state.stockImport = {
-    source: SQL_STOCK_RECEIPT_SOURCE,
-    rows: state.stock.length,
-    lastRunAt: nowIso(),
-    mode: "manual-sync"
+    mode
   };
   state.inventory = normalizeInventory({ id: "INV-DRAFT", date: today(), lines: [] }, state.products, state.stock);
-  state.serialImport = {
-    source: SQL_SERIAL_STOCK_SOURCE,
-    rows: state.serialStock.length,
-    lastRunAt: nowIso(),
-    mode: "manual-sync"
-  };
-  state.counterpartyImport = {
-    source: SQL_COUNTERPARTY_SOURCE,
-    rows: sqlCustomerSnapshot.length,
-    lastRunAt: nowIso(),
-    mode: "manual-sync"
-  };
+  addExchangeRecord({
+    direction: "import",
+    dataset: "Товари, ціни, довідники",
+    source: SQL_PRODUCT_SOURCE,
+    rows: state.products.length,
+    details: "product_code, шляхи папок, ціни, валюти, характеристики, вид/серія/група"
+  });
+  finishExchangeProcess(`Імпорт товарів завершено: ${state.products.length} SKU`);
   audit(`Імпортовано ${state.products.length} SKU з PostgreSQL ${SQL_SCHEMA} (${SQL_PRODUCT_SOURCE})`);
   saveState();
-  render();
+  if (renderAfter) render();
 }
 
-function syncCounterpartiesFromSql() {
-  if (!canDo("sql_import")) return alert("Немає дозволу виконувати SQL-імпорт.");
+function syncCounterpartiesFromSql(mode = "manual-sync", renderAfter = true) {
+  if (!canDo("sql_import") && !canDo("exchange_import")) return alert("Немає дозволу виконувати SQL-імпорт.");
+  setExchangeProcess("Імпорт клієнтів/контрагентів з SQL", 55);
   state.customers = sqlCustomerSnapshot.map(normalizeCustomer);
   state.counterpartyImport = {
     source: SQL_COUNTERPARTY_SOURCE,
     rows: state.customers.length,
     lastRunAt: nowIso(),
-    mode: "manual-sync"
+    mode
   };
   if (state.checkout.customerId !== "walk-in" && !state.customers.some((customer) => customer.id === state.checkout.customerId)) {
     state.checkout.customerId = "walk-in";
     state.checkout.customerSearch = "";
   }
+  addExchangeRecord({
+    direction: "import",
+    dataset: "Клієнти/контрагенти",
+    source: SQL_COUNTERPARTY_SOURCE,
+    rows: state.customers.length,
+    details: "контрагенти, договори, сальдо, розрахунки"
+  });
+  finishExchangeProcess(`Імпорт клієнтів завершено: ${state.customers.length} карток`);
   audit(`Імпортовано ${state.customers.length} клієнтів/контрагентів з PostgreSQL ${SQL_SCHEMA} (${SQL_COUNTERPARTY_SOURCE})`);
   saveState();
-  render();
+  if (renderAfter) render();
 }
 
 function createCustomer(form) {
@@ -3110,8 +3443,9 @@ function toggleDocumentList(kind) {
   render();
 }
 
-function syncStockReceiptsFromSql() {
-  if (!canDo("sql_import")) return alert("Немає дозволу виконувати SQL-імпорт.");
+function syncStockReceiptsFromSql(mode = "manual-sync", renderAfter = true) {
+  if (!canDo("sql_import") && !canDo("exchange_import")) return alert("Немає дозволу виконувати SQL-імпорт.");
+  setExchangeProcess("Імпорт залишків і серійних номерів з SQL", 55);
   state.stockReceipts = sqlStockReceiptSnapshot.map((row) => normalizeStockReceipt(stockReceiptFromSql(row)));
   state.stock = sqlStockBalanceSnapshot.map((row) => normalizeStockBalance(stockFromSql(row)));
   state.serialStock = sqlSerialStockSnapshot.map((row) => normalizeSerialStock(serialStockFromSql(row)));
@@ -3119,16 +3453,43 @@ function syncStockReceiptsFromSql() {
     source: SQL_STOCK_RECEIPT_SOURCE,
     rows: state.stock.length,
     lastRunAt: nowIso(),
-    mode: "manual-sync"
+    mode
   };
   state.serialImport = {
     source: SQL_SERIAL_STOCK_SOURCE,
     rows: state.serialStock.length,
     lastRunAt: nowIso(),
-    mode: "manual-sync"
+    mode
   };
   state.inventory = normalizeInventory({ id: "INV-DRAFT", date: today(), lines: [] }, state.products, state.stock);
+  addExchangeRecord({
+    direction: "import",
+    dataset: "Залишки і серійні номери",
+    source: `${SQL_STOCK_RECEIPT_SOURCE}; ${SQL_SERIAL_STOCK_SOURCE}`,
+    rows: state.stock.length + state.serialStock.length,
+    details: `${SQL_MAIN_WAREHOUSE_NAME}, ${SQL_WHOLESALE_WAREHOUSE_NAME}, всі склади, product_code, warehouse_code`
+  });
+  finishExchangeProcess(`Імпорт залишків завершено: ${state.stock.length} залишків, ${state.serialStock.length} серійних рядків`);
   audit(`Імпортовано ${state.stock.length} складських залишків і ${state.serialStock.length} серійних рядків з SQL (${SQL_STOCK_RECEIPT_SOURCE})`);
+  saveState();
+  if (renderAfter) render();
+}
+
+function syncAllExchangeFromSql(mode = "manual-sync") {
+  if (!canDo("exchange_import")) return alert("Немає дозволу керувати імпортом у блоці обміну даними.");
+  setExchangeProcess("Повний імпорт B2C з PostgreSQL one_c_mirror", 10);
+  syncProductsFromSql(mode, false);
+  syncStockReceiptsFromSql(mode, false);
+  syncCounterpartiesFromSql(mode, false);
+  addExchangeRecord({
+    direction: "import",
+    dataset: "Повний B2C імпорт",
+    source: `PostgreSQL:${SQL_SCHEMA}`,
+    rows: importSummaryRows(),
+    details: "товари, ціни, довідники, залишки, серійні номери, клієнти/контрагенти"
+  });
+  finishExchangeProcess(`Повний імпорт завершено: ${importSummaryRows()} рядків`);
+  audit(`Повний SQL-імпорт B2C завершено: ${importSummaryRows()} рядків`);
   saveState();
   render();
 }
@@ -3528,6 +3889,7 @@ function render() {
     customers: renderCustomers,
     stock: renderStock,
     cash: renderPos,
+    exchange: renderExchange,
     reports: renderReports,
     employees: renderEmployees,
     log: renderLog
@@ -3612,6 +3974,8 @@ document.addEventListener("click", (event) => {
   if (cancelSaleConfirmButton) return cancelSalePaymentConfirm();
   const cancelReturnConfirmButton = event.target.closest("[data-cancel-return-confirm]");
   if (cancelReturnConfirmButton) return cancelReturnRefundConfirm();
+  const runExchangeAutomationButton = event.target.closest("[data-run-exchange-automation]");
+  if (runExchangeAutomationButton) return runExchangeAutomationNow();
   if (event.target.id === "reset-local-state") {
     state = clone(seedState);
     audit("Скинуто локальний стан B2C. Товари, клієнти, залишки й чеки очищені до нового SQL-імпорту.", "manager");
@@ -3701,6 +4065,10 @@ document.addEventListener("submit", (event) => {
   if (form.dataset.action === "confirm-sale-payment") confirmSalePayment(form);
   if (form.dataset.action === "confirm-return-refund") confirmReturnRefund(form);
   if (form.dataset.action === "save-document-edit") saveDocumentEdit(form);
+  if (form.dataset.action === "exchange-full-import") syncAllExchangeFromSql();
+  if (form.dataset.action === "exchange-export-sales") exportSalesToSql();
+  if (form.dataset.action === "exchange-export-inventory") exportInventoryToSql();
+  if (form.dataset.action === "save-exchange-automation") updateExchangeAutomation(form);
   if (form.dataset.action === "sync-sql-products") syncProductsFromSql();
   if (form.dataset.action === "sync-sql-counterparties") syncCounterpartiesFromSql();
   if (form.dataset.action === "create-customer") createCustomer(form);
