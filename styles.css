@@ -111,6 +111,42 @@ button {
   padding: 7px 8px;
 }
 
+.session-card strong {
+  color: #ffffff;
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.session-actions {
+  display: grid;
+  gap: 6px;
+}
+
+.sidebar-action {
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 9px;
+  background: #e7edf5;
+  color: #17212f;
+  font-weight: 700;
+  text-align: center;
+}
+
+.sidebar-action:hover {
+  background: #ffffff;
+}
+
+.danger-outline {
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.22);
+  color: #fecaca;
+}
+
+.danger-outline:hover {
+  background: rgba(180, 35, 24, 0.22);
+  color: #ffffff;
+}
+
 .nav-group {
   position: relative;
 }

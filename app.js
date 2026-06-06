@@ -1,8 +1,9 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.06.6";
-const APP_BUILD = "20260606-b2c-server-mvp";
+const APP_VERSION = "2026.06.06.7";
+const APP_BUILD = "20260606-b2c-login-session";
 const STORAGE_KEY = "retail-crm-b2c-v12";
+const SESSION_KEY = "retail-crm-b2c-session-v1";
 const ROLE_PERMISSION_SCHEMA = "20260606-server-settings";
 const SCHEMA_DEFAULT_BLOCKS = ["settings"];
 const SCHEMA_DEFAULT_ACTIONS = ["customer_create", "drilldown_view", "document_edit", "document_list_view", "document_list_sort", "document_list_collapse", "exchange_view", "system_settings"];
@@ -576,10 +577,33 @@ const navItems = [
 
 const VIEW_ALIASES = { checkout: "pos", receipts: "pos", cash: "pos" };
 
+let sessionEmployeeId = loadSessionEmployeeId();
 let state = loadState();
+let loginDialog = { open: false, employeeId: "" };
 
 function clone(value) {
   return typeof structuredClone === "function" ? structuredClone(value) : JSON.parse(JSON.stringify(value));
+}
+
+function loadSessionEmployeeId() {
+  try {
+    return sessionStorage.getItem(SESSION_KEY) || "";
+  } catch (error) {
+    return "";
+  }
+}
+
+function storeSessionEmployeeId(employeeId) {
+  sessionEmployeeId = employeeId || "";
+  try {
+    if (sessionEmployeeId) {
+      sessionStorage.setItem(SESSION_KEY, sessionEmployeeId);
+    } else {
+      sessionStorage.removeItem(SESSION_KEY);
+    }
+  } catch (error) {
+    // Keep the in-memory session when browser storage is blocked.
+  }
 }
 
 function loadState() {
@@ -1454,9 +1478,7 @@ function employeeStatusLabel(status) {
 }
 
 function currentEmployee(source = state) {
-  return source.employees.find((employee) => employee.id === source.activeEmployeeId)
-    || source.employees.find((employee) => employee.role === "director")
-    || source.employees[0];
+  return source.employees.find((employee) => employee.id === sessionEmployeeId && employee.status === "active") || null;
 }
 
 function rolePermissionSet(role, source = state) {
@@ -2105,16 +2127,34 @@ function setTitle(title) {
   document.getElementById("page-title").textContent = title;
 }
 
-function renderNav() {
+function renderSessionCard() {
   const employee = currentEmployee();
-  const employeeSwitch = `
-    <div class="access-switch">
-      <span>Працівник</span>
-      <select data-active-employee>
-        ${state.employees.map((item) => option(item.id, `${item.name} · ${roleLabel(item.role)}`, item.id === employee?.id)).join("")}
-      </select>
-      <small>${escapeHtml(roleLabel(employee?.role))}</small>
+  if (!employee) {
+    return `
+      <div class="access-switch session-card">
+        <span>Сеанс</span>
+        <strong>Вхід не виконано</strong>
+        <small>Рольові блоки приховані</small>
+        <button class="sidebar-action" type="button" data-open-employee-login>Увійти</button>
+      </div>
+    `;
+  }
+  return `
+    <div class="access-switch session-card">
+      <span>Сеанс</span>
+      <strong>${escapeHtml(employee.name)}</strong>
+      <small>${escapeHtml(roleLabel(employee.role))}</small>
+      <div class="session-actions">
+        <button class="sidebar-action" type="button" data-open-employee-login>Змінити вхід</button>
+        <button class="sidebar-action danger-outline" type="button" data-logout-employee>Вийти</button>
+      </div>
     </div>
+  `;
+}
+
+function renderNav() {
+  const sessionCard = renderSessionCard();
+  const serverSwitch = `
     <div class="access-switch">
       <span>Сервер</span>
       <small class="pill ${serverSyncClass()}">${escapeHtml(serverSyncLabel())}</small>
@@ -2143,7 +2183,39 @@ function renderNav() {
       </div>
     `;
   }).join("");
-  document.getElementById("nav").innerHTML = `${employeeSwitch}${itemsHtml}`;
+  document.getElementById("nav").innerHTML = `${sessionCard}${serverSwitch}${itemsHtml}`;
+}
+
+function renderEmployeeLoginModal() {
+  const active = activeEmployees();
+  const selectedId = loginDialog.employeeId
+    || currentEmployee()?.id
+    || active[0]?.id
+    || "";
+  if (!loginDialog.open && currentEmployee()) return "";
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="employee-login-title">
+        <div class="split">
+          <div>
+            <p class="eyebrow">Сеанс B2C</p>
+            <h2 id="employee-login-title">Вхід працівника</h2>
+          </div>
+          ${currentEmployee() ? `<button class="secondary" type="button" data-close-employee-login>Закрити</button>` : ""}
+        </div>
+        <form class="form-grid one-col" data-action="employee-login">
+          <label class="field"><span>Логін працівника</span><select name="employeeId" required>
+            ${active.map((employee) => option(employee.id, `${employee.login || employee.code} · ${employee.name} · ${roleLabel(employee.role)}`, employee.id === selectedId)).join("")}
+          </select></label>
+          <label class="field"><span>PIN</span><input name="pin" type="password" autocomplete="current-password" placeholder="якщо встановлено в картці"></label>
+          <div class="toolbar">
+            ${currentEmployee() ? `<button class="secondary" type="button" data-close-employee-login>Скасувати</button>` : ""}
+            <button class="primary" type="submit" ${active.length ? "" : "disabled"}>Увійти</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  `;
 }
 
 function renderDashboard() {
@@ -4120,13 +4192,59 @@ function toggleRolePermission(type, roleId, permissionId, checked) {
   render();
 }
 
+function openEmployeeLogin() {
+  loginDialog = {
+    open: true,
+    employeeId: currentEmployee()?.id || activeEmployees()[0]?.id || ""
+  };
+  render();
+}
+
+function closeEmployeeLogin() {
+  if (!currentEmployee()) return;
+  loginDialog = { open: false, employeeId: "" };
+  render();
+}
+
+function loginEmployee(form) {
+  const data = Object.fromEntries(new FormData(form).entries());
+  const employee = activeEmployees().find((item) => item.id === data.employeeId);
+  if (!employee) return alert("Працівника для входу не знайдено або він не активний.");
+  const enteredPin = String(data.pin || "").trim();
+  const requiredPin = String(employee.pin || "").trim();
+  if (requiredPin && enteredPin !== requiredPin) {
+    audit(`Невдала спроба входу для ${employee.name}: невірний PIN`, "auth");
+    saveState();
+    render();
+    return alert("Невірний PIN працівника.");
+  }
+  const previous = currentEmployee();
+  storeSessionEmployeeId(employee.id);
+  state.activeEmployeeId = employee.id;
+  loginDialog = { open: false, employeeId: "" };
+  if (!canOpenBlock(state.currentView)) state.currentView = firstAllowedView();
+  audit(previous?.id === employee.id
+    ? `Працівник повторно увійшов у B2C: ${employee.name} (${roleLabel(employee.role)})`
+    : `Вхід працівника у B2C: ${employee.name} (${roleLabel(employee.role)})`,
+    employee.name);
+  saveState();
+  render();
+}
+
+function logoutEmployee() {
+  const employee = currentEmployee();
+  if (!employee) return openEmployeeLogin();
+  audit(`Вихід працівника з B2C: ${employee.name} (${roleLabel(employee.role)})`, employee.name);
+  storeSessionEmployeeId("");
+  loginDialog = { open: true, employeeId: activeEmployees()[0]?.id || "" };
+  saveState();
+  render();
+}
+
 function setActiveEmployee(employeeId) {
   const employee = state.employees.find((item) => item.id === employeeId);
   if (!employee) return;
-  state.activeEmployeeId = employee.id;
-  if (!canOpenBlock(state.currentView)) state.currentView = firstAllowedView();
-  audit(`Перегляд перемкнено на працівника ${employee.name}: ${roleLabel(employee.role)}`);
-  saveState();
+  loginDialog = { open: true, employeeId: employee.id };
   render();
 }
 
@@ -4241,7 +4359,7 @@ function render() {
   const pageHtml = canOpenBlock(state.currentView)
     ? (views[state.currentView] || renderDashboard)()
     : renderNoAccess();
-  document.getElementById("app").innerHTML = `${pageHtml}${renderSalePaymentConfirm()}${renderReturnRefundConfirm()}${renderDrilldownModal()}${renderDocumentEditModal()}`;
+  document.getElementById("app").innerHTML = `${pageHtml}${renderSalePaymentConfirm()}${renderReturnRefundConfirm()}${renderDrilldownModal()}${renderDocumentEditModal()}${renderEmployeeLoginModal()}`;
 }
 
 function renderNoAccess() {
@@ -4249,12 +4367,19 @@ function renderNoAccess() {
   return `
     <section class="panel">
       <h2>Немає доступних блоків</h2>
-      <p class="muted">Для активного працівника не увімкнено жодного блоку в матриці ролей.</p>
+      <p class="muted">Потрібен вхід працівника з активною роллю.</p>
+      <button class="primary" type="button" data-open-employee-login>Увійти</button>
     </section>
   `;
 }
 
 document.addEventListener("click", (event) => {
+  const openLoginButton = event.target.closest("[data-open-employee-login]");
+  if (openLoginButton) return openEmployeeLogin();
+  const closeLoginButton = event.target.closest("[data-close-employee-login]");
+  if (closeLoginButton) return closeEmployeeLogin();
+  const logoutEmployeeButton = event.target.closest("[data-logout-employee]");
+  if (logoutEmployeeButton) return logoutEmployee();
   const viewButton = event.target.closest("[data-view]");
   if (viewButton) {
     const nextView = normalizeView(viewButton.dataset.view);
@@ -4354,7 +4479,6 @@ document.addEventListener("input", (event) => {
 });
 
 document.addEventListener("change", (event) => {
-  if (event.target.dataset.activeEmployee !== undefined) setActiveEmployee(event.target.value);
   if (event.target.dataset.employeeRole !== undefined) changeEmployeeRole(event.target.dataset.employeeRole, event.target.value);
   if (event.target.dataset.rolePermission !== undefined) {
     toggleRolePermission(event.target.dataset.rolePermission, event.target.dataset.roleId, event.target.dataset.permissionId, event.target.checked);
@@ -4409,6 +4533,7 @@ document.addEventListener("submit", (event) => {
   const form = event.target.closest("form[data-action]");
   if (!form) return;
   event.preventDefault();
+  if (form.dataset.action === "employee-login") loginEmployee(form);
   if (form.dataset.action === "create-receipt") createReceipt(form);
   if (form.dataset.action === "confirm-sale-payment") confirmSalePayment(form);
   if (form.dataset.action === "confirm-return-refund") confirmReturnRefund(form);
