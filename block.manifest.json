@@ -1,0 +1,137 @@
+{
+  "schemaVersion": 1,
+  "blockId": "retail-b2c",
+  "blockName": "Retail B2C CRM",
+  "blockType": "autonomous-crm-block",
+  "status": "prototype-server-backed",
+  "repository": {
+    "path": "D:\\Codex\\CRM\\retail-crm",
+    "remote": "github.com:1973zahar/retail-crm.git",
+    "branch": "main"
+  },
+  "runtime": {
+    "localUrl": "http://127.0.0.1:8790/index.html",
+    "meserUrl": "http://192.168.0.5:8790/index.html",
+    "host": "192.168.0.5",
+    "port": 8790,
+    "startScript": "start-server.ps1",
+    "nodeServer": "server.mjs",
+    "fallbackServer": "server.ps1",
+    "dataDir": "data"
+  },
+  "currentApp": {
+    "build": "20260606-b2c-login-session",
+    "version": "2026.06.06.7",
+    "contractVersion": "2026.06.06-retail-block-1"
+  },
+  "sourceOfTruth": {
+    "core": "PostgreSQL SQL core",
+    "database": "crm_hub",
+    "schema": "one_c_mirror",
+    "rule": "Master products, prices, stock, serial numbers, receipts and 1C-origin facts are read from SQL views/imports, not manually owned by this block."
+  },
+  "ownedWorkflows": [
+    "retail_sales",
+    "returns",
+    "customers_and_loyalty",
+    "cashier_shifts",
+    "retail_inventory_workflows",
+    "employee_login_sessions",
+    "role_visibility_and_actions",
+    "settings",
+    "data_exchange_ui",
+    "audit_log",
+    "outbox_export_queues"
+  ],
+  "inboundSqlViews": [
+    "one_c_mirror.crm_products",
+    "one_c_mirror.crm_products_enriched",
+    "one_c_mirror.crm_product_prices",
+    "one_c_mirror.crm_product_price_summary",
+    "one_c_mirror.crm_stock_balances",
+    "one_c_mirror.crm_warehouses",
+    "one_c_mirror.crm_serial_stock_current",
+    "one_c_mirror.crm_serial_stock_by_serial",
+    "one_c_mirror.crm_serial_stock_summary",
+    "one_c_mirror.crm_counterparties",
+    "one_c_mirror.crm_counterparty_contracts",
+    "one_c_mirror.crm_counterparty_settlements",
+    "one_c_mirror.crm_counterparty_balance_summary"
+  ],
+  "outboundQueues": [
+    {
+      "name": "one_c_mirror.b2c_counterparties_export_queue",
+      "purpose": "B2C-created customer export queue"
+    },
+    {
+      "name": "future.one_c_mirror.b2c_sales_export_queue",
+      "purpose": "Approved retail sales export queue"
+    },
+    {
+      "name": "future.one_c_mirror.b2c_returns_export_queue",
+      "purpose": "Approved retail returns export queue"
+    }
+  ],
+  "apiSurface": {
+    "current": [
+      "GET /api/health",
+      "GET /api/bootstrap",
+      "GET /api/state",
+      "PUT /api/state",
+      "GET /api/settings",
+      "PUT /api/settings"
+    ],
+    "next": [
+      "POST /api/login",
+      "POST /api/logout",
+      "GET /api/products",
+      "GET /api/products/:id",
+      "GET /api/customers",
+      "POST /api/customers",
+      "GET /api/sales",
+      "POST /api/sales",
+      "GET /api/returns",
+      "POST /api/returns",
+      "GET /api/exchange/jobs",
+      "POST /api/exchange/jobs",
+      "GET /api/audit"
+    ]
+  },
+  "uiBlocks": [
+    "dashboard",
+    "sales",
+    "directories",
+    "customers_and_loyalty",
+    "stock",
+    "inventory",
+    "employees_and_roles",
+    "data_exchange",
+    "settings"
+  ],
+  "hardRules": [
+    "Do not touch marketplace-crm or B2B from this block.",
+    "Do not expose import/export launch controls outside Data Exchange.",
+    "Do not show import launch blocks inside directories.",
+    "Do not switch workers through sidebar selectors; use login/logout sessions.",
+    "Do not manually create products, prices, stock balances, serial numbers or receipts.",
+    "Do not duplicate SQL core master data as the local source of truth.",
+    "Do not paste passwords, secrets, raw .env, raw logs or credentials."
+  ],
+  "performanceGoals": {
+    "firstScreenLoad": "fast bootstrap endpoint with minimal payload",
+    "search": "server-side search/filter/page for large products, stock, serials and customers",
+    "sync": "revision-based incremental state sync",
+    "exchange": "background import/export jobs with visible progress",
+    "ui": "all business info available in app screens without raw SQL/file inspection"
+  },
+  "crossBlockContracts": {
+    "sqlCore": "Reads shared facts through SQL/API contracts.",
+    "marketplaceCrm": "No direct dependency; shared product, stock and client facts come through SQL core.",
+    "b2cApi": "Can share product and stock-shaped contracts through generated OpenAPI/JSON Schema in future.",
+    "futureBackend": "Stable API layer over PostgreSQL views and inbox/outbox queues."
+  },
+  "logs": {
+    "projectLog": "D:\\Codex\\CRM\\SQL\\docs\\crm-sql-work-log-2026-06-01.md",
+    "retailLog": "D:\\Codex\\CRM\\retail-crm\\logs\\B2C_WORK_LOG_2026-06-06.md"
+  }
+}

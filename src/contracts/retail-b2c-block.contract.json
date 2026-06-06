@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm.local/contracts/retail-b2c-block.contract.json",
+  "title": "Retail B2C CRM Block Contract",
+  "type": "object",
+  "required": [
+    "blockId",
+    "contractVersion",
+    "sourceOfTruth",
+    "inboundSqlViews",
+    "outboundQueues",
+    "apiSurface",
+    "performanceGoals"
+  ],
+  "properties": {
+    "blockId": {
+      "const": "retail-b2c"
+    },
+    "contractVersion": {
+      "type": "string"
+    },
+    "sourceOfTruth": {
+      "type": "object",
+      "required": ["core", "schema"],
+      "properties": {
+        "core": { "type": "string" },
+        "schema": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "inboundSqlViews": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "outboundQueues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "purpose"],
+        "properties": {
+          "name": { "type": "string" },
+          "purpose": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "apiSurface": {
+      "type": "object",
+      "properties": {
+        "current": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "next": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "performanceGoals": {
+      "type": "object",
+      "required": ["firstScreenLoad", "search", "sync", "exchange", "ui"],
+      "properties": {
+        "firstScreenLoad": { "type": "string" },
+        "search": { "type": "string" },
+        "sync": { "type": "string" },
+        "exchange": { "type": "string" },
+        "ui": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": true
+}
