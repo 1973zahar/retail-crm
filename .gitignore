@@ -1,6 +1,8 @@
 node_modules/
 dist/
 .env
+data/
+data-test/
+retail-crm.config.json
 *.log
 *.tmp
-

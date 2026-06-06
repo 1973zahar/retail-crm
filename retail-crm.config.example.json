@@ -1,0 +1,8 @@
+{
+  "host": "0.0.0.0",
+  "port": 8790,
+  "publicHost": "192.165.0.5",
+  "dataDir": "data",
+  "stateFile": "retail-crm-state.json",
+  "settingsFile": "retail-crm-settings.json"
+}

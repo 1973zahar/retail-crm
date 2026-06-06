@@ -1,10 +1,11 @@
 "use strict";
 
-const APP_VERSION = "2026.06.06.5";
-const APP_BUILD = "20260606-b2c-customer-create";
-const STORAGE_KEY = "retail-crm-b2c-v11";
-const ROLE_PERMISSION_SCHEMA = "20260606-customer-create";
-const SCHEMA_DEFAULT_ACTIONS = ["customer_create", "drilldown_view", "document_edit", "document_list_view", "document_list_sort", "document_list_collapse", "exchange_view"];
+const APP_VERSION = "2026.06.06.6";
+const APP_BUILD = "20260606-b2c-server-mvp";
+const STORAGE_KEY = "retail-crm-b2c-v12";
+const ROLE_PERMISSION_SCHEMA = "20260606-server-settings";
+const SCHEMA_DEFAULT_BLOCKS = ["settings"];
+const SCHEMA_DEFAULT_ACTIONS = ["customer_create", "drilldown_view", "document_edit", "document_list_view", "document_list_sort", "document_list_collapse", "exchange_view", "system_settings"];
 
 const nowIso = () => new Date().toISOString();
 const today = () => nowIso().slice(0, 10);
@@ -49,6 +50,33 @@ const SQL_READY_VIEWS = [
   "crm_products_enriched"
 ];
 const SQL_PENDING_VIEWS = [];
+const DEFAULT_SYSTEM_SETTINGS = {
+  mode: "server",
+  publicHost: "192.165.0.5",
+  publicBaseUrl: "http://192.165.0.5:8790",
+  apiBaseUrl: "",
+  bindAddress: "0.0.0.0",
+  port: 8790,
+  storageBackend: "server-json",
+  dataDir: "data",
+  multiUser: true,
+  externalAccess: true,
+  allowLocalFallback: true,
+  autoRefreshSeconds: 15,
+  lastSavedAt: ""
+};
+const serverSync = {
+  enabled: true,
+  online: false,
+  revision: 0,
+  pending: false,
+  saving: false,
+  loading: false,
+  lastLoadedAt: "",
+  lastSavedAt: "",
+  error: "",
+  timer: null
+};
 const EMPLOYEE_STATUSES = { active: "Активний", inactive: "Вимкнений", vacation: "Відпустка" };
 const ROLE_BLOCKS = [
   { id: "dashboard", label: "Панель" },
@@ -59,6 +87,7 @@ const ROLE_BLOCKS = [
   { id: "stock", label: "Залишки" },
   { id: "inventory", label: "Інвентаризація" },
   { id: "exchange", label: "Обмін даними" },
+  { id: "settings", label: "Налаштування" },
   { id: "reports", label: "Звіти" },
   { id: "employees", label: "Працівники" },
   { id: "log", label: "Журнал" }
@@ -81,6 +110,7 @@ const ROLE_ACTIONS = [
   { id: "exchange_import", label: "Керувати імпортом" },
   { id: "exchange_export", label: "Керувати експортом" },
   { id: "exchange_automation", label: "Налаштування автоматизації" },
+  { id: "system_settings", label: "Системні налаштування" },
   { id: "employee_manage", label: "Керувати працівниками" },
   { id: "reports_view", label: "Звіти" },
   { id: "audit_view", label: "Журнал дій" }
@@ -93,8 +123,8 @@ const EMPLOYEE_ROLES = {
   },
   admin: {
     label: "Адміністратор",
-    blocks: ["dashboard", "pos", "returns", "catalog", "customers", "stock", "inventory", "exchange", "reports", "employees", "log"],
-    actions: ["sale_create", "return_create", "drilldown_view", "document_edit", "document_list_view", "document_list_sort", "document_list_collapse", "customer_create", "cash_open", "cash_close", "inventory_post", "inventory_resort", "sql_import", "exchange_view", "exchange_import", "exchange_export", "exchange_automation", "employee_manage", "reports_view", "audit_view"]
+    blocks: ["dashboard", "pos", "returns", "catalog", "customers", "stock", "inventory", "exchange", "settings", "reports", "employees", "log"],
+    actions: ["sale_create", "return_create", "drilldown_view", "document_edit", "document_list_view", "document_list_sort", "document_list_collapse", "customer_create", "cash_open", "cash_close", "inventory_post", "inventory_resort", "sql_import", "exchange_view", "exchange_import", "exchange_export", "exchange_automation", "system_settings", "employee_manage", "reports_view", "audit_view"]
   },
   seller: {
     label: "Продавець",
@@ -405,6 +435,7 @@ function inventoryLineFromProduct(row) {
 
 const seedState = {
   currentView: "dashboard",
+  systemSettings: clone(DEFAULT_SYSTEM_SETTINGS),
   checkout: {
     customerId: "walk-in",
     customerSearch: "",
@@ -536,6 +567,7 @@ const navItems = [
     ["stock", "Залишки"]
   ] },
   ["exchange", "Обмін даними"],
+  ["settings", "Налаштування"],
   ["returns", "Повернення"],
   ["reports", "Звіт дня"],
   ["employees", "Працівники"],
@@ -562,6 +594,7 @@ function loadState() {
 function normalizeState(input) {
   const next = { ...clone(seedState), ...(input || {}) };
   next.currentView = normalizeView(next.currentView);
+  next.systemSettings = normalizeSystemSettings(next.systemSettings);
   next.products = Array.isArray(next.products) ? next.products.map(normalizeProduct) : clone(seedState.products);
   next.customers = Array.isArray(next.customers) ? next.customers.map(normalizeCustomer) : clone(seedState.customers);
   next.employees = Array.isArray(next.employees) ? next.employees.map(normalizeEmployee) : clone(seedState.employees);
@@ -640,6 +673,32 @@ function normalizeState(input) {
 function normalizeView(view) {
   const id = VIEW_ALIASES[view] || view || seedState.currentView;
   return flatNavItems().some(([itemId]) => itemId === id) ? id : seedState.currentView;
+}
+
+function normalizeSystemSettings(input) {
+  const source = input || {};
+  const mode = source.mode === "local" ? "local" : "server";
+  const port = Math.max(1, Math.min(65535, Number(source.port || DEFAULT_SYSTEM_SETTINGS.port)));
+  const refresh = Math.max(5, Math.min(300, Number(source.autoRefreshSeconds || DEFAULT_SYSTEM_SETTINGS.autoRefreshSeconds)));
+  const publicHost = String(source.publicHost || DEFAULT_SYSTEM_SETTINGS.publicHost).trim();
+  const publicBaseUrl = String(source.publicBaseUrl || `http://${publicHost}:${port}`).trim();
+  return {
+    ...clone(DEFAULT_SYSTEM_SETTINGS),
+    ...source,
+    mode,
+    publicHost,
+    publicBaseUrl,
+    apiBaseUrl: String(source.apiBaseUrl || "").trim().replace(/\/+$/, ""),
+    bindAddress: String(source.bindAddress || DEFAULT_SYSTEM_SETTINGS.bindAddress).trim(),
+    port,
+    storageBackend: source.storageBackend || DEFAULT_SYSTEM_SETTINGS.storageBackend,
+    dataDir: String(source.dataDir || DEFAULT_SYSTEM_SETTINGS.dataDir).trim(),
+    multiUser: source.multiUser !== false,
+    externalAccess: source.externalAccess !== false,
+    allowLocalFallback: source.allowLocalFallback !== false,
+    autoRefreshSeconds: refresh,
+    lastSavedAt: source.lastSavedAt || ""
+  };
 }
 
 function flatNavItems(items = navItems) {
@@ -756,14 +815,18 @@ function normalizeRolePermissions(input, schemaVersion = ROLE_PERMISSION_SCHEMA)
   const shouldBackfillSchemaActions = schemaVersion !== ROLE_PERMISSION_SCHEMA;
   return Object.fromEntries(Object.entries(base).map(([roleId, defaults]) => {
     const source = input?.[roleId] || defaults;
+    const sourceBlocks = Array.isArray(source.blocks) ? source.blocks.filter((id) => knownBlocks.has(id)) : [...defaults.blocks];
     const sourceActions = Array.isArray(source.actions) ? source.actions.filter((id) => knownActions.has(id)) : [...defaults.actions];
+    const schemaBlocks = shouldBackfillSchemaActions
+      ? defaults.blocks.filter((id) => SCHEMA_DEFAULT_BLOCKS.includes(id))
+      : [];
     const schemaActions = shouldBackfillSchemaActions
       ? defaults.actions.filter((id) => SCHEMA_DEFAULT_ACTIONS.includes(id))
       : [];
     return [
       roleId,
       {
-        blocks: Array.isArray(source.blocks) ? source.blocks.filter((id) => knownBlocks.has(id)) : [...defaults.blocks],
+        blocks: Array.from(new Set([...sourceBlocks, ...schemaBlocks])),
         actions: Array.from(new Set([...sourceActions, ...schemaActions]))
       }
     ];
@@ -998,8 +1061,174 @@ function stockQtyFromRows(stockRows, productId) {
     .reduce((sum, item) => sum + Number(item.qty || 0), 0);
 }
 
-function saveState() {
+function saveState(options = {}) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  if (options.server !== false) queueServerStateSave();
+}
+
+function apiBaseUrl() {
+  const configured = state.systemSettings?.apiBaseUrl || "";
+  return configured.replace(/\/+$/, "");
+}
+
+function apiEndpoint(path) {
+  const base = apiBaseUrl();
+  if (window.location.protocol === "file:" && !base) return "";
+  return `${base}${path}`;
+}
+
+function serverModeEnabled() {
+  return state.systemSettings?.mode !== "local" && Boolean(apiEndpoint("/api/health"));
+}
+
+function serverSyncLabel() {
+  if (!serverModeEnabled()) return "Локальний режим";
+  if (serverSync.saving) return "Збереження на сервері";
+  if (serverSync.online) return `Сервер online · rev ${serverSync.revision}`;
+  return serverSync.error ? `Сервер offline · ${serverSync.error}` : "Очікує сервер";
+}
+
+function serverSyncClass() {
+  if (!serverModeEnabled()) return "";
+  return serverSync.online ? "good" : "warn";
+}
+
+function queueServerStateSave() {
+  if (!serverModeEnabled()) return;
+  serverSync.pending = true;
+  window.clearTimeout(serverSync.timer);
+  serverSync.timer = window.setTimeout(() => flushServerState(), 450);
+}
+
+async function fetchJson(path, options = {}) {
+  const endpoint = apiEndpoint(path);
+  if (!endpoint) throw new Error("API endpoint не налаштовано");
+  const response = await fetch(endpoint, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {})
+    }
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || `${response.status} ${response.statusText}`);
+  }
+  return payload;
+}
+
+function markServerOnline(payload = {}) {
+  serverSync.online = true;
+  serverSync.error = "";
+  serverSync.revision = Number(payload.revision ?? payload.stateRevision ?? serverSync.revision ?? 0);
+  serverSync.lastLoadedAt = payload.loadedAt || serverSync.lastLoadedAt;
+  serverSync.lastSavedAt = payload.savedAt || serverSync.lastSavedAt;
+}
+
+function markServerOffline(error) {
+  serverSync.online = false;
+  serverSync.error = String(error?.message || error || "немає відповіді");
+}
+
+async function bootstrapServerState() {
+  if (!serverModeEnabled() || serverSync.loading) return;
+  serverSync.loading = true;
+  try {
+    const payload = await fetchJson("/api/bootstrap");
+    if (payload.settings) {
+      state.systemSettings = normalizeSystemSettings({ ...state.systemSettings, ...payload.settings });
+    }
+    if (payload.state) {
+      state = normalizeState(payload.state);
+      if (payload.settings) state.systemSettings = normalizeSystemSettings({ ...state.systemSettings, ...payload.settings });
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } else {
+      queueServerStateSave();
+    }
+    markServerOnline({
+      revision: payload.stateRevision,
+      savedAt: payload.savedAt,
+      loadedAt: nowIso()
+    });
+    render();
+  } catch (error) {
+    markServerOffline(error);
+    render();
+  } finally {
+    serverSync.loading = false;
+  }
+}
+
+async function flushServerState(renderAfter = false) {
+  if (!serverModeEnabled() || serverSync.saving) return;
+  serverSync.saving = true;
+  serverSync.pending = false;
+  try {
+    const payload = await fetchJson("/api/state", {
+      method: "PUT",
+      body: JSON.stringify({
+        baseRevision: serverSync.revision,
+        build: APP_BUILD,
+        appVersion: APP_VERSION,
+        savedBy: currentEmployee()?.name || "system",
+        state
+      })
+    });
+    markServerOnline(payload);
+    state.systemSettings.lastSavedAt = payload.savedAt || nowIso();
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    if (renderAfter) render();
+  } catch (error) {
+    markServerOffline(error);
+    if (renderAfter) render();
+  } finally {
+    serverSync.saving = false;
+  }
+}
+
+async function refreshServerState(force = false) {
+  if (!serverModeEnabled() || serverSync.loading || serverSync.saving || serverSync.pending) return;
+  try {
+    const previousRevision = Number(serverSync.revision || 0);
+    const payload = await fetchJson(`/api/state?revision=${encodeURIComponent(serverSync.revision)}`);
+    markServerOnline({
+      revision: payload.revision,
+      savedAt: payload.savedAt,
+      loadedAt: nowIso()
+    });
+    if ((force || Number(payload.revision || 0) > previousRevision) && payload.state) {
+      state = normalizeState(payload.state);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      render();
+    }
+  } catch (error) {
+    markServerOffline(error);
+  }
+}
+
+async function saveServerSettings(renderAfter = false) {
+  if (!serverModeEnabled()) return;
+  try {
+    const payload = await fetchJson("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify({
+        settings: state.systemSettings,
+        savedBy: currentEmployee()?.name || "system",
+        build: APP_BUILD
+      })
+    });
+    if (payload.settings) state.systemSettings = normalizeSystemSettings(payload.settings);
+    markServerOnline({
+      revision: payload.stateRevision ?? serverSync.revision,
+      savedAt: payload.savedAt,
+      loadedAt: nowIso()
+    });
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    if (renderAfter) render();
+  } catch (error) {
+    markServerOffline(error);
+    if (renderAfter) render();
+  }
 }
 
 function audit(event, actor = "manager") {
@@ -1157,6 +1386,31 @@ function runExchangeAutomationNow() {
   state.exchange.automation.lastRunAt = nowIso();
   audit("Автоматизацію обміну даними запущено вручну");
   saveState();
+  render();
+}
+
+function updateSystemSettings(form) {
+  if (!canDo("system_settings")) return alert("Немає дозволу змінювати системні налаштування.");
+  const data = Object.fromEntries(new FormData(form).entries());
+  const nextSettings = normalizeSystemSettings({
+    mode: data.mode,
+    publicHost: data.publicHost,
+    publicBaseUrl: data.publicBaseUrl,
+    apiBaseUrl: data.apiBaseUrl,
+    bindAddress: data.bindAddress,
+    port: data.port,
+    storageBackend: data.storageBackend,
+    dataDir: data.dataDir,
+    autoRefreshSeconds: data.autoRefreshSeconds,
+    multiUser: data.multiUser === "on",
+    externalAccess: data.externalAccess === "on",
+    allowLocalFallback: data.allowLocalFallback === "on",
+    lastSavedAt: nowIso()
+  });
+  state.systemSettings = nextSettings;
+  audit(`Оновлено системні налаштування B2C: ${nextSettings.mode}, ${nextSettings.publicBaseUrl}`);
+  saveState();
+  saveServerSettings(true);
   render();
 }
 
@@ -1860,6 +2114,11 @@ function renderNav() {
         ${state.employees.map((item) => option(item.id, `${item.name} · ${roleLabel(item.role)}`, item.id === employee?.id)).join("")}
       </select>
       <small>${escapeHtml(roleLabel(employee?.role))}</small>
+    </div>
+    <div class="access-switch">
+      <span>Сервер</span>
+      <small class="pill ${serverSyncClass()}">${escapeHtml(serverSyncLabel())}</small>
+      <small>${escapeHtml(state.systemSettings.publicBaseUrl || state.systemSettings.publicHost)}</small>
     </div>
   `;
   const itemsHtml = navItems.map((item) => {
@@ -2875,6 +3134,71 @@ function renderExchange() {
             </tbody>
           </table>
         </div>
+      </article>
+    </section>
+  `;
+}
+
+function renderSettings() {
+  setTitle("Налаштування");
+  const settings = state.systemSettings;
+  const canSettings = canDo("system_settings");
+  const apiLabel = apiEndpoint("/api/health") || "API недоступний у file:// без apiBaseUrl";
+  return `
+    <section class="grid four">
+      <article class="card metric"><span>Режим</span><strong>${settings.mode === "server" ? "Сервер" : "Локально"}</strong><small>${settings.multiUser ? "Багатокористувацький" : "Один користувач"}</small></article>
+      <article class="card metric"><span>Зовнішній доступ</span><strong>${settings.externalAccess ? "Увімкнено" : "Вимкнено"}</strong><small>${escapeHtml(settings.publicBaseUrl)}</small></article>
+      <article class="card metric"><span>Збереження</span><strong>${escapeHtml(settings.storageBackend)}</strong><small>${escapeHtml(settings.dataDir)}</small></article>
+      <article class="card metric"><span>Синхронізація</span><strong>${serverSync.online ? "Online" : "Offline"}</strong><small>${escapeHtml(serverSyncLabel())}</small></article>
+    </section>
+
+    <section class="stacked-panels section-gap">
+      <article class="panel">
+        <div class="split">
+          <div>
+            <p class="eyebrow">B2C real app</p>
+            <h2>Сервер і доступ</h2>
+          </div>
+          <span class="pill ${serverSyncClass()}">${escapeHtml(serverSyncLabel())}</span>
+        </div>
+        ${canSettings ? `<form class="form-grid" data-action="save-system-settings">
+          <label class="field"><span>Режим роботи</span><select name="mode">${["server", "local"].map((id) => option(id, id === "server" ? "Серверний" : "Локальний fallback", id === settings.mode)).join("")}</select></label>
+          <label class="field"><span>Публічний host</span><input name="publicHost" value="${escapeHtml(settings.publicHost)}" placeholder="192.165.0.5"></label>
+          <label class="field"><span>Публічна адреса</span><input name="publicBaseUrl" value="${escapeHtml(settings.publicBaseUrl)}" placeholder="http://192.165.0.5:8790"></label>
+          <label class="field"><span>API base URL</span><input name="apiBaseUrl" value="${escapeHtml(settings.apiBaseUrl)}" placeholder="порожньо = цей самий сервер"></label>
+          <label class="field"><span>Bind address</span><input name="bindAddress" value="${escapeHtml(settings.bindAddress)}" placeholder="0.0.0.0"></label>
+          <label class="field"><span>Порт</span><input name="port" type="number" min="1" max="65535" value="${Number(settings.port || 8790)}"></label>
+          <label class="field"><span>Сховище</span><select name="storageBackend">${["server-json", "postgresql"].map((id) => option(id, id === "server-json" ? "JSON на сервері" : "PostgreSQL API layer", id === settings.storageBackend)).join("")}</select></label>
+          <label class="field"><span>Каталог даних</span><input name="dataDir" value="${escapeHtml(settings.dataDir)}" placeholder="data"></label>
+          <label class="field"><span>Автооновлення, сек</span><input name="autoRefreshSeconds" type="number" min="5" max="300" value="${Number(settings.autoRefreshSeconds || 15)}"></label>
+          <label class="check-line"><input type="checkbox" name="multiUser" ${settings.multiUser ? "checked" : ""}> Багатокористувацький режим</label>
+          <label class="check-line"><input type="checkbox" name="externalAccess" ${settings.externalAccess ? "checked" : ""}> Дозволити зовнішній доступ</label>
+          <label class="check-line"><input type="checkbox" name="allowLocalFallback" ${settings.allowLocalFallback ? "checked" : ""}> Дозволити локальний fallback, якщо сервер недоступний</label>
+          <div class="toolbar full">
+            <button class="primary" type="submit">Зберегти налаштування</button>
+            <button class="secondary" type="button" data-sync-state-now>Зберегти стан на сервері</button>
+            <button class="secondary" type="button" data-load-server-state>Перечитати з сервера</button>
+          </div>
+        </form>` : '<p class="muted">Роль не має дозволу змінювати системні налаштування.</p>'}
+      </article>
+
+      <article class="panel">
+        <div class="split">
+          <h2>Поточний API</h2>
+          <span class="pill ${serverSyncClass()}">${serverSync.online ? "підключено" : "fallback"}</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <tbody>
+              <tr><th>Health endpoint</th><td>${escapeHtml(apiLabel)}</td></tr>
+              <tr><th>State revision</th><td>${Number(serverSync.revision || 0)}</td></tr>
+              <tr><th>Останнє читання</th><td>${serverSync.lastLoadedAt ? formatDateTime(serverSync.lastLoadedAt) : "-"}</td></tr>
+              <tr><th>Останнє збереження</th><td>${serverSync.lastSavedAt || settings.lastSavedAt ? formatDateTime(serverSync.lastSavedAt || settings.lastSavedAt) : "-"}</td></tr>
+              <tr><th>Помилка</th><td>${escapeHtml(serverSync.error || "-")}</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="muted section-gap">Щоб дані реально зберігались на сервері 192.165.0.5, застосунок має бути запущений на цій машині командою <code>node server.mjs --host 0.0.0.0 --public-host 192.165.0.5 --port 8790</code> або через <code>start-server.ps1</code>.</p>
       </article>
     </section>
   `;
@@ -3909,6 +4233,7 @@ function render() {
     stock: renderStock,
     cash: renderPos,
     exchange: renderExchange,
+    settings: renderSettings,
     reports: renderReports,
     employees: renderEmployees,
     log: renderLog
@@ -3995,6 +4320,10 @@ document.addEventListener("click", (event) => {
   if (cancelReturnConfirmButton) return cancelReturnRefundConfirm();
   const runExchangeAutomationButton = event.target.closest("[data-run-exchange-automation]");
   if (runExchangeAutomationButton) return runExchangeAutomationNow();
+  const syncStateNowButton = event.target.closest("[data-sync-state-now]");
+  if (syncStateNowButton) return flushServerState(true);
+  const loadServerStateButton = event.target.closest("[data-load-server-state]");
+  if (loadServerStateButton) return refreshServerState(true);
   if (event.target.id === "reset-local-state") {
     state = clone(seedState);
     audit("Скинуто локальний стан B2C. Товари, клієнти, залишки й чеки очищені до нового SQL-імпорту.", "manager");
@@ -4089,6 +4418,7 @@ document.addEventListener("submit", (event) => {
   if (form.dataset.action === "exchange-export-inventory") exportInventoryToSql();
   if (form.dataset.action === "exchange-export-customers") exportCustomersToSql();
   if (form.dataset.action === "save-exchange-automation") updateExchangeAutomation(form);
+  if (form.dataset.action === "save-system-settings") updateSystemSettings(form);
   if (form.dataset.action === "sync-sql-products") syncProductsFromSql();
   if (form.dataset.action === "sync-sql-counterparties") syncCounterpartiesFromSql();
   if (form.dataset.action === "create-customer") createCustomer(form);
@@ -4102,3 +4432,8 @@ document.addEventListener("submit", (event) => {
 });
 
 render();
+bootstrapServerState();
+window.setInterval(() => {
+  const seconds = Number(state.systemSettings?.autoRefreshSeconds || DEFAULT_SYSTEM_SETTINGS.autoRefreshSeconds);
+  if (serverModeEnabled() && seconds > 0) refreshServerState(false);
+}, 1000 * Math.max(5, Number(state.systemSettings?.autoRefreshSeconds || DEFAULT_SYSTEM_SETTINGS.autoRefreshSeconds)));
