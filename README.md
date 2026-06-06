@@ -10,6 +10,7 @@
 - `styles.css` - стилі тільки для retail-блоку.
 - `app.js` - клієнтська логіка роздрібного магазину.
 - `server.mjs` - Node.js сервер для зовнішнього доступу, API і спільного server-backed стану.
+- `server.ps1` - PowerShell TCP fallback server для старих Windows, де Node.js не запускається.
 - `start-server.ps1` - Windows-скрипт запуску серверної версії.
 - `deploy-remote.ps1` - локальний deployment на Windows-сервер через PowerShell remoting без Git на сервері.
 - `retail-crm.config.example.json` - приклад конфігурації серверного запуску.
@@ -88,6 +89,8 @@ data/retail-crm-settings.json
 ```
 
 `data/` і `retail-crm.config.json` не комітяться. Для власних параметрів скопіюй `retail-crm.config.example.json` у `retail-crm.config.json`.
+
+`start-server.ps1` спочатку пробує Node.js (`server.mjs`). Якщо Node.js відсутній або не підтримує стару Windows на сервері, скрипт автоматично запускає `server.ps1` як PowerShell TCP server з тими самими API `/api/health`, `/api/bootstrap`, `/api/state`, `/api/settings`.
 
 Якщо на сервері немає Git, розгортай із локального комп'ютера через PowerShell remoting:
 
