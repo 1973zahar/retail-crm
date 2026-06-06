@@ -34,6 +34,15 @@ MVP-прототип містить:
 
 - Журнали і списки B2C рендеряться на всю ширину один під одним. У блоці `Продаж` список `B2C.2 Продажі` стоїть окремою широкою стрічкою, а `Продаж до друку` відкривається нижче і не перекриває рядки.
 
+## PostgreSQL one_c_mirror
+
+- B2C використовує SQL-шар PostgreSQL `one_c_mirror`, а не прямі запити до 1C, якщо дані вже є в SQL.
+- Товари прив'язані до `crm_products`, `crm_product_price_summary`, `crm_product_characteristics`, `crm_product_kinds`, `crm_product_series`, `crm_product_groups`, `crm_product_folders` і показують `product_code`, `product_group_path`, `product_full_path`, `product_group_code_path`, `product_group_level`, ціни, валюти, характеристики, вид, серію та групу.
+- Залишки беруться з `crm_stock_balances` і `crm_warehouses`: окремо показуються `Склад №1` (`warehouse_code = 2`), `Склад Гуртовий` і загальний залишок по всіх складах.
+- Серійні номери прив'язані до `crm_serial_stock_current`, `crm_serial_stock_by_serial`, `crm_serial_stock_summary` і показують товар, склад, серійний номер, кількість, знак залишку, `product_code` та `warehouse_code`.
+- Клієнти/контрагенти прив'язані до `crm_counterparties`, `crm_counterparty_contracts`, `crm_counterparty_settlements`, `crm_counterparty_balance_summary`.
+- Для категорій із папок B2C використовує views `one_c_mirror.crm_product_folder_attributes` і `one_c_mirror.crm_products_enriched`, які додані SQL-міграцією `005_one_c_product_folder_attributes.sql`.
+
 ## GitHub
 
 Ця папка має бути окремим git/GitHub репозиторієм. Локальний git ініціалізується окремо всередині `retail-crm`, без зв'язку з `marketplace-crm`.

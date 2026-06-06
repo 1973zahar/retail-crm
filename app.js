@@ -1,8 +1,8 @@
 "use strict";
 
-const APP_VERSION = "2026.06.05.13";
-const APP_BUILD = "20260605-b2c-stacked-lists";
-const STORAGE_KEY = "retail-crm-b2c-v8";
+const APP_VERSION = "2026.06.06.1";
+const APP_BUILD = "20260606-b2c-postgres-one-c-mirror";
+const STORAGE_KEY = "retail-crm-b2c-v9";
 const ROLE_PERMISSION_SCHEMA = "20260605-document-lists";
 const SCHEMA_DEFAULT_ACTIONS = ["drilldown_view", "document_edit", "document_list_view", "document_list_sort", "document_list_collapse"];
 
@@ -10,8 +10,43 @@ const nowIso = () => new Date().toISOString();
 const today = () => nowIso().slice(0, 10);
 const LOYALTY_DISCOUNTS = { standard: 0, silver: 3, gold: 5 };
 const LOYALTY_LABELS = { standard: "Стандарт", silver: "Silver 3%", gold: "Gold 5%" };
-const SQL_PRODUCT_SOURCE = "MSSQL:dbo.RetailProducts";
-const SQL_STOCK_RECEIPT_SOURCE = "MSSQL:dbo.RetailStockReceipts";
+const SQL_SCHEMA = "one_c_mirror";
+const SQL_MAIN_WAREHOUSE_CODE = "2";
+const SQL_MAIN_WAREHOUSE_NAME = "Склад №1";
+const SQL_WHOLESALE_WAREHOUSE_NAME = "Склад Гуртовий";
+const SQL_PRODUCT_SOURCE = "PostgreSQL:one_c_mirror.crm_products + crm_product_price_summary + crm_product_characteristics + crm_product_kinds + crm_product_series + crm_product_groups + crm_product_folders";
+const SQL_STOCK_RECEIPT_SOURCE = "PostgreSQL:one_c_mirror.crm_stock_balances + crm_warehouses";
+const SQL_SERIAL_STOCK_SOURCE = "PostgreSQL:one_c_mirror.crm_serial_stock_current + crm_serial_stock_by_serial + crm_serial_stock_summary";
+const SQL_COUNTERPARTY_SOURCE = "PostgreSQL:one_c_mirror.crm_counterparties + crm_counterparty_contracts + crm_counterparty_settlements + crm_counterparty_balance_summary";
+const SQL_REFERENCE_SOURCE = "PostgreSQL:one_c_mirror.crm_units + crm_currencies + crm_price_types + crm_organizations + crm_persons + crm_bank_accounts";
+const SQL_READY_VIEWS = [
+  "crm_products",
+  "crm_product_prices",
+  "crm_product_price_summary",
+  "crm_product_characteristics",
+  "crm_product_kinds",
+  "crm_product_series",
+  "crm_product_groups",
+  "crm_product_folders",
+  "crm_serial_stock_current",
+  "crm_serial_stock_by_serial",
+  "crm_serial_stock_summary",
+  "crm_stock_balances",
+  "crm_warehouses",
+  "crm_counterparties",
+  "crm_counterparty_contracts",
+  "crm_counterparty_settlements",
+  "crm_counterparty_balance_summary",
+  "crm_units",
+  "crm_currencies",
+  "crm_price_types",
+  "crm_organizations",
+  "crm_persons",
+  "crm_bank_accounts",
+  "crm_product_folder_attributes",
+  "crm_products_enriched"
+];
+const SQL_PENDING_VIEWS = [];
 const EMPLOYEE_STATUSES = { active: "Активний", inactive: "Вимкнений", vacation: "Відпустка" };
 const ROLE_BLOCKS = [
   { id: "dashboard", label: "Панель" },
@@ -65,28 +100,218 @@ const EMPLOYEE_ROLES = {
   }
 };
 const sqlProductSnapshot = [
-  { id: "p-100", sqlId: "SQL-100", name: "Оптичний приціл R-Point", sku: "OPT-RPOINT", barcode: "4820001000011", qr: "B2C|SKU=OPT-RPOINT|BARCODE=4820001000011", category: "Оптика", price: 5400, cost: 3650, minStock: 3, stockQty: 8 },
-  { id: "p-101", sqlId: "SQL-101", name: "Чохол транспортний 120 см", sku: "CASE-120", barcode: "4820001000028", qr: "B2C|SKU=CASE-120|BARCODE=4820001000028", category: "Аксесуари", price: 2100, cost: 1180, minStock: 5, stockQty: 12 },
-  { id: "p-102", sqlId: "SQL-102", name: "Набір для догляду", sku: "CARE-KIT", barcode: "4820001000035", qr: "B2C|SKU=CARE-KIT|BARCODE=4820001000035", category: "Догляд", price: 860, cost: 420, minStock: 8, stockQty: 18 },
-  { id: "p-103", sqlId: "SQL-103", name: "Ремінь тактичний", sku: "SLING-TAC", barcode: "4820001000042", qr: "B2C|SKU=SLING-TAC|BARCODE=4820001000042", category: "Аксесуари", price: 1450, cost: 790, minStock: 6, stockQty: 7 },
-  { id: "p-104", sqlId: "SQL-104", name: "Захисні окуляри ProShield", sku: "EYE-PRO", barcode: "4820001000059", qr: "B2C|SKU=EYE-PRO|BARCODE=4820001000059", category: "Захист", price: 980, cost: 520, minStock: 10, stockQty: 15 }
+  {
+    id: "p-8601444",
+    sqlId: "one_c_mirror.crm_products:8601444",
+    productCode: "8601444",
+    name: "Манжета поршня пневматики",
+    sku: "8601444",
+    barcode: "8601444",
+    qr: "B2C|PRODUCT_CODE=8601444|WAREHOUSE=2",
+    category: "Пневматика",
+    categoryPrimary: "Пневматика",
+    supplyChannel: "Наш імпорт",
+    isSparePart: true,
+    productGroupPath: "ПНЕВМАТИКА / НАШ ІМПОРТ / ЗАПЧАСТИНИ",
+    productFullPath: "ПНЕВМАТИКА / НАШ ІМПОРТ / ЗАПЧАСТИНИ / Манжета поршня пневматики",
+    productGroupCodePath: "PNEU / IMPORT / SPARE",
+    productGroupLevel: 3,
+    productKind: "Запчастини",
+    productSeries: "Наш імпорт ФОП СЗМ",
+    productGroup: "ЗАПЧАСТИНИ",
+    characteristics: ["category_primary=Пневматика", "supply_channel=Наш імпорт", "is_spare_part=true"],
+    prices: [
+      { priceType: "Роздрібна", currency: "UAH", price: 245 },
+      { priceType: "Гуртова", currency: "UAH", price: 198 }
+    ],
+    priceCurrencies: "UAH",
+    priceTypes: "Роздрібна, Гуртова",
+    priceSummary: "Роздрібна 245 UAH; Гуртова 198 UAH",
+    price: 245,
+    cost: 142,
+    minStock: 3
+  },
+  {
+    id: "p-868607410",
+    sqlId: "one_c_mirror.crm_products:868607410",
+    productCode: "868607410",
+    name: "Ущільнювач клапана",
+    sku: "868607410",
+    barcode: "868607410",
+    qr: "B2C|PRODUCT_CODE=868607410|WAREHOUSE=2",
+    category: "Пневматика",
+    categoryPrimary: "Пневматика",
+    supplyChannel: "Наш імпорт",
+    isSparePart: true,
+    productGroupPath: "ПНЕВМАТИКА / НАШ ІМПОРТ / ЗАПЧАСТИНИ",
+    productFullPath: "ПНЕВМАТИКА / НАШ ІМПОРТ / ЗАПЧАСТИНИ / Ущільнювач клапана",
+    productGroupCodePath: "PNEU / IMPORT / SPARE",
+    productGroupLevel: 3,
+    productKind: "Запчастини",
+    productSeries: "Серія клапанів",
+    productGroup: "ЗАПЧАСТИНИ",
+    characteristics: ["category_primary=Пневматика", "supply_channel=Наш імпорт", "is_spare_part=true"],
+    prices: [
+      { priceType: "Роздрібна", currency: "UAH", price: 185 },
+      { priceType: "Гуртова", currency: "UAH", price: 150 }
+    ],
+    priceCurrencies: "UAH",
+    priceTypes: "Роздрібна, Гуртова",
+    priceSummary: "Роздрібна 185 UAH; Гуртова 150 UAH",
+    price: 185,
+    cost: 96,
+    minStock: 5
+  },
+  {
+    id: "p-OPT-RPOINT",
+    sqlId: "one_c_mirror.crm_products:OPT-RPOINT",
+    productCode: "OPT-RPOINT",
+    name: "Оптичний приціл R-Point",
+    sku: "OPT-RPOINT",
+    barcode: "4820001000011",
+    qr: "B2C|PRODUCT_CODE=OPT-RPOINT|WAREHOUSE=2",
+    category: "Оптика",
+    categoryPrimary: "Оптика",
+    supplyChannel: "Основний склад",
+    isSparePart: false,
+    productGroupPath: "ОПТИКА / ПРИЦІЛИ",
+    productFullPath: "ОПТИКА / ПРИЦІЛИ / Оптичний приціл R-Point",
+    productGroupCodePath: "OPTICS / SCOPES",
+    productGroupLevel: 2,
+    productKind: "Оптика",
+    productSeries: "R-Point",
+    productGroup: "ПРИЦІЛИ",
+    characteristics: ["category_primary=Оптика", "is_spare_part=false"],
+    prices: [
+      { priceType: "Роздрібна", currency: "UAH", price: 5400 },
+      { priceType: "Гуртова", currency: "UAH", price: 4970 }
+    ],
+    priceCurrencies: "UAH",
+    priceTypes: "Роздрібна, Гуртова",
+    priceSummary: "Роздрібна 5400 UAH; Гуртова 4970 UAH",
+    price: 5400,
+    cost: 3650,
+    minStock: 2
+  },
+  {
+    id: "p-CASE-120",
+    sqlId: "one_c_mirror.crm_products:CASE-120",
+    productCode: "CASE-120",
+    name: "Чохол транспортний 120 см",
+    sku: "CASE-120",
+    barcode: "4820001000028",
+    qr: "B2C|PRODUCT_CODE=CASE-120|WAREHOUSE=2",
+    category: "Аксесуари",
+    categoryPrimary: "Аксесуари та інше",
+    supplyChannel: "Склад",
+    isSparePart: false,
+    productGroupPath: "АКСЕСУАРИ та ІНШЕ / ЧОХЛИ",
+    productFullPath: "АКСЕСУАРИ та ІНШЕ / ЧОХЛИ / Чохол транспортний 120 см",
+    productGroupCodePath: "ACCESSORIES / CASES",
+    productGroupLevel: 2,
+    productKind: "Аксесуари",
+    productSeries: "120 см",
+    productGroup: "ЧОХЛИ",
+    characteristics: ["category_primary=Аксесуари та інше", "is_spare_part=false"],
+    prices: [
+      { priceType: "Роздрібна", currency: "UAH", price: 2100 },
+      { priceType: "Гуртова", currency: "UAH", price: 1840 }
+    ],
+    priceCurrencies: "UAH",
+    priceTypes: "Роздрібна, Гуртова",
+    priceSummary: "Роздрібна 2100 UAH; Гуртова 1840 UAH",
+    price: 2100,
+    cost: 1180,
+    minStock: 4
+  }
 ];
-const sqlStockReceiptSnapshot = [
-  { id: "RCV-SQL-0001", sqlId: "IN-SQL-9001", date: today(), supplier: "SQL Central Warehouse", productId: "p-100", qty: 4, note: "SQL import demo" },
-  { id: "RCV-SQL-0002", sqlId: "IN-SQL-9002", date: today(), supplier: "SQL Central Warehouse", productId: "p-102", qty: 6, note: "SQL import demo" },
-  { id: "RCV-SQL-0003", sqlId: "IN-SQL-9003", date: today(), supplier: "SQL Central Warehouse", productId: "p-104", qty: 5, note: "SQL import demo" }
+const sqlStockBalanceSnapshot = [
+  { productId: "p-8601444", productCode: "8601444", warehouseCode: "2", warehouseName: "Склад №1", qty: 6, reservedQty: 1 },
+  { productId: "p-8601444", productCode: "8601444", warehouseCode: "1", warehouseName: "Склад Гуртовий", qty: 18, reservedQty: 0 },
+  { productId: "p-868607410", productCode: "868607410", warehouseCode: "2", warehouseName: "Склад №1", qty: 3, reservedQty: 0 },
+  { productId: "p-868607410", productCode: "868607410", warehouseCode: "1", warehouseName: "Склад Гуртовий", qty: 11, reservedQty: 2 },
+  { productId: "p-OPT-RPOINT", productCode: "OPT-RPOINT", warehouseCode: "2", warehouseName: "Склад №1", qty: 2, reservedQty: 0 },
+  { productId: "p-OPT-RPOINT", productCode: "OPT-RPOINT", warehouseCode: "1", warehouseName: "Склад Гуртовий", qty: 5, reservedQty: 1 },
+  { productId: "p-CASE-120", productCode: "CASE-120", warehouseCode: "2", warehouseName: "Склад №1", qty: 7, reservedQty: 0 },
+  { productId: "p-CASE-120", productCode: "CASE-120", warehouseCode: "1", warehouseName: "Склад Гуртовий", qty: 14, reservedQty: 0 }
 ];
+const sqlSerialStockSnapshot = [
+  { productId: "p-OPT-RPOINT", productCode: "OPT-RPOINT", productName: "Оптичний приціл R-Point", warehouseCode: "2", warehouseName: "Склад №1", serialName: "SN-RP-00041", quantity: 1, balanceSign: "positive" },
+  { productId: "p-OPT-RPOINT", productCode: "OPT-RPOINT", productName: "Оптичний приціл R-Point", warehouseCode: "2", warehouseName: "Склад №1", serialName: "SN-RP-00042", quantity: 1, balanceSign: "positive" },
+  { productId: "p-OPT-RPOINT", productCode: "OPT-RPOINT", productName: "Оптичний приціл R-Point", warehouseCode: "1", warehouseName: "Склад Гуртовий", serialName: "SN-RP-00037", quantity: 1, balanceSign: "positive" }
+];
+const sqlStockReceiptSnapshot = sqlStockBalanceSnapshot
+  .filter((row) => row.warehouseCode === SQL_MAIN_WAREHOUSE_CODE)
+  .map((row, index) => ({
+    id: `BAL-SQL-${String(index + 1).padStart(4, "0")}`,
+    sqlId: `one_c_mirror.crm_stock_balances:${row.productCode}:${row.warehouseCode}`,
+    date: today(),
+    supplier: SQL_STOCK_RECEIPT_SOURCE,
+    productId: row.productId,
+    qty: row.qty,
+    warehouseCode: row.warehouseCode,
+    warehouseName: row.warehouseName,
+    note: "Поточний залишок із PostgreSQL one_c_mirror"
+  }));
+const sqlCustomerSnapshot = [
+  {
+    id: "cp-0001",
+    counterpartyCode: "0001",
+    name: "Олександр Клименко",
+    phone: "+380671234567",
+    loyalty: "silver",
+    contracts: [{ contractCode: "DOG-0001", contractName: "Роздрібний договір", currency: "UAH" }],
+    settlements: [{ date: today(), amount: 1250, currency: "UAH", balanceSign: "debit" }],
+    balance: 1250,
+    balanceCurrency: "UAH"
+  },
+  {
+    id: "cp-0002",
+    counterpartyCode: "0002",
+    name: "Ірина Бойко",
+    phone: "+380662224466",
+    loyalty: "gold",
+    contracts: [{ contractCode: "DOG-0002", contractName: "Постійний покупець", currency: "UAH" }],
+    settlements: [{ date: today(), amount: -320, currency: "UAH", balanceSign: "credit" }],
+    balance: -320,
+    balanceCurrency: "UAH"
+  }
+];
+const sqlReferenceSnapshot = {
+  units: ["шт", "комплект"],
+  currencies: ["UAH", "USD", "EUR"],
+  priceTypes: ["Роздрібна", "Гуртова"],
+  organizations: ["Основна організація"],
+  persons: ["Олена Директор", "Петро Касир"],
+  bankAccounts: ["UA000000000000000000000000001"]
+};
 
 function productFromSql(row) {
   return {
     id: row.id,
     sqlId: row.sqlId,
+    productCode: row.productCode || row.sku || row.id,
     source: "sql",
     name: row.name,
     sku: row.sku,
     barcode: row.barcode,
     qr: row.qr,
     category: row.category,
+    categoryPrimary: row.categoryPrimary || row.category,
+    supplyChannel: row.supplyChannel || "",
+    isSparePart: Boolean(row.isSparePart),
+    productGroupPath: row.productGroupPath || "",
+    productFullPath: row.productFullPath || "",
+    productGroupCodePath: row.productGroupCodePath || "",
+    productGroupLevel: Number(row.productGroupLevel || 0),
+    productKind: row.productKind || "",
+    productSeries: row.productSeries || "",
+    productGroup: row.productGroup || "",
+    characteristics: Array.isArray(row.characteristics) ? row.characteristics : [],
+    prices: Array.isArray(row.prices) ? row.prices : [],
+    priceCurrencies: row.priceCurrencies || "",
+    priceTypes: row.priceTypes || "",
+    priceSummary: row.priceSummary || "",
     price: row.price,
     cost: row.cost,
     minStock: row.minStock
@@ -94,7 +319,14 @@ function productFromSql(row) {
 }
 
 function stockFromSql(row) {
-  return { productId: row.id, qty: Number(row.stockQty || 0) };
+  return {
+    productId: row.productId || row.id,
+    productCode: row.productCode || "",
+    warehouseCode: row.warehouseCode || SQL_MAIN_WAREHOUSE_CODE,
+    warehouseName: row.warehouseName || SQL_MAIN_WAREHOUSE_NAME,
+    qty: Number(row.qty ?? row.stockQty ?? 0),
+    reservedQty: Number(row.reservedQty || 0)
+  };
 }
 
 function stockReceiptFromSql(row) {
@@ -106,8 +338,23 @@ function stockReceiptFromSql(row) {
     supplier: row.supplier,
     productId: row.productId,
     qty: Number(row.qty || 0),
+    warehouseCode: row.warehouseCode || SQL_MAIN_WAREHOUSE_CODE,
+    warehouseName: row.warehouseName || SQL_MAIN_WAREHOUSE_NAME,
     note: row.note || "",
     createdAt: nowIso()
+  };
+}
+
+function serialStockFromSql(row) {
+  return {
+    productId: row.productId,
+    productCode: row.productCode || "",
+    productName: row.productName || "",
+    warehouseCode: row.warehouseCode || "",
+    warehouseName: row.warehouseName || "",
+    serialName: row.serialName || "",
+    quantity: Number(row.quantity || 0),
+    balanceSign: row.balanceSign || (Number(row.quantity || 0) > 0 ? "positive" : Number(row.quantity || 0) < 0 ? "negative" : "zero")
   };
 }
 
@@ -143,7 +390,7 @@ function defaultRolePermissions() {
 function inventoryLineFromProduct(row) {
   return {
     productId: row.id,
-    expectedQty: Number(row.stockQty || 0),
+    expectedQty: stockQtyFromRows(sqlStockBalanceSnapshot, row.id),
     actualQty: ""
   };
 }
@@ -187,8 +434,7 @@ const seedState = {
   products: sqlProductSnapshot.map(productFromSql),
   customers: [
     { id: "walk-in", name: "Роздрібний покупець", phone: "", loyalty: "standard" },
-    { id: "c-001", name: "Олександр Клименко", phone: "+380671234567", loyalty: "silver" },
-    { id: "c-002", name: "Ірина Бойко", phone: "+380662224466", loyalty: "gold" }
+    ...sqlCustomerSnapshot
   ],
   employees: [
     seedEmployee("e-001", "EMP-001", "Олена Директор", "director", "+380671110001", "director@retail.local", "director"),
@@ -201,7 +447,9 @@ const seedState = {
   selectedReturnId: "",
   rolePermissionSchema: ROLE_PERMISSION_SCHEMA,
   rolePermissions: defaultRolePermissions(),
-  stock: sqlProductSnapshot.map(stockFromSql),
+  stock: sqlStockBalanceSnapshot.map(stockFromSql),
+  serialStock: sqlSerialStockSnapshot.map(serialStockFromSql),
+  references: clone(sqlReferenceSnapshot),
   productImport: {
     source: SQL_PRODUCT_SOURCE,
     rows: sqlProductSnapshot.length,
@@ -210,7 +458,19 @@ const seedState = {
   },
   stockImport: {
     source: SQL_STOCK_RECEIPT_SOURCE,
-    rows: sqlStockReceiptSnapshot.length,
+    rows: sqlStockBalanceSnapshot.length,
+    lastRunAt: nowIso(),
+    mode: "seed"
+  },
+  serialImport: {
+    source: SQL_SERIAL_STOCK_SOURCE,
+    rows: sqlSerialStockSnapshot.length,
+    lastRunAt: nowIso(),
+    mode: "seed"
+  },
+  counterpartyImport: {
+    source: SQL_COUNTERPARTY_SOURCE,
+    rows: sqlCustomerSnapshot.length,
     lastRunAt: nowIso(),
     mode: "seed"
   },
@@ -310,7 +570,12 @@ function normalizeState(input) {
   const inputRoleSchema = next.rolePermissionSchema || "";
   next.rolePermissions = normalizeRolePermissions(next.rolePermissions, inputRoleSchema);
   next.rolePermissionSchema = ROLE_PERMISSION_SCHEMA;
-  next.stock = Array.isArray(next.stock) ? next.stock : clone(seedState.stock);
+  next.stock = Array.isArray(next.stock) ? next.stock.map(normalizeStockBalance) : clone(seedState.stock);
+  next.serialStock = Array.isArray(next.serialStock) ? next.serialStock.map(normalizeSerialStock) : clone(seedState.serialStock);
+  next.references = Object.fromEntries(Object.entries(seedState.references).map(([key, defaults]) => [
+    key,
+    Array.isArray(next.references?.[key]) ? next.references[key] : clone(defaults)
+  ]));
   next.productImport = {
     ...clone(seedState.productImport),
     ...(next.productImport || {})
@@ -318,6 +583,14 @@ function normalizeState(input) {
   next.stockImport = {
     ...clone(seedState.stockImport),
     ...(next.stockImport || {})
+  };
+  next.serialImport = {
+    ...clone(seedState.serialImport),
+    ...(next.serialImport || {})
+  };
+  next.counterpartyImport = {
+    ...clone(seedState.counterpartyImport),
+    ...(next.counterpartyImport || {})
   };
   next.receipts = Array.isArray(next.receipts) ? next.receipts.map((receipt) => normalizeReceipt(receipt, next.products)) : [];
   next.returns = Array.isArray(next.returns) ? next.returns.map(normalizeReturnDoc) : [];
@@ -373,12 +646,32 @@ function normalizeProduct(product) {
   return {
     id: product.id || `p-${Date.now()}`,
     sqlId: product.sqlId || product.id || "",
+    productCode: product.productCode || product.sku || product.sqlId || product.id || "",
     source: product.source || "sql",
     name: product.name || "Товар з SQL",
     sku: product.sku || product.id || `SKU-${Date.now()}`,
     barcode: product.barcode || "",
     qr: product.qr || "",
     category: product.category || "Інше",
+    categoryPrimary: product.categoryPrimary || product.category || "Інше",
+    supplyChannel: product.supplyChannel || "",
+    isSparePart: Boolean(product.isSparePart),
+    productGroupPath: product.productGroupPath || "",
+    productFullPath: product.productFullPath || product.productGroupPath || "",
+    productGroupCodePath: product.productGroupCodePath || "",
+    productGroupLevel: Number(product.productGroupLevel || 0),
+    productKind: product.productKind || "",
+    productSeries: product.productSeries || "",
+    productGroup: product.productGroup || product.category || "",
+    characteristics: Array.isArray(product.characteristics) ? product.characteristics : [],
+    prices: Array.isArray(product.prices) ? product.prices.map((price) => ({
+      priceType: price.priceType || "",
+      currency: price.currency || "UAH",
+      price: Number(price.price || 0)
+    })) : [],
+    priceCurrencies: product.priceCurrencies || "",
+    priceTypes: product.priceTypes || "",
+    priceSummary: product.priceSummary || "",
     price: Number(product.price || 0),
     cost: Number(product.cost || 0),
     minStock: Number(product.minStock || 0)
@@ -388,9 +681,38 @@ function normalizeProduct(product) {
 function normalizeCustomer(customer) {
   return {
     id: customer.id || `c-${Date.now()}`,
+    counterpartyCode: customer.counterpartyCode || customer.id || "",
     name: customer.name || "Покупець",
     phone: customer.phone || "",
-    loyalty: LOYALTY_DISCOUNTS[customer.loyalty] !== undefined ? customer.loyalty : "standard"
+    loyalty: LOYALTY_DISCOUNTS[customer.loyalty] !== undefined ? customer.loyalty : "standard",
+    contracts: Array.isArray(customer.contracts) ? customer.contracts : [],
+    settlements: Array.isArray(customer.settlements) ? customer.settlements : [],
+    balance: Number(customer.balance || 0),
+    balanceCurrency: customer.balanceCurrency || "UAH"
+  };
+}
+
+function normalizeStockBalance(row) {
+  return {
+    productId: row.productId || seedState.products[0]?.id || "",
+    productCode: row.productCode || "",
+    warehouseCode: row.warehouseCode || SQL_MAIN_WAREHOUSE_CODE,
+    warehouseName: row.warehouseName || SQL_MAIN_WAREHOUSE_NAME,
+    qty: Number(row.qty || 0),
+    reservedQty: Number(row.reservedQty || 0)
+  };
+}
+
+function normalizeSerialStock(row) {
+  return {
+    productId: row.productId || "",
+    productCode: row.productCode || "",
+    productName: row.productName || "",
+    warehouseCode: row.warehouseCode || "",
+    warehouseName: row.warehouseName || "",
+    serialName: row.serialName || "",
+    quantity: Number(row.quantity || 0),
+    balanceSign: row.balanceSign || (Number(row.quantity || 0) > 0 ? "positive" : Number(row.quantity || 0) < 0 ? "negative" : "zero")
   };
 }
 
@@ -545,6 +867,8 @@ function normalizeStockReceipt(receipt) {
     supplier: receipt.supplier || SQL_STOCK_RECEIPT_SOURCE,
     productId: receipt.productId || seedState.products[0].id,
     qty: Number(receipt.qty || 0),
+    warehouseCode: receipt.warehouseCode || SQL_MAIN_WAREHOUSE_CODE,
+    warehouseName: receipt.warehouseName || SQL_MAIN_WAREHOUSE_NAME,
     note: receipt.note || "",
     createdAt: receipt.createdAt || nowIso()
   };
@@ -610,8 +934,11 @@ function normalizeInventoryResort(item) {
 }
 
 function stockQtyFromRows(stockRows, productId) {
-  const row = (stockRows || []).find((item) => item.productId === productId);
-  return Number(row?.qty || 0);
+  return (stockRows || [])
+    .filter((item) => item.productId === productId && (
+      item.warehouseCode ? item.warehouseCode === SQL_MAIN_WAREHOUSE_CODE : true
+    ))
+    .reduce((sum, item) => sum + Number(item.qty || 0), 0);
 }
 
 function saveState() {
@@ -641,8 +968,8 @@ function customerLookupValue(customer) {
 }
 
 function productLookupValue(product) {
-  const scanCode = product.barcode || product.qr || product.sqlId || product.sku;
-  return `${product.sku} · ${product.name} · ${scanCode} · ${formatMoney(product.price)} · залишок ${stockQty(product.id)}`;
+  const scanCode = product.barcode || product.qr || product.productCode || product.sqlId || product.sku;
+  return `${product.productCode || product.sku} · ${product.name} · ${scanCode} · ${formatMoney(product.price)} · ${SQL_MAIN_WAREHOUSE_NAME} ${stockQty(product.id)} · всього ${stockTotalQty(product.id)}`;
 }
 
 function employeeById(id) {
@@ -697,17 +1024,47 @@ function rolePermissionCheckbox(roleId, type, permissionId) {
   `;
 }
 
-function stockRow(productId) {
-  let row = state.stock.find((item) => item.productId === productId);
+function warehouseLabel(code, name) {
+  return `${name || "Склад"}${code ? ` (${code})` : ""}`;
+}
+
+function stockRowsForProduct(productId) {
+  return state.stock.filter((item) => item.productId === productId);
+}
+
+function stockRow(productId, warehouseCode = SQL_MAIN_WAREHOUSE_CODE) {
+  let row = state.stock.find((item) => item.productId === productId && (
+    item.warehouseCode === warehouseCode
+    || (!item.warehouseCode && warehouseCode === SQL_MAIN_WAREHOUSE_CODE)
+  ));
   if (!row) {
-    row = { productId, qty: 0 };
+    row = {
+      productId,
+      productCode: productById(productId)?.productCode || productById(productId)?.sku || "",
+      warehouseCode,
+      warehouseName: warehouseCode === SQL_MAIN_WAREHOUSE_CODE ? SQL_MAIN_WAREHOUSE_NAME : "Склад",
+      qty: 0,
+      reservedQty: 0
+    };
     state.stock.push(row);
   }
   return row;
 }
 
-function stockQty(productId) {
-  return Number(stockRow(productId).qty || 0);
+function stockQty(productId, warehouseCode = SQL_MAIN_WAREHOUSE_CODE) {
+  return stockRowsForProduct(productId)
+    .filter((item) => item.warehouseCode ? item.warehouseCode === warehouseCode : warehouseCode === SQL_MAIN_WAREHOUSE_CODE)
+    .reduce((sum, item) => sum + Number(item.qty || 0), 0);
+}
+
+function stockTotalQty(productId) {
+  return stockRowsForProduct(productId).reduce((sum, item) => sum + Number(item.qty || 0), 0);
+}
+
+function stockWholesaleQty(productId) {
+  return stockRowsForProduct(productId)
+    .filter((item) => String(item.warehouseName || "").toLowerCase().includes("гурт"))
+    .reduce((sum, item) => sum + Number(item.qty || 0), 0);
 }
 
 function normalizeScanText(value) {
@@ -730,7 +1087,7 @@ function scanTokens(value) {
 }
 
 function productScanTargets(product) {
-  return [product.sku, product.barcode, product.qr, product.sqlId]
+  return [product.sku, product.productCode, product.barcode, product.qr, product.sqlId]
     .map(normalizeScanText)
     .filter(Boolean);
 }
@@ -739,7 +1096,7 @@ function productMatchesQuery(product, query) {
   const raw = normalizeScanText(query);
   if (!raw) return true;
   const tokens = scanTokens(raw);
-  const text = normalizeScanText(`${product.name} ${product.sku} ${product.barcode} ${product.qr} ${product.sqlId}`);
+  const text = normalizeScanText(`${product.name} ${product.sku} ${product.productCode} ${product.barcode} ${product.qr} ${product.sqlId} ${product.productGroupPath} ${product.productFullPath}`);
   if (text.includes(raw)) return true;
   return productScanTargets(product).some((target) => tokens.has(target) || raw.includes(target));
 }
@@ -1737,12 +2094,14 @@ function renderStock() {
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>SKU</th><th>Товар</th><th>Категорія</th><th>Залишок</th><th>Мін.</th><th>Вартість</th><th>Стан</th></tr></thead>
+            <thead><tr><th>product_code</th><th>Товар</th><th>Категорія</th><th>Склад №1</th><th>Склад Гуртовий</th><th>Всі склади</th><th>Вартість роздробу</th><th>Стан</th></tr></thead>
             <tbody>
               ${state.products.map((product) => {
                 const qty = stockQty(product.id);
+                const wholesaleQty = stockWholesaleQty(product.id);
+                const totalQty = stockTotalQty(product.id);
                 const low = qty <= product.minStock;
-                return `<tr><td>${escapeHtml(product.sku)}</td><td>${escapeHtml(product.name)}</td><td>${escapeHtml(product.category)}</td><td><strong>${qty}</strong></td><td>${product.minStock}</td><td>${formatMoney(qty * product.cost)}</td><td><span class="pill ${low ? "danger" : "good"}">${low ? "поповнити" : "доступно"}</span></td></tr>`;
+                return `<tr><td>${escapeHtml(product.productCode || product.sku)}</td><td>${escapeHtml(product.name)}<br><span class="muted">${escapeHtml(product.productFullPath || product.productGroupPath || "-")}</span></td><td>${escapeHtml(product.categoryPrimary || product.category)}</td><td><strong>${qty}</strong></td><td>${wholesaleQty}</td><td>${totalQty}</td><td>${formatMoney(totalQty * product.price)}</td><td><span class="pill ${low ? "danger" : "good"}">${low ? "поповнити" : "доступно"}</span></td></tr>`;
               }).join("")}
             </tbody>
           </table>
@@ -1750,7 +2109,31 @@ function renderStock() {
       </article>
       <article class="panel">
         <div class="split">
-          <h2>Імпорт надходжень з SQL</h2>
+          <h2>Серійні номери</h2>
+          <span class="pill">${state.serialStock.length} рядків з SQL</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>product_code</th><th>Товар</th><th>warehouse_code</th><th>Склад</th><th>Серійний номер</th><th>Кількість</th><th>Знак</th></tr></thead>
+            <tbody>
+              ${state.serialStock.map((row) => `
+                <tr>
+                  <td>${escapeHtml(row.productCode)}</td>
+                  <td>${escapeHtml(row.productName || productById(row.productId).name)}</td>
+                  <td>${escapeHtml(row.warehouseCode)}</td>
+                  <td>${escapeHtml(row.warehouseName)}</td>
+                  <td><strong>${escapeHtml(row.serialName)}</strong></td>
+                  <td>${row.quantity}</td>
+                  <td><span class="pill ${row.balanceSign === "negative" ? "danger" : row.balanceSign === "zero" ? "warn" : "good"}">${escapeHtml(row.balanceSign)}</span></td>
+                </tr>
+              `).join("") || '<tr><td colspan="7" class="muted">Серійних залишків ще немає в SQL snapshot.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </article>
+      <article class="panel">
+        <div class="split">
+          <h2>Імпорт залишків з SQL</h2>
           <span class="pill good">ручне оприбуткування вимкнено</span>
         </div>
         <div class="stack">
@@ -1763,28 +2146,30 @@ function renderStock() {
             <span>${formatDateTime(state.stockImport.lastRunAt)} · ${state.stockImport.rows || 0} рядків</span>
           </div>
           <div class="sql-box">
-            SELECT receipt_id, sql_product_id, sku, qty, supplier, receipt_date
-            FROM dbo.RetailStockReceipts
-            WHERE store_code = 'B2C' AND posted = 1
+            SELECT b.product_code, b.product_name, b.warehouse_code, w.warehouse_name,
+                   b.quantity, b.reserved_quantity
+            FROM one_c_mirror.crm_stock_balances b
+            LEFT JOIN one_c_mirror.crm_warehouses w USING (enterprise_code, warehouse_code)
+            WHERE b.warehouse_code IN ('2') OR w.warehouse_name ILIKE '%Гуртовий%'
           </div>
-          <p class="muted">Надходження в магазин не вводяться вручну. Оприбуткування, постачальник, кількість і поточні залишки приходять тільки з SQL-джерела.</p>
+          <p class="muted">Надходження в магазин не вводяться вручну. Поточні залишки, склади, серійні номери і кількість приходять тільки з SQL-джерела.</p>
         </div>
         ${canImportSql ? `<form class="form-grid one-col" data-action="sync-sql-stock-receipts">
-          <button class="primary" type="submit">Імпортувати надходження з SQL</button>
-        </form>` : '<p class="muted">SQL-імпорт надходжень приховано для цієї ролі.</p>'}
+          <button class="primary" type="submit">Імпортувати залишки з SQL</button>
+        </form>` : '<p class="muted">SQL-імпорт залишків приховано для цієї ролі.</p>'}
         <div class="table-wrap section-gap">
           <table>
-            <thead><tr><th>SQL док.</th><th>Дата</th><th>SKU</th><th>К-сть</th><th>Постачальник</th></tr></thead>
+            <thead><tr><th>SQL джерело</th><th>Дата</th><th>product_code</th><th>Склад</th><th>К-сть</th></tr></thead>
             <tbody>
               ${receiptRows.map((item) => `
                 <tr>
                   <td>${escapeHtml(item.sqlId || item.id)}</td>
                   <td>${escapeHtml(item.date)}</td>
-                  <td>${escapeHtml(productById(item.productId).sku)}</td>
+                  <td>${escapeHtml(productById(item.productId).productCode || productById(item.productId).sku)}</td>
+                  <td>${escapeHtml(warehouseLabel(item.warehouseCode, item.warehouseName))}</td>
                   <td><strong>${item.qty}</strong></td>
-                  <td>${escapeHtml(item.supplier || "-")}</td>
                 </tr>
-              `).join("") || '<tr><td colspan="5" class="muted">SQL-надходжень ще немає.</td></tr>'}
+              `).join("") || '<tr><td colspan="5" class="muted">SQL-залишків ще немає.</td></tr>'}
             </tbody>
           </table>
         </div>
@@ -1886,16 +2271,17 @@ function renderCatalog() {
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>SQL ID</th><th>SKU</th><th>Назва</th><th>Штрихкод</th><th>Категорія</th><th>Ціна</th><th>Залишок</th><th>Дії</th></tr></thead>
+            <thead><tr><th>product_code</th><th>Назва</th><th>Категорія/шлях</th><th>Рівень</th><th>Ціни/валюти</th><th>Вид/серія/група</th><th>Характеристики</th><th>Склад №1</th><th>Дії</th></tr></thead>
             <tbody>
               ${state.products.map((product) => `
                 <tr>
-                  <td>${escapeHtml(product.sqlId || "-")}</td>
-                  <td>${escapeHtml(product.sku)}</td>
-                  <td>${escapeHtml(product.name)}</td>
-                  <td>${escapeHtml(product.barcode || "-")}</td>
-                  <td>${escapeHtml(product.category)}</td>
-                  <td>${formatMoney(product.price)}</td>
+                  <td>${escapeHtml(product.productCode || product.sku)}<br><span class="muted">${escapeHtml(product.sqlId || "-")}</span></td>
+                  <td><strong>${escapeHtml(product.name)}</strong><br><span class="muted">${escapeHtml(product.barcode || product.qr || "-")}</span></td>
+                  <td>${escapeHtml(product.productGroupPath || product.category)}<br><span class="muted">${escapeHtml(product.productFullPath || "-")}</span><br><span class="muted">${escapeHtml(product.productGroupCodePath || "-")}</span></td>
+                  <td>${product.productGroupLevel || "-"}</td>
+                  <td>${escapeHtml(product.priceSummary || formatMoney(product.price))}<br><span class="muted">${escapeHtml(product.priceCurrencies || "UAH")} · ${escapeHtml(product.priceTypes || "-")}</span></td>
+                  <td>${escapeHtml(product.productKind || "-")}<br><span class="muted">${escapeHtml(product.productSeries || "-")} · ${escapeHtml(product.productGroup || "-")}</span></td>
+                  <td>${(product.characteristics || []).map((item) => `<span class="pill">${escapeHtml(item)}</span>`).join(" ") || "-"}</td>
                   <td>${stockQty(product.id)}</td>
                   <td>${canDo("sale_create") ? `<button class="secondary" type="button" data-add-cart="${escapeHtml(product.id)}">У продаж</button>` : ""}</td>
                 </tr>
@@ -1919,15 +2305,46 @@ function renderCatalog() {
             <span>${formatDateTime(state.productImport.lastRunAt)} · ${state.productImport.rows || 0} рядків</span>
           </div>
           <div class="sql-box">
-            SELECT sql_id, sku, barcode, name, category, price, cost, min_stock, stock_qty
-            FROM dbo.RetailProducts
-            WHERE active = 1
+            SELECT p.product_code, p.product_name, p.product_group_path,
+                   p.product_full_path, p.product_group_code_path, p.product_group_level,
+                   ps.price_summary, ps.price_currencies, ps.price_types,
+                   f.category_primary, f.supply_channel, f.is_spare_part
+            FROM one_c_mirror.crm_products p
+            LEFT JOIN one_c_mirror.crm_product_price_summary ps USING (enterprise_code, product_code)
+            LEFT JOIN one_c_mirror.crm_products_enriched f USING (enterprise_code, product_code)
           </div>
           <p class="muted">SKU у роздробі не створюється вручну. Товари, ціни, штрихкоди та базові залишки приходять тільки з SQL-джерела.</p>
+          <div class="log-row">
+            <strong>Готові views</strong>
+            <span>${SQL_READY_VIEWS.map((name) => `${SQL_SCHEMA}.${name}`).join(", ")}</span>
+          </div>
+          <div class="log-row">
+            <strong>Папкові характеристики</strong>
+            <span>${SQL_PENDING_VIEWS.length ? SQL_PENDING_VIEWS.map((name) => `${SQL_SCHEMA}.${name}`).join(", ") : `${SQL_SCHEMA}.crm_product_folder_attributes, ${SQL_SCHEMA}.crm_products_enriched готові у міграції 005`}</span>
+          </div>
         </div>
         ${canDo("sql_import") ? `<form class="form-grid one-col" data-action="sync-sql-products">
           <button class="primary" type="submit">Синхронізувати з SQL</button>
         </form>` : '<p class="muted">SQL-імпорт приховано для цієї ролі.</p>'}
+      </article>
+      <article class="panel">
+        <div class="split">
+          <h2>SQL довідники</h2>
+          <span class="pill">${escapeHtml(SQL_REFERENCE_SOURCE)}</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Довідник</th><th>Значення</th><th>View</th></tr></thead>
+            <tbody>
+              <tr><td>Одиниці</td><td>${state.references.units.map(escapeHtml).join(", ")}</td><td>one_c_mirror.crm_units</td></tr>
+              <tr><td>Валюти</td><td>${state.references.currencies.map(escapeHtml).join(", ")}</td><td>one_c_mirror.crm_currencies</td></tr>
+              <tr><td>Типи цін</td><td>${state.references.priceTypes.map(escapeHtml).join(", ")}</td><td>one_c_mirror.crm_price_types</td></tr>
+              <tr><td>Організації</td><td>${state.references.organizations.map(escapeHtml).join(", ")}</td><td>one_c_mirror.crm_organizations</td></tr>
+              <tr><td>Особи</td><td>${state.references.persons.map(escapeHtml).join(", ")}</td><td>one_c_mirror.crm_persons</td></tr>
+              <tr><td>Банківські рахунки</td><td>${state.references.bankAccounts.map(escapeHtml).join(", ")}</td><td>one_c_mirror.crm_bank_accounts</td></tr>
+            </tbody>
+          </table>
+        </div>
       </article>
     </section>
   `;
@@ -1950,16 +2367,18 @@ function renderCustomers() {
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Клієнт</th><th>Телефон</th><th>Лояльність</th><th>Чеків</th><th>Сума</th><th>Дії</th></tr></thead>
+            <thead><tr><th>counterparty_code</th><th>Клієнт</th><th>Договори</th><th>Сальдо</th><th>Розрахунки</th><th>Чеків</th><th>Сума продажів</th><th>Дії</th></tr></thead>
             <tbody>
               ${state.customers.map((customer) => {
                 const receipts = state.receipts.filter((receipt) => receipt.customerId === customer.id);
                 const total = receipts.reduce((sum, receipt) => sum + Number(receipt.total || 0), 0);
                 return `
                   <tr>
-                    <td>${escapeHtml(customer.name)}</td>
-                    <td>${escapeHtml(customer.phone || "-")}</td>
-                    <td><span class="pill">${escapeHtml(LOYALTY_LABELS[customer.loyalty] || customer.loyalty)}</span></td>
+                    <td>${escapeHtml(customer.counterpartyCode || customer.id)}</td>
+                    <td><strong>${escapeHtml(customer.name)}</strong><br><span class="muted">${escapeHtml(customer.phone || "-")} · ${escapeHtml(LOYALTY_LABELS[customer.loyalty] || customer.loyalty)}</span></td>
+                    <td>${(customer.contracts || []).map((contract) => `${escapeHtml(contract.contractCode || "-")} · ${escapeHtml(contract.contractName || "-")}`).join("<br>") || "-"}</td>
+                    <td><span class="pill ${Number(customer.balance || 0) > 0 ? "warn" : Number(customer.balance || 0) < 0 ? "good" : ""}">${formatMoney(customer.balance)} ${escapeHtml(customer.balanceCurrency || "UAH")}</span></td>
+                    <td>${(customer.settlements || []).map((item) => `${escapeHtml(item.date || "-")} · ${formatMoney(item.amount)} ${escapeHtml(item.currency || "UAH")}`).join("<br>") || "-"}</td>
                     <td>${receipts.length}</td>
                     <td>${formatMoney(total)}</td>
                     <td>${canDo("sale_create") ? `<button class="secondary" type="button" data-select-customer="${escapeHtml(customer.id)}">У продаж</button>` : ""}</td>
@@ -1968,6 +2387,27 @@ function renderCustomers() {
               }).join("")}
             </tbody>
           </table>
+        </div>
+      </article>
+      <article class="panel">
+        <div class="split">
+          <h2>SQL джерело контрагентів</h2>
+          <span class="pill">${state.counterpartyImport.rows || 0} контрагентів</span>
+        </div>
+        <div class="stack">
+          <div class="log-row">
+            <strong>Джерело</strong>
+            <span>${escapeHtml(state.counterpartyImport.source || SQL_COUNTERPARTY_SOURCE)}</span>
+          </div>
+          <div class="sql-box">
+            SELECT c.counterparty_code, c.counterparty_name,
+                   co.contract_code, co.contract_name,
+                   s.amount, b.balance_sign
+            FROM one_c_mirror.crm_counterparties c
+            LEFT JOIN one_c_mirror.crm_counterparty_contracts co USING (enterprise_code, counterparty_code)
+            LEFT JOIN one_c_mirror.crm_counterparty_settlements s USING (enterprise_code, counterparty_code)
+            LEFT JOIN one_c_mirror.crm_counterparty_balance_summary b USING (enterprise_code, counterparty_code)
+          </div>
         </div>
       </article>
       <article class="panel" id="new-customer-card">
@@ -2369,7 +2809,13 @@ function postConfirmedReceipt() {
 function syncProductsFromSql() {
   if (!canDo("sql_import")) return alert("Немає дозволу виконувати SQL-імпорт.");
   state.products = sqlProductSnapshot.map((row) => normalizeProduct(productFromSql(row)));
-  state.stock = sqlProductSnapshot.map(stockFromSql);
+  state.stock = sqlStockBalanceSnapshot.map((row) => normalizeStockBalance(stockFromSql(row)));
+  state.serialStock = sqlSerialStockSnapshot.map((row) => normalizeSerialStock(serialStockFromSql(row)));
+  state.customers = [
+    normalizeCustomer({ id: "walk-in", name: "Роздрібний покупець", phone: "", loyalty: "standard" }),
+    ...sqlCustomerSnapshot.map(normalizeCustomer)
+  ];
+  state.references = clone(sqlReferenceSnapshot);
   state.productImport = {
     source: SQL_PRODUCT_SOURCE,
     rows: sqlProductSnapshot.length,
@@ -2377,7 +2823,19 @@ function syncProductsFromSql() {
     mode: "manual-sync"
   };
   state.inventory = normalizeInventory({ id: "INV-DRAFT", date: today(), lines: [] }, state.products, state.stock);
-  audit(`Імпортовано ${state.products.length} SKU з SQL (${SQL_PRODUCT_SOURCE})`);
+  state.serialImport = {
+    source: SQL_SERIAL_STOCK_SOURCE,
+    rows: state.serialStock.length,
+    lastRunAt: nowIso(),
+    mode: "manual-sync"
+  };
+  state.counterpartyImport = {
+    source: SQL_COUNTERPARTY_SOURCE,
+    rows: sqlCustomerSnapshot.length,
+    lastRunAt: nowIso(),
+    mode: "manual-sync"
+  };
+  audit(`Імпортовано ${state.products.length} SKU з PostgreSQL ${SQL_SCHEMA} (${SQL_PRODUCT_SOURCE})`);
   saveState();
   render();
 }
@@ -2690,15 +3148,22 @@ function toggleDocumentList(kind) {
 function syncStockReceiptsFromSql() {
   if (!canDo("sql_import")) return alert("Немає дозволу виконувати SQL-імпорт.");
   state.stockReceipts = sqlStockReceiptSnapshot.map((row) => normalizeStockReceipt(stockReceiptFromSql(row)));
-  state.stock = sqlProductSnapshot.map(stockFromSql);
+  state.stock = sqlStockBalanceSnapshot.map((row) => normalizeStockBalance(stockFromSql(row)));
+  state.serialStock = sqlSerialStockSnapshot.map((row) => normalizeSerialStock(serialStockFromSql(row)));
   state.stockImport = {
     source: SQL_STOCK_RECEIPT_SOURCE,
-    rows: state.stockReceipts.length,
+    rows: state.stock.length,
+    lastRunAt: nowIso(),
+    mode: "manual-sync"
+  };
+  state.serialImport = {
+    source: SQL_SERIAL_STOCK_SOURCE,
+    rows: state.serialStock.length,
     lastRunAt: nowIso(),
     mode: "manual-sync"
   };
   state.inventory = normalizeInventory({ id: "INV-DRAFT", date: today(), lines: [] }, state.products, state.stock);
-  audit(`Імпортовано ${state.stockReceipts.length} надходжень з SQL (${SQL_STOCK_RECEIPT_SOURCE})`);
+  audit(`Імпортовано ${state.stock.length} складських залишків і ${state.serialStock.length} серійних рядків з SQL (${SQL_STOCK_RECEIPT_SOURCE})`);
   saveState();
   render();
 }
