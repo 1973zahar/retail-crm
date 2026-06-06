@@ -1,7 +1,7 @@
-param(
+﻿param(
   [string]$HostName = "0.0.0.0",
   [int]$Port = 8790,
-  [string]$PublicHost = "192.165.0.5",
+  [string]$PublicHost = "192.168.0.5",
   [string]$DataDir = "data",
   [string]$NodePath = ""
 )
@@ -10,7 +10,10 @@ $ErrorActionPreference = "Stop"
 
 if (-not $NodePath) {
   $BundledNode = "C:\Users\User\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe"
-  if (Test-Path $BundledNode) {
+  $LocalRuntimeNode = Join-Path $PSScriptRoot ".runtime\node\bin\node.exe"
+  if (Test-Path $LocalRuntimeNode) {
+    $NodePath = $LocalRuntimeNode
+  } elseif (Test-Path $BundledNode) {
     $NodePath = $BundledNode
   } else {
     $NodePath = "node"

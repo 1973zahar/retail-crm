@@ -1,4 +1,4 @@
-# B2C Retail CRM
+﻿# B2C Retail CRM
 
 Окремий проєкт для блоку роздрібної торгівлі.
 
@@ -11,6 +11,7 @@
 - `app.js` - клієнтська логіка роздрібного магазину.
 - `server.mjs` - Node.js сервер для зовнішнього доступу, API і спільного server-backed стану.
 - `start-server.ps1` - Windows-скрипт запуску серверної версії.
+- `deploy-remote.ps1` - локальний deployment на Windows-сервер через PowerShell remoting без Git на сервері.
 - `retail-crm.config.example.json` - приклад конфігурації серверного запуску.
 - `logs/` - окремі робочі логи B2C.
 - `B2C_HANDOFF_2026-06-06.md` - підсумковий файл для продовження роботи в новому чаті.
@@ -66,17 +67,17 @@ MVP-прототип містить:
 
 ## LAN переглядалка
 
-Для першої реальної багатокористувацької версії запускай серверний режим. На сервері `192.165.0.5`:
+Для першої реальної багатокористувацької версії запускай серверний режим. На сервері `192.168.0.5`:
 
 ```powershell
 cd D:\Codex\CRM\retail-crm
-powershell -ExecutionPolicy Bypass -File .\start-server.ps1 -HostName 0.0.0.0 -Port 8790 -PublicHost 192.165.0.5 -DataDir data
+powershell -ExecutionPolicy Bypass -File .\start-server.ps1 -HostName 0.0.0.0 -Port 8790 -PublicHost 192.168.0.5 -DataDir data
 ```
 
 Після запуску відкрий:
 
 ```text
-http://192.165.0.5:8790/index.html
+http://192.168.0.5:8790/index.html
 ```
 
 Дані зберігаються на машині, де запущений сервер:
@@ -87,6 +88,20 @@ data/retail-crm-settings.json
 ```
 
 `data/` і `retail-crm.config.json` не комітяться. Для власних параметрів скопіюй `retail-crm.config.example.json` у `retail-crm.config.json`.
+
+Якщо на сервері немає Git, розгортай із локального комп'ютера через PowerShell remoting:
+
+```powershell
+cd D:\Codex\CRM\retail-crm
+$cred = Get-Credential -UserName '192.168.0.5\zahar'
+powershell -ExecutionPolicy Bypass -File .\deploy-remote.ps1 -ComputerName 192.168.0.5 -Credential $cred -RemotePath D:\Codex\CRM\retail-crm -Port 8790 -PublicHost 192.168.0.5
+```
+
+Якщо на сервері немає Node.js, повтори deployment з bundled Node:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\deploy-remote.ps1 -ComputerName 192.168.0.5 -Credential $cred -RemotePath D:\Codex\CRM\retail-crm -Port 8790 -PublicHost 192.168.0.5 -IncludeBundledNode
+```
 
 Статичну LAN-переглядалку для прототипного режиму теж можна запускати, але вона не дає спільного серверного збереження:
 

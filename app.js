@@ -1,4 +1,4 @@
-"use strict";
+﻿"use strict";
 
 const APP_VERSION = "2026.06.06.6";
 const APP_BUILD = "20260606-b2c-server-mvp";
@@ -52,8 +52,8 @@ const SQL_READY_VIEWS = [
 const SQL_PENDING_VIEWS = [];
 const DEFAULT_SYSTEM_SETTINGS = {
   mode: "server",
-  publicHost: "192.165.0.5",
-  publicBaseUrl: "http://192.165.0.5:8790",
+  publicHost: "192.168.0.5",
+  publicBaseUrl: "http://192.168.0.5:8790",
   apiBaseUrl: "",
   bindAddress: "0.0.0.0",
   port: 8790,
@@ -3163,8 +3163,8 @@ function renderSettings() {
         </div>
         ${canSettings ? `<form class="form-grid" data-action="save-system-settings">
           <label class="field"><span>Режим роботи</span><select name="mode">${["server", "local"].map((id) => option(id, id === "server" ? "Серверний" : "Локальний fallback", id === settings.mode)).join("")}</select></label>
-          <label class="field"><span>Публічний host</span><input name="publicHost" value="${escapeHtml(settings.publicHost)}" placeholder="192.165.0.5"></label>
-          <label class="field"><span>Публічна адреса</span><input name="publicBaseUrl" value="${escapeHtml(settings.publicBaseUrl)}" placeholder="http://192.165.0.5:8790"></label>
+          <label class="field"><span>Публічний host</span><input name="publicHost" value="${escapeHtml(settings.publicHost)}" placeholder="192.168.0.5"></label>
+          <label class="field"><span>Публічна адреса</span><input name="publicBaseUrl" value="${escapeHtml(settings.publicBaseUrl)}" placeholder="http://192.168.0.5:8790"></label>
           <label class="field"><span>API base URL</span><input name="apiBaseUrl" value="${escapeHtml(settings.apiBaseUrl)}" placeholder="порожньо = цей самий сервер"></label>
           <label class="field"><span>Bind address</span><input name="bindAddress" value="${escapeHtml(settings.bindAddress)}" placeholder="0.0.0.0"></label>
           <label class="field"><span>Порт</span><input name="port" type="number" min="1" max="65535" value="${Number(settings.port || 8790)}"></label>
@@ -3198,7 +3198,7 @@ function renderSettings() {
             </tbody>
           </table>
         </div>
-        <p class="muted section-gap">Щоб дані реально зберігались на сервері 192.165.0.5, застосунок має бути запущений на цій машині командою <code>node server.mjs --host 0.0.0.0 --public-host 192.165.0.5 --port 8790</code> або через <code>start-server.ps1</code>.</p>
+        <p class="muted section-gap">Щоб дані реально зберігались на сервері 192.168.0.5, застосунок має бути запущений на цій машині командою <code>node server.mjs --host 0.0.0.0 --public-host 192.168.0.5 --port 8790</code> або через <code>start-server.ps1</code>.</p>
       </article>
     </section>
   `;

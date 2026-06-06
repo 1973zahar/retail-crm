@@ -1,4 +1,4 @@
-import http from "node:http";
+﻿import http from "node:http";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,7 +10,7 @@ const ROOT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CONFIG = {
   host: "0.0.0.0",
   port: 8790,
-  publicHost: "192.165.0.5",
+  publicHost: "192.168.0.5",
   dataDir: "data",
   stateFile: "retail-crm-state.json",
   settingsFile: "retail-crm-settings.json"
@@ -18,8 +18,8 @@ const DEFAULT_CONFIG = {
 
 const DEFAULT_SETTINGS = {
   mode: "server",
-  publicHost: "192.165.0.5",
-  publicBaseUrl: "http://192.165.0.5:8790",
+  publicHost: "192.168.0.5",
+  publicBaseUrl: "http://192.168.0.5:8790",
   apiBaseUrl: "",
   bindAddress: "0.0.0.0",
   port: 8790,
