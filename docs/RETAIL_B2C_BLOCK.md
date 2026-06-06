@@ -7,7 +7,8 @@ This document defines the current autonomous Retail B2C block before future chan
 ```text
 Block ID: retail-b2c
 Repo: D:\Codex\CRM\retail-crm
-Runtime: http://127.0.0.1:8790/index.html
+Stable local runtime: http://127.0.0.1:18810/index.html
+Legacy/manual local runtime: http://127.0.0.1:8790/index.html
 MESER runtime: http://192.168.0.5:8790/index.html
 Current build: 20260606-b2c-login-session
 App version: 2026.06.06.7
@@ -149,6 +150,37 @@ Use background import/export jobs with visible progress.
 Keep the UI responsive during exchange.
 Expose product, price, stock, serial, customer, sale, return, exchange, audit and settings facts in screens.
 Do not make users inspect raw SQL, CSV, logs or scripts during normal work.
+```
+
+## Stable Launcher
+
+The permanent local launcher is:
+
+```text
+D:\Codex\CRM\retail-crm\Retail B2C CRM.cmd
+```
+
+It wraps:
+
+```text
+D:\Codex\CRM\retail-crm\launch-retail-crm.ps1
+```
+
+Default behavior:
+
+```text
+Start server if /api/health is not ready.
+Use stable local port 18810.
+Open http://127.0.0.1:18810/index.html after health passes.
+Keep Retail B2C CRM.cmd open as a launcher watchdog.
+Keep persistent data in D:\Codex\CRM\retail-crm\data.
+Write launcher/server logs under data without exposing raw logs in chat.
+```
+
+Desktop shortcut helper:
+
+```text
+D:\Codex\CRM\retail-crm\create-retail-crm-desktop-shortcut.ps1
 ```
 
 ## Block Manifest

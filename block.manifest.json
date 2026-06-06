@@ -10,10 +10,15 @@
     "branch": "main"
   },
   "runtime": {
-    "localUrl": "http://127.0.0.1:8790/index.html",
+    "localUrl": "http://127.0.0.1:18810/index.html",
+    "legacyLocalUrl": "http://127.0.0.1:8790/index.html",
     "meserUrl": "http://192.168.0.5:8790/index.html",
     "host": "192.168.0.5",
     "port": 8790,
+    "stableLocalPort": 18810,
+    "launcherScript": "launch-retail-crm.ps1",
+    "launcherCommand": "Retail B2C CRM.cmd",
+    "shortcutScript": "create-retail-crm-desktop-shortcut.ps1",
     "startScript": "start-server.ps1",
     "nodeServer": "server.mjs",
     "fallbackServer": "server.ps1",
