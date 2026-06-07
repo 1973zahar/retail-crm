@@ -14,7 +14,7 @@
 
 Усі дії, запити, відповіді, команди, результати, кодові зміни, перевірки, commits і push записуй у B2C log.
 
-Поточний build: 20260607-b2c-release-timestamp, app version 2026.06.07.3, released at 2026-06-07 12:59:37 +03:00.
+Поточний build: 20260607-b2c-top-status-bar, app version 2026.06.07.4, released at 2026-06-07 14:11:20 +03:00.
 
 Поточний напрям: live PostgreSQL/Odoo-like архітектура: PostgreSQL crm_hub як shared source of truth, backend API/model layer для permissions/transactions/pagination/audit, frontend тільки bounded view/cache. POS product scan/search вже має backend-first slice через GET /api/products?search=&barcode=&limit=20&offset=0 з явним fallback local/demo.
 
@@ -26,6 +26,7 @@
 - ролі мають керувати видимістю блоків і діями.
 - не вантажити всю базу в браузер; для товарів/клієнтів/залишків/балансів використовувати backend endpoints з search, limit, offset і filters.
 - у футері версії `Дата/час версії` є фіксованою датою/часом створення app version, не живим годинником.
+- `Сеанс` і `Сервер` показуються у верхній панелі сторінки, не в лівому меню.
 
 Перед роботою виконай:
 cd D:\Codex\CRM\retail-crm

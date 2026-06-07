@@ -389,6 +389,93 @@ body.sidebar-collapsed .version-number {
   border-bottom: 1px solid var(--border);
 }
 
+.topbar-title {
+  min-width: 220px;
+}
+
+.top-status {
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 10px;
+}
+
+.top-status-card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-content: center;
+  column-gap: 8px;
+  row-gap: 3px;
+  min-width: 190px;
+  max-width: 280px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.top-status-card .card-icon {
+  display: grid;
+  grid-row: 1 / span 3;
+  align-self: center;
+  background: #233348;
+}
+
+.top-status-card strong,
+.top-status-card small,
+.top-status-card .top-status-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.top-status-card strong {
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.top-status-card small,
+.top-status-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.top-status-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.topbar-action {
+  min-height: 30px;
+  padding: 5px 8px;
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 700;
+}
+
+.topbar-action:hover {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+}
+
+.topbar-action.danger-outline {
+  border-color: #efb8b2;
+  background: #fff7f6;
+  color: var(--danger);
+}
+
+.topbar-action.danger-outline:hover {
+  border-color: var(--danger);
+  background: #fef0ee;
+  color: var(--danger);
+}
+
 .eyebrow {
   margin: 0 0 4px;
   color: var(--muted);
@@ -1056,6 +1143,22 @@ th {
   .grid.two,
   .form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .topbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .topbar-title,
+  .top-status,
+  .top-status-card {
+    width: 100%;
+    max-width: none;
+  }
+
+  .top-status {
+    justify-content: stretch;
   }
 
   .field.wide,

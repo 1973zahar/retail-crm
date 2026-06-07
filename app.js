@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.07.3";
-const APP_BUILD = "20260607-b2c-release-timestamp";
-const APP_RELEASED_AT = "2026-06-07 12:59:37 +03:00";
+const APP_VERSION = "2026.06.07.4";
+const APP_BUILD = "20260607-b2c-top-status-bar";
+const APP_RELEASED_AT = "2026-06-07 14:11:20 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SIDEBAR_COLLAPSED_KEY = "retail-crm-b2c-sidebar-collapsed-v1";
@@ -2369,43 +2369,51 @@ function setTitle(title) {
   document.getElementById("page-title").textContent = title;
 }
 
-function renderSessionCard() {
+function renderSessionStatus() {
   const employee = currentEmployee();
   if (!employee) {
     return `
-      <div class="access-switch session-card" title="Вхід не виконано">
-        <span class="card-icon" aria-hidden="true">В</span>
-        <span>Сеанс</span>
+      <div class="top-status-card top-session-card" title="Вхід не виконано">
+        <span class="card-icon" aria-hidden="true">С</span>
+        <span class="top-status-label">Сеанс</span>
         <strong>Вхід не виконано</strong>
         <small>Рольові блоки приховані</small>
-        <button class="sidebar-action" type="button" data-open-employee-login>Увійти</button>
+        <div class="top-status-actions">
+          <button class="topbar-action" type="button" data-open-employee-login>Увійти</button>
+        </div>
       </div>
     `;
   }
   return `
-    <div class="access-switch session-card" title="${escapeHtml(employee.name)} · ${escapeHtml(roleLabel(employee.role))}">
+    <div class="top-status-card top-session-card" title="${escapeHtml(employee.name)} · ${escapeHtml(roleLabel(employee.role))}">
       <span class="card-icon" aria-hidden="true">С</span>
-      <span>Сеанс</span>
+      <span class="top-status-label">Сеанс</span>
       <strong>${escapeHtml(employee.name)}</strong>
       <small>${escapeHtml(roleLabel(employee.role))}</small>
-      <div class="session-actions">
-        <button class="sidebar-action" type="button" data-open-employee-login>Змінити вхід</button>
-        <button class="sidebar-action danger-outline" type="button" data-logout-employee>Вийти</button>
+      <div class="top-status-actions">
+        <button class="topbar-action" type="button" data-open-employee-login>Змінити вхід</button>
+        <button class="topbar-action danger-outline" type="button" data-logout-employee>Вийти</button>
       </div>
     </div>
   `;
 }
 
-function renderNav() {
-  const sessionCard = renderSessionCard();
-  const serverSwitch = `
-    <div class="access-switch" title="Сервер: ${escapeHtml(serverSyncLabel())}">
+function renderTopStatus() {
+  const target = document.getElementById("top-status");
+  if (!target) return;
+  const serverUrl = state.systemSettings.publicBaseUrl || state.systemSettings.publicHost;
+  target.innerHTML = `
+    ${renderSessionStatus()}
+    <div class="top-status-card top-server-card" title="Сервер: ${escapeHtml(serverSyncLabel())}">
       <span class="card-icon" aria-hidden="true">S</span>
-      <span>Сервер</span>
-      <small class="pill ${serverSyncClass()}">${escapeHtml(serverSyncLabel())}</small>
-      <small>${escapeHtml(state.systemSettings.publicBaseUrl || state.systemSettings.publicHost)}</small>
+      <span class="top-status-label">Сервер</span>
+      <strong><span class="pill ${serverSyncClass()}">${escapeHtml(serverSyncLabel())}</span></strong>
+      <small>${escapeHtml(serverUrl)}</small>
     </div>
   `;
+}
+
+function renderNav() {
   const itemsHtml = navItems.map((item) => {
     if (Array.isArray(item)) {
       const [id, label] = item;
@@ -2429,7 +2437,7 @@ function renderNav() {
       </div>
     `;
   }).join("");
-  document.getElementById("nav").innerHTML = `${sessionCard}${serverSwitch}${itemsHtml}`;
+  document.getElementById("nav").innerHTML = itemsHtml;
 }
 
 function renderEmployeeLoginModal() {
@@ -4594,6 +4602,7 @@ function render() {
       saveState();
     }
   }
+  renderTopStatus();
   renderNav();
   const views = {
     dashboard: renderDashboard,
