@@ -59,6 +59,27 @@
       },
       "additionalProperties": false
     },
+    "liveReadEndpoints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["method", "path", "model", "defaultLimit", "maxLimit"],
+        "properties": {
+          "method": { "const": "GET" },
+          "path": { "type": "string" },
+          "model": { "type": "string" },
+          "defaultLimit": { "type": "integer", "minimum": 1 },
+          "maxLimit": { "type": "integer", "minimum": 1 },
+          "filters": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "source": { "type": "string" },
+          "fallback": { "type": "boolean" }
+        },
+        "additionalProperties": false
+      }
+    },
     "performanceGoals": {
       "type": "object",
       "required": ["firstScreenLoad", "search", "sync", "exchange", "ui"],

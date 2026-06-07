@@ -3,8 +3,8 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const APP_VERSION = "2026.06.07.1";
-const APP_BUILD = "20260607-b2c-sidebar-clock";
+const APP_VERSION = "2026.06.07.2";
+const APP_BUILD = "20260607-b2c-live-api-slice";
 const ROOT_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 const DEFAULT_CONFIG = {
@@ -150,6 +150,42 @@ async function handleApi(request, response, url) {
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/products") {
+    const stateContainer = await readJson(statePath, defaultStateContainer());
+    sendJson(response, 200, listProducts(stateContainer, url));
+    return;
+  }
+
+  const productMatch = url.pathname.match(/^\/api\/products\/([^/]+)$/);
+  if (request.method === "GET" && productMatch) {
+    const stateContainer = await readJson(statePath, defaultStateContainer());
+    const product = findProductById(stateContainer, decodeURIComponent(productMatch[1]));
+    if (!product) {
+      sendJson(response, 404, { error: "Product not found" });
+      return;
+    }
+    sendJson(response, 200, liveApiEnvelope(stateContainer, { item: toPublicProduct(product, stateContainer.state) }));
+    return;
+  }
+
+  if (request.method === "GET" && (url.pathname === "/api/customers" || url.pathname === "/api/clients")) {
+    const stateContainer = await readJson(statePath, defaultStateContainer());
+    sendJson(response, 200, listCustomers(stateContainer, url));
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/stock-balances") {
+    const stateContainer = await readJson(statePath, defaultStateContainer());
+    sendJson(response, 200, listStockBalances(stateContainer, url));
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/warehouses") {
+    const stateContainer = await readJson(statePath, defaultStateContainer());
+    sendJson(response, 200, listWarehouses(stateContainer, url));
+    return;
+  }
+
   if (request.method === "GET" && url.pathname === "/api/bootstrap") {
     const stateContainer = await readJson(statePath, defaultStateContainer());
     const settingsContainer = await readJson(settingsPath, defaultSettingsContainer());
@@ -219,6 +255,263 @@ async function handleApi(request, response, url) {
   }
 
   sendJson(response, 404, { error: "API route not found" });
+}
+
+function liveApiEnvelope(stateContainer, payload = {}) {
+  return {
+    ...payload,
+    source: "server-json-fallback",
+    sourceDetail: "retail-crm-state.json; target production source is PostgreSQL crm_hub through backend model layer",
+    bounded: true,
+    fallback: true,
+    productionReady: false,
+    revision: Number(stateContainer.revision || 0),
+    savedAt: stateContainer.savedAt || ""
+  };
+}
+
+function boundedParams(url, defaultLimit = 20, maxLimit = 100) {
+  const rawLimit = Number(url.searchParams.get("limit") || defaultLimit);
+  const rawOffset = Number(url.searchParams.get("offset") || 0);
+  return {
+    limit: Math.max(1, Math.min(maxLimit, Number.isFinite(rawLimit) ? rawLimit : defaultLimit)),
+    offset: Math.max(0, Number.isFinite(rawOffset) ? rawOffset : 0)
+  };
+}
+
+function stateArray(stateContainer, key) {
+  const value = stateContainer.state?.[key];
+  return Array.isArray(value) ? value : [];
+}
+
+function normalizedText(value) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function scanTokens(value) {
+  const raw = normalizedText(value);
+  const tokens = new Set();
+  if (!raw) return tokens;
+  tokens.add(raw);
+  raw.split(/[|;&\n\r\t ?]+/).forEach((part) => {
+    const clean = part.trim();
+    if (!clean) return;
+    tokens.add(clean);
+    const pair = clean.split(/[=:]/);
+    if (pair.length > 1 && pair[1]) tokens.add(pair.slice(1).join("=").trim());
+  });
+  return tokens;
+}
+
+function productScanTargets(product) {
+  return [product.sku, product.productCode, product.barcode, product.qr, product.sqlId, product.id]
+    .map(normalizedText)
+    .filter(Boolean);
+}
+
+function productMatches(product, search, barcode) {
+  const barcodeQuery = normalizedText(barcode);
+  if (barcodeQuery) {
+    const barcodeTokens = scanTokens(barcodeQuery);
+    return productScanTargets(product).some((target) => barcodeTokens.has(target) || barcodeQuery.includes(target));
+  }
+  const raw = normalizedText(search);
+  if (!raw) return true;
+  const tokens = scanTokens(raw);
+  const haystack = normalizedText([
+    product.name,
+    product.sku,
+    product.productCode,
+    product.barcode,
+    product.qr,
+    product.sqlId,
+    product.productGroupPath,
+    product.productFullPath,
+    product.category,
+    product.productKind,
+    product.productSeries,
+    product.productGroup
+  ].join(" "));
+  if (haystack.includes(raw)) return true;
+  return productScanTargets(product).some((target) => tokens.has(target) || raw.includes(target));
+}
+
+function customerMatches(customer, search) {
+  const raw = normalizedText(search);
+  if (!raw) return true;
+  return normalizedText([
+    customer.name,
+    customer.phone,
+    customer.email,
+    customer.id,
+    customer.sqlId,
+    customer.counterpartyCode
+  ].join(" ")).includes(raw);
+}
+
+function productStockSummary(productId, state) {
+  const rows = Array.isArray(state?.stock) ? state.stock.filter((row) => row.productId === productId) : [];
+  return {
+    retailStockQty: rows
+      .filter((row) => row.warehouseCode ? String(row.warehouseCode) === "2" : true)
+      .reduce((sum, row) => sum + Number(row.qty || 0), 0),
+    stockTotalQty: rows.reduce((sum, row) => sum + Number(row.qty || 0), 0),
+    stockWholesaleQty: rows
+      .filter((row) => String(row.warehouseName || "").toLowerCase().includes("гурт"))
+      .reduce((sum, row) => sum + Number(row.qty || 0), 0)
+  };
+}
+
+function toPublicProduct(product, state) {
+  const stock = productStockSummary(product.id, state);
+  return {
+    id: product.id || "",
+    sqlId: product.sqlId || "",
+    productCode: product.productCode || product.sku || "",
+    sku: product.sku || product.productCode || "",
+    name: product.name || "",
+    barcode: product.barcode || "",
+    qr: product.qr || "",
+    category: product.category || "",
+    categoryPrimary: product.categoryPrimary || product.category || "",
+    productGroupPath: product.productGroupPath || "",
+    productFullPath: product.productFullPath || "",
+    productGroupCodePath: product.productGroupCodePath || "",
+    productGroupLevel: Number(product.productGroupLevel || 0),
+    productKind: product.productKind || "",
+    productSeries: product.productSeries || "",
+    productGroup: product.productGroup || "",
+    characteristics: Array.isArray(product.characteristics) ? product.characteristics : [],
+    price: Number(product.price || 0),
+    cost: Number(product.cost || 0),
+    priceSummary: product.priceSummary || "",
+    priceTypes: product.priceTypes || "",
+    priceCurrencies: product.priceCurrencies || "",
+    prices: Array.isArray(product.prices) ? product.prices : [],
+    minStock: Number(product.minStock || 0),
+    source: product.source || "sql",
+    ...stock
+  };
+}
+
+function findProductById(stateContainer, id) {
+  const raw = normalizedText(id);
+  return stateArray(stateContainer, "products").find((product) => (
+    [product.id, product.sqlId, product.productCode, product.sku, product.barcode]
+      .map(normalizedText)
+      .includes(raw)
+  ));
+}
+
+function listProducts(stateContainer, url) {
+  const { limit, offset } = boundedParams(url, 20, 100);
+  const search = url.searchParams.get("search") || "";
+  const barcode = url.searchParams.get("barcode") || "";
+  const rows = stateArray(stateContainer, "products")
+    .filter((product) => productMatches(product, search, barcode))
+    .map((product) => toPublicProduct(product, stateContainer.state));
+  const items = rows.slice(offset, offset + limit);
+  return liveApiEnvelope(stateContainer, {
+    items,
+    total: rows.length,
+    limit,
+    offset,
+    query: { search, barcode }
+  });
+}
+
+function toPublicCustomer(customer) {
+  return {
+    id: customer.id || "",
+    sqlId: customer.sqlId || "",
+    counterpartyCode: customer.counterpartyCode || "",
+    name: customer.name || "",
+    phone: customer.phone || "",
+    email: customer.email || "",
+    loyalty: customer.loyalty || "standard",
+    balance: Number(customer.balance || 0),
+    balanceCurrency: customer.balanceCurrency || "UAH",
+    source: customer.source || "sql",
+    exportStatus: customer.exportStatus || ""
+  };
+}
+
+function listCustomers(stateContainer, url) {
+  const { limit, offset } = boundedParams(url, 20, 100);
+  const search = url.searchParams.get("search") || "";
+  const rows = stateArray(stateContainer, "customers")
+    .filter((customer) => customerMatches(customer, search))
+    .map(toPublicCustomer);
+  return liveApiEnvelope(stateContainer, {
+    items: rows.slice(offset, offset + limit),
+    total: rows.length,
+    limit,
+    offset,
+    query: { search }
+  });
+}
+
+function listStockBalances(stateContainer, url) {
+  const { limit, offset } = boundedParams(url, 50, 100);
+  const search = url.searchParams.get("search") || "";
+  const productId = normalizedText(url.searchParams.get("productId") || "");
+  const warehouseId = normalizedText(url.searchParams.get("warehouseId") || url.searchParams.get("warehouseCode") || "");
+  const productsById = new Map(stateArray(stateContainer, "products").map((product) => [product.id, product]));
+  const rows = stateArray(stateContainer, "stock").filter((row) => {
+    if (productId && normalizedText(row.productId) !== productId && normalizedText(row.productCode) !== productId) return false;
+    if (warehouseId && normalizedText(row.warehouseCode) !== warehouseId && normalizedText(row.warehouseName) !== warehouseId) return false;
+    if (!search) return true;
+    const product = productsById.get(row.productId) || {};
+    return normalizedText([
+      row.productId,
+      row.productCode,
+      row.warehouseCode,
+      row.warehouseName,
+      product.name,
+      product.sku,
+      product.productCode
+    ].join(" ")).includes(normalizedText(search));
+  }).map((row) => {
+    const product = productsById.get(row.productId) || {};
+    return {
+      productId: row.productId || "",
+      productCode: row.productCode || product.productCode || product.sku || "",
+      productName: product.name || "",
+      warehouseCode: row.warehouseCode || "",
+      warehouseName: row.warehouseName || "",
+      qty: Number(row.qty || 0),
+      reservedQty: Number(row.reservedQty || 0)
+    };
+  });
+  return liveApiEnvelope(stateContainer, {
+    items: rows.slice(offset, offset + limit),
+    total: rows.length,
+    limit,
+    offset,
+    query: { search, productId, warehouseId }
+  });
+}
+
+function listWarehouses(stateContainer, url) {
+  const { limit, offset } = boundedParams(url, 100, 100);
+  const search = normalizedText(url.searchParams.get("search") || "");
+  const map = new Map();
+  stateArray(stateContainer, "stock").forEach((row) => {
+    const code = String(row.warehouseCode || "");
+    const name = String(row.warehouseName || "");
+    const key = code || name;
+    if (!key) return;
+    if (search && !normalizedText(`${code} ${name}`).includes(search)) return;
+    if (!map.has(key)) map.set(key, { warehouseCode: code, warehouseName: name });
+  });
+  const rows = Array.from(map.values());
+  return liveApiEnvelope(stateContainer, {
+    items: rows.slice(offset, offset + limit),
+    total: rows.length,
+    limit,
+    offset,
+    query: { search }
+  });
 }
 
 function healthPayload(stateContainer) {

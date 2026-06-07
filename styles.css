@@ -534,6 +534,21 @@ label span,
   font-size: 13px;
 }
 
+.lookup-status {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.lookup-status.good {
+  color: var(--good);
+}
+
+.lookup-status.warn {
+  color: #b45309;
+}
+
 input,
 select,
 textarea {

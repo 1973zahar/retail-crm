@@ -10,9 +10,9 @@ Repo: D:\Codex\CRM\retail-crm
 Stable local runtime: http://127.0.0.1:18810/index.html
 Legacy/manual local runtime: http://127.0.0.1:8790/index.html
 MESER runtime: http://192.168.0.5:8790/index.html
-Current build: 20260607-b2c-sidebar-clock
-App version: 2026.06.07.1
-Contract version: 2026.06.06-retail-block-1
+Current build: 20260607-b2c-live-api-slice
+App version: 2026.06.07.2
+Contract version: 2026.06.07-retail-live-api-1
 ```
 
 ## Architecture
@@ -29,6 +29,16 @@ This block is one autonomous module in the Odoo-like modular CRM.
 ```
 
 The block owns retail workflows, not master data. Product, price, stock, serial number, receipt and 1C-origin facts come from the SQL core.
+
+Current migration direction:
+
+```text
+PostgreSQL crm_hub = shared durable source of truth
+Backend API/model layer = permissions, transactions, pagination and audit
+Frontend = bounded interactive view/cache only
+```
+
+The browser must not load full products, stock, serials, customers, balances or orders as production data. Large lists must be read through backend endpoints with `search`, `limit`, `offset` and filters. The current local `server-json` responses are explicitly marked as fallback until the PostgreSQL-backed TypeScript/Odoo-like model layer replaces them.
 
 ## Owned Workflows
 
@@ -104,6 +114,12 @@ GET /api/state
 PUT /api/state
 GET /api/settings
 PUT /api/settings
+GET /api/products?search=&barcode=&limit=&offset=
+GET /api/products/:id
+GET /api/customers?search=&limit=&offset=
+GET /api/clients?search=&limit=&offset=
+GET /api/stock-balances?productId=&warehouseId=&limit=&offset=
+GET /api/warehouses?search=&limit=&offset=
 ```
 
 ## Next API Layer
@@ -111,9 +127,6 @@ PUT /api/settings
 ```text
 POST /api/login
 POST /api/logout
-GET /api/products
-GET /api/products/:id
-GET /api/customers
 POST /api/customers
 GET /api/sales
 POST /api/sales
@@ -133,8 +146,19 @@ Do not show import launch blocks inside directories.
 Do not switch workers through sidebar selectors; use login/logout sessions.
 Do not manually create products, prices, stock balances, serial numbers or receipts.
 Do not duplicate SQL core master data as the local source of truth.
+Do not load full product, stock, serial, customer, balance or order tables into browser state as production data.
 Do not paste passwords, secrets, raw .env, raw logs or credentials.
 ```
+
+## First Live API Slice
+
+Retail POS product scan/search now uses a backend-first bounded lookup:
+
+```text
+GET /api/products?search=<text>&barcode=<code>&limit=20&offset=0
+```
+
+The POS product datalist renders only the current bounded result set. If the backend is unavailable, the UI shows an explicit `Fallback local/demo` status and uses the local demo/server-state data only as a fallback, not as production source of truth.
 
 ## Performance Rules
 

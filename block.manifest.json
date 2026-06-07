@@ -25,9 +25,9 @@
     "dataDir": "data"
   },
   "currentApp": {
-    "build": "20260607-b2c-sidebar-clock",
-    "version": "2026.06.07.1",
-    "contractVersion": "2026.06.06-retail-block-1"
+    "build": "20260607-b2c-live-api-slice",
+    "version": "2026.06.07.2",
+    "contractVersion": "2026.06.07-retail-live-api-1"
   },
   "sourceOfTruth": {
     "core": "PostgreSQL SQL core",
@@ -84,14 +84,17 @@
       "GET /api/state",
       "PUT /api/state",
       "GET /api/settings",
-      "PUT /api/settings"
+      "PUT /api/settings",
+      "GET /api/products?search=&barcode=&limit=&offset=",
+      "GET /api/products/:id",
+      "GET /api/customers?search=&limit=&offset=",
+      "GET /api/clients?search=&limit=&offset=",
+      "GET /api/stock-balances?productId=&warehouseId=&limit=&offset=",
+      "GET /api/warehouses?search=&limit=&offset="
     ],
     "next": [
       "POST /api/login",
       "POST /api/logout",
-      "GET /api/products",
-      "GET /api/products/:id",
-      "GET /api/customers",
       "POST /api/customers",
       "GET /api/sales",
       "POST /api/sales",
@@ -102,6 +105,48 @@
       "GET /api/audit"
     ]
   },
+  "liveReadEndpoints": [
+    {
+      "method": "GET",
+      "path": "/api/products",
+      "model": "Product",
+      "defaultLimit": 20,
+      "maxLimit": 100,
+      "filters": ["search", "barcode", "offset"],
+      "source": "server-json-fallback now; PostgreSQL crm_hub backend model target",
+      "fallback": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/customers",
+      "model": "Client",
+      "defaultLimit": 20,
+      "maxLimit": 100,
+      "filters": ["search", "offset"],
+      "source": "server-json-fallback now; PostgreSQL crm_hub backend model target",
+      "fallback": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/stock-balances",
+      "model": "StockBalance",
+      "defaultLimit": 50,
+      "maxLimit": 100,
+      "filters": ["productId", "warehouseId", "warehouseCode", "search", "offset"],
+      "source": "server-json-fallback now; PostgreSQL crm_hub backend model target",
+      "fallback": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/warehouses",
+      "model": "Warehouse",
+      "defaultLimit": 100,
+      "maxLimit": 100,
+      "filters": ["search", "offset"],
+      "source": "server-json-fallback now; PostgreSQL crm_hub backend model target",
+      "fallback": true
+    }
+  ],
   "uiBlocks": [
     "dashboard",
     "sales",
@@ -120,6 +165,7 @@
     "Do not switch workers through sidebar selectors; use login/logout sessions.",
     "Do not manually create products, prices, stock balances, serial numbers or receipts.",
     "Do not duplicate SQL core master data as the local source of truth.",
+    "Do not load full product, stock, serial, customer, balance or order tables into browser state as production data; use bounded backend endpoints.",
     "Do not paste passwords, secrets, raw .env, raw logs or credentials."
   ],
   "performanceGoals": {

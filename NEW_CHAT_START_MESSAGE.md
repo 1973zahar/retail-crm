@@ -14,9 +14,9 @@
 
 Усі дії, запити, відповіді, команди, результати, кодові зміни, перевірки, commits і push записуй у B2C log.
 
-Поточний build: 20260607-b2c-sidebar-clock, app version 2026.06.07.1.
+Поточний build: 20260607-b2c-live-api-slice, app version 2026.06.07.2.
 
-Поточний напрям: перша реальна server-backed багатокористувацька B2C-програма із зовнішнім доступом через 192.168.0.5, Node.js server.mjs, API /api/state та /api/settings, збереженням даних у data/ на сервері й блоком "Налаштування".
+Поточний напрям: live PostgreSQL/Odoo-like архітектура: PostgreSQL crm_hub як shared source of truth, backend API/model layer для permissions/transactions/pagination/audit, frontend тільки bounded view/cache. POS product scan/search вже має backend-first slice через GET /api/products?search=&barcode=&limit=20&offset=0 з явним fallback local/demo.
 
 Основні правила:
 - товари, ціни, залишки, серійні номери і надходження тільки через SQL-імпорт з one_c_mirror;
@@ -24,6 +24,7 @@
 - у довідниках не показувати блоки запуску імпорту;
 - клієнтів можна створювати в B2C через "Клієнти і лояльність", вони мають очікувати експорт у one_c_mirror.b2c_counterparties_export_queue;
 - ролі мають керувати видимістю блоків і діями.
+- не вантажити всю базу в браузер; для товарів/клієнтів/залишків/балансів використовувати backend endpoints з search, limit, offset і filters.
 
 Перед роботою виконай:
 cd D:\Codex\CRM\retail-crm

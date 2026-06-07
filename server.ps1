@@ -7,8 +7,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$AppVersion = "2026.06.07.1"
-$AppBuild = "20260607-b2c-sidebar-clock"
+$AppVersion = "2026.06.07.2"
+$AppBuild = "20260607-b2c-live-api-slice"
 $RootDir = $PSScriptRoot
 $ResolvedDataDir = if ([System.IO.Path]::IsPathRooted($DataDir)) { $DataDir } else { Join-Path $RootDir $DataDir }
 $StatePath = Join-Path $ResolvedDataDir "retail-crm-state.json"
@@ -166,6 +166,339 @@ function Send-Json($Client, [int]$StatusCode, $Value) {
   Send-Bytes $Client $StatusCode "application/json; charset=utf-8" (Convert-ToJsonBytes $Value)
 }
 
+function Decode-QueryValue([string]$Value) {
+  return [System.Uri]::UnescapeDataString(($Value -replace "\+", " "))
+}
+
+function Get-QueryParams([string]$RawPath) {
+  $params = @{}
+  if (-not $RawPath -or -not $RawPath.Contains("?")) {
+    return $params
+  }
+  $query = $RawPath.Substring($RawPath.IndexOf("?") + 1)
+  foreach ($part in ($query -split "&")) {
+    if (-not $part) { continue }
+    $pair = $part -split "=", 2
+    $key = (Decode-QueryValue $pair[0]).ToLowerInvariant()
+    $value = if ($pair.Length -gt 1) { Decode-QueryValue $pair[1] } else { "" }
+    if ($key) { $params[$key] = $value }
+  }
+  return $params
+}
+
+function Get-QueryValue($Params, [string]$Name, [string]$Default = "") {
+  $key = $Name.ToLowerInvariant()
+  if ($Params.ContainsKey($key)) {
+    return [string]$Params[$key]
+  }
+  return $Default
+}
+
+function Normalize-Text($Value) {
+  if ($null -eq $Value) { return "" }
+  return ([string]$Value).Trim().ToLowerInvariant()
+}
+
+function Get-BoundedParams($Params, [int]$DefaultLimit, [int]$MaxLimit) {
+  $limit = $DefaultLimit
+  $offset = 0
+  [int]::TryParse((Get-QueryValue $Params "limit" "$DefaultLimit"), [ref]$limit) | Out-Null
+  [int]::TryParse((Get-QueryValue $Params "offset" "0"), [ref]$offset) | Out-Null
+  if ($limit -lt 1) { $limit = 1 }
+  if ($limit -gt $MaxLimit) { $limit = $MaxLimit }
+  if ($offset -lt 0) { $offset = 0 }
+  return @{ limit = $limit; offset = $offset }
+}
+
+function Get-StateArray($StateContainer, [string]$Name) {
+  if (-not $StateContainer -or -not $StateContainer.state) {
+    return @()
+  }
+  $property = $StateContainer.state.PSObject.Properties[$Name]
+  if (-not $property -or $null -eq $property.Value) {
+    return @()
+  }
+  return @($property.Value)
+}
+
+function New-LiveApiEnvelope($StateContainer, $Payload) {
+  $result = @{}
+  foreach ($key in $Payload.Keys) {
+    $result[$key] = $Payload[$key]
+  }
+  $result.source = "server-json-fallback"
+  $result.sourceDetail = "retail-crm-state.json; target production source is PostgreSQL crm_hub through backend model layer"
+  $result.bounded = $true
+  $result.fallback = $true
+  $result.productionReady = $false
+  $result.revision = [int]($StateContainer.revision)
+  $result.savedAt = [string]($StateContainer.savedAt)
+  return $result
+}
+
+function Get-ScanTokens($Value) {
+  $raw = Normalize-Text $Value
+  if (-not $raw) { return @() }
+  $tokens = New-Object System.Collections.ArrayList
+  [void]$tokens.Add($raw)
+  foreach ($part in ($raw -split "[|;&`n`r`t ?]+")) {
+    $clean = $part.Trim()
+    if (-not $clean) { continue }
+    if (-not $tokens.Contains($clean)) { [void]$tokens.Add($clean) }
+    $pair = $clean -split "[=:]", 2
+    if ($pair.Length -gt 1 -and $pair[1]) {
+      $value = $pair[1].Trim()
+      if (-not $tokens.Contains($value)) { [void]$tokens.Add($value) }
+    }
+  }
+  return @($tokens)
+}
+
+function Get-ProductScanTargets($Product) {
+  $targets = @(
+    $Product.sku,
+    $Product.productCode,
+    $Product.barcode,
+    $Product.qr,
+    $Product.sqlId,
+    $Product.id
+  ) | ForEach-Object { Normalize-Text $_ } | Where-Object { $_ }
+  return @($targets)
+}
+
+function Test-ProductMatch($Product, [string]$Search, [string]$Barcode) {
+  $barcodeQuery = Normalize-Text $Barcode
+  if ($barcodeQuery) {
+    $tokens = Get-ScanTokens $barcodeQuery
+    foreach ($target in (Get-ProductScanTargets $Product)) {
+      if ($tokens -contains $target -or $barcodeQuery.Contains($target)) { return $true }
+    }
+    return $false
+  }
+  $raw = Normalize-Text $Search
+  if (-not $raw) { return $true }
+  $haystack = Normalize-Text (@(
+    $Product.name,
+    $Product.sku,
+    $Product.productCode,
+    $Product.barcode,
+    $Product.qr,
+    $Product.sqlId,
+    $Product.productGroupPath,
+    $Product.productFullPath,
+    $Product.category,
+    $Product.productKind,
+    $Product.productSeries,
+    $Product.productGroup
+  ) -join " ")
+  if ($haystack.Contains($raw)) { return $true }
+  $tokens = Get-ScanTokens $raw
+  foreach ($target in (Get-ProductScanTargets $Product)) {
+    if ($tokens -contains $target -or $raw.Contains($target)) { return $true }
+  }
+  return $false
+}
+
+function Test-CustomerMatch($Customer, [string]$Search) {
+  $raw = Normalize-Text $Search
+  if (-not $raw) { return $true }
+  $haystack = Normalize-Text (@(
+    $Customer.name,
+    $Customer.phone,
+    $Customer.email,
+    $Customer.id,
+    $Customer.sqlId,
+    $Customer.counterpartyCode
+  ) -join " ")
+  return $haystack.Contains($raw)
+}
+
+function Get-ProductStockSummary($State, [string]$ProductId) {
+  $rows = @()
+  if ($State -and $State.stock) {
+    $rows = @($State.stock | Where-Object { $_.productId -eq $ProductId })
+  }
+  $retail = 0
+  $total = 0
+  $wholesale = 0
+  foreach ($row in $rows) {
+    $qty = [double]($row.qty)
+    $total += $qty
+    if (-not $row.warehouseCode -or [string]$row.warehouseCode -eq "2") { $retail += $qty }
+    if ((Normalize-Text $row.warehouseName).Contains("гурт")) { $wholesale += $qty }
+  }
+  return @{ retailStockQty = $retail; stockTotalQty = $total; stockWholesaleQty = $wholesale }
+}
+
+function ConvertTo-PublicProduct($Product, $State) {
+  $stock = Get-ProductStockSummary $State ([string]$Product.id)
+  return @{
+    id = [string]$Product.id
+    sqlId = [string]$Product.sqlId
+    productCode = if ($Product.productCode) { [string]$Product.productCode } else { [string]$Product.sku }
+    sku = if ($Product.sku) { [string]$Product.sku } else { [string]$Product.productCode }
+    name = [string]$Product.name
+    barcode = [string]$Product.barcode
+    qr = [string]$Product.qr
+    category = [string]$Product.category
+    categoryPrimary = if ($Product.categoryPrimary) { [string]$Product.categoryPrimary } else { [string]$Product.category }
+    productGroupPath = [string]$Product.productGroupPath
+    productFullPath = [string]$Product.productFullPath
+    productGroupCodePath = [string]$Product.productGroupCodePath
+    productGroupLevel = [double]($Product.productGroupLevel)
+    productKind = [string]$Product.productKind
+    productSeries = [string]$Product.productSeries
+    productGroup = [string]$Product.productGroup
+    characteristics = if ($Product.characteristics) { @($Product.characteristics) } else { @() }
+    price = [double]($Product.price)
+    cost = [double]($Product.cost)
+    priceSummary = [string]$Product.priceSummary
+    priceTypes = [string]$Product.priceTypes
+    priceCurrencies = [string]$Product.priceCurrencies
+    prices = if ($Product.prices) { @($Product.prices) } else { @() }
+    minStock = [double]($Product.minStock)
+    source = if ($Product.source) { [string]$Product.source } else { "sql" }
+    retailStockQty = $stock.retailStockQty
+    stockTotalQty = $stock.stockTotalQty
+    stockWholesaleQty = $stock.stockWholesaleQty
+  }
+}
+
+function Find-ProductById($StateContainer, [string]$Id) {
+  $raw = Normalize-Text $Id
+  foreach ($product in (Get-StateArray $StateContainer "products")) {
+    $ids = @($product.id, $product.sqlId, $product.productCode, $product.sku, $product.barcode) | ForEach-Object { Normalize-Text $_ }
+    if ($ids -contains $raw) { return $product }
+  }
+  return $null
+}
+
+function Select-Page($Rows, [int]$Offset, [int]$Limit) {
+  return @($Rows | Select-Object -Skip $Offset -First $Limit)
+}
+
+function New-ProductsResponse($StateContainer, $Params) {
+  $bounds = Get-BoundedParams $Params 20 100
+  $search = Get-QueryValue $Params "search"
+  $barcode = Get-QueryValue $Params "barcode"
+  $rows = @()
+  foreach ($product in (Get-StateArray $StateContainer "products")) {
+    if (Test-ProductMatch $product $search $barcode) {
+      $rows += ConvertTo-PublicProduct $product $StateContainer.state
+    }
+  }
+  $items = @(Select-Page $rows $bounds.offset $bounds.limit)
+  return New-LiveApiEnvelope $StateContainer @{
+    items = $items
+    total = @($rows).Count
+    limit = $bounds.limit
+    offset = $bounds.offset
+    query = @{ search = $search; barcode = $barcode }
+  }
+}
+
+function ConvertTo-PublicCustomer($Customer) {
+  return @{
+    id = [string]$Customer.id
+    sqlId = [string]$Customer.sqlId
+    counterpartyCode = [string]$Customer.counterpartyCode
+    name = [string]$Customer.name
+    phone = [string]$Customer.phone
+    email = [string]$Customer.email
+    loyalty = if ($Customer.loyalty) { [string]$Customer.loyalty } else { "standard" }
+    balance = [double]($Customer.balance)
+    balanceCurrency = if ($Customer.balanceCurrency) { [string]$Customer.balanceCurrency } else { "UAH" }
+    source = if ($Customer.source) { [string]$Customer.source } else { "sql" }
+    exportStatus = [string]$Customer.exportStatus
+  }
+}
+
+function New-CustomersResponse($StateContainer, $Params) {
+  $bounds = Get-BoundedParams $Params 20 100
+  $search = Get-QueryValue $Params "search"
+  $rows = @()
+  foreach ($customer in (Get-StateArray $StateContainer "customers")) {
+    if (Test-CustomerMatch $customer $search) {
+      $rows += ConvertTo-PublicCustomer $customer
+    }
+  }
+  $items = @(Select-Page $rows $bounds.offset $bounds.limit)
+  return New-LiveApiEnvelope $StateContainer @{
+    items = $items
+    total = @($rows).Count
+    limit = $bounds.limit
+    offset = $bounds.offset
+    query = @{ search = $search }
+  }
+}
+
+function New-StockBalancesResponse($StateContainer, $Params) {
+  $bounds = Get-BoundedParams $Params 50 100
+  $search = Get-QueryValue $Params "search"
+  $productId = Normalize-Text (Get-QueryValue $Params "productId")
+  $warehouseRaw = Get-QueryValue $Params "warehouseId"
+  if (-not $warehouseRaw) {
+    $warehouseRaw = Get-QueryValue $Params "warehouseCode"
+  }
+  $warehouseId = Normalize-Text $warehouseRaw
+  $products = @{}
+  foreach ($product in (Get-StateArray $StateContainer "products")) {
+    $products[[string]$product.id] = $product
+  }
+  $rows = @()
+  foreach ($row in (Get-StateArray $StateContainer "stock")) {
+    if ($productId -and (Normalize-Text $row.productId) -ne $productId -and (Normalize-Text $row.productCode) -ne $productId) { continue }
+    if ($warehouseId -and (Normalize-Text $row.warehouseCode) -ne $warehouseId -and (Normalize-Text $row.warehouseName) -ne $warehouseId) { continue }
+    $product = if ($products.ContainsKey([string]$row.productId)) { $products[[string]$row.productId] } else { $null }
+    if ($search) {
+      $haystack = Normalize-Text (@($row.productId, $row.productCode, $row.warehouseCode, $row.warehouseName, $product.name, $product.sku, $product.productCode) -join " ")
+      if (-not $haystack.Contains((Normalize-Text $search))) { continue }
+    }
+    $rows += @{
+      productId = [string]$row.productId
+      productCode = if ($row.productCode) { [string]$row.productCode } elseif ($product) { [string]$product.productCode } else { "" }
+      productName = if ($product) { [string]$product.name } else { "" }
+      warehouseCode = [string]$row.warehouseCode
+      warehouseName = [string]$row.warehouseName
+      qty = [double]($row.qty)
+      reservedQty = [double]($row.reservedQty)
+    }
+  }
+  $items = @(Select-Page $rows $bounds.offset $bounds.limit)
+  return New-LiveApiEnvelope $StateContainer @{
+    items = $items
+    total = @($rows).Count
+    limit = $bounds.limit
+    offset = $bounds.offset
+    query = @{ search = $search; productId = $productId; warehouseId = $warehouseId }
+  }
+}
+
+function New-WarehousesResponse($StateContainer, $Params) {
+  $bounds = Get-BoundedParams $Params 100 100
+  $search = Normalize-Text (Get-QueryValue $Params "search")
+  $warehouses = @{}
+  foreach ($row in (Get-StateArray $StateContainer "stock")) {
+    $code = [string]$row.warehouseCode
+    $name = [string]$row.warehouseName
+    $key = if ($code) { $code } else { $name }
+    if (-not $key) { continue }
+    if ($search -and -not (Normalize-Text "$code $name").Contains($search)) { continue }
+    if (-not $warehouses.ContainsKey($key)) {
+      $warehouses[$key] = @{ warehouseCode = $code; warehouseName = $name }
+    }
+  }
+  $rows = @($warehouses.Values)
+  $items = @(Select-Page $rows $bounds.offset $bounds.limit)
+  return New-LiveApiEnvelope $StateContainer @{
+    items = $items
+    total = @($rows).Count
+    limit = $bounds.limit
+    offset = $bounds.offset
+    query = @{ search = $search }
+  }
+}
+
 function Send-Text($Client, [int]$StatusCode, [string]$Text) {
   Send-Bytes $Client $StatusCode "text/plain; charset=utf-8" ($Utf8.GetBytes($Text))
 }
@@ -258,6 +591,42 @@ function Handle-Api($Client, $Request) {
   if ($method -eq "GET" -and $path -eq "/api/health") {
     $stateContainer = Read-JsonFile $StatePath (New-DefaultStateContainer)
     Send-Json $Client 200 (New-HealthPayload $stateContainer)
+    return
+  }
+
+  if ($method -eq "GET" -and $path -eq "/api/products") {
+    $stateContainer = Read-JsonFile $StatePath (New-DefaultStateContainer)
+    Send-Json $Client 200 (New-ProductsResponse $stateContainer (Get-QueryParams $Request.RawPath))
+    return
+  }
+
+  if ($method -eq "GET" -and $path.StartsWith("/api/products/")) {
+    $stateContainer = Read-JsonFile $StatePath (New-DefaultStateContainer)
+    $productId = Decode-QueryValue ($path.Substring("/api/products/".Length))
+    $product = Find-ProductById $stateContainer $productId
+    if (-not $product) {
+      Send-Json $Client 404 @{ error = "Product not found" }
+      return
+    }
+    Send-Json $Client 200 (New-LiveApiEnvelope $stateContainer @{ item = ConvertTo-PublicProduct $product $stateContainer.state })
+    return
+  }
+
+  if ($method -eq "GET" -and ($path -eq "/api/customers" -or $path -eq "/api/clients")) {
+    $stateContainer = Read-JsonFile $StatePath (New-DefaultStateContainer)
+    Send-Json $Client 200 (New-CustomersResponse $stateContainer (Get-QueryParams $Request.RawPath))
+    return
+  }
+
+  if ($method -eq "GET" -and $path -eq "/api/stock-balances") {
+    $stateContainer = Read-JsonFile $StatePath (New-DefaultStateContainer)
+    Send-Json $Client 200 (New-StockBalancesResponse $stateContainer (Get-QueryParams $Request.RawPath))
+    return
+  }
+
+  if ($method -eq "GET" -and $path -eq "/api/warehouses") {
+    $stateContainer = Read-JsonFile $StatePath (New-DefaultStateContainer)
+    Send-Json $Client 200 (New-WarehousesResponse $stateContainer (Get-QueryParams $Request.RawPath))
     return
   }
 
