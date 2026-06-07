@@ -10,8 +10,8 @@ Repo: D:\Codex\CRM\retail-crm
 Stable local runtime: http://127.0.0.1:18810/index.html
 Legacy/manual local runtime: http://127.0.0.1:8790/index.html
 MESER runtime: http://192.168.0.5:8790/index.html
-Current build: 20260606-b2c-login-session
-App version: 2026.06.06.7
+Current build: 20260607-b2c-sidebar-clock
+App version: 2026.06.07.1
 Contract version: 2026.06.06-retail-block-1
 ```
 

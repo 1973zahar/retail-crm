@@ -7,21 +7,25 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     <title>B2C Retail CRM</title>
-    <link rel="stylesheet" href="styles.css?v=20260606-b2c-login-session">
+    <link rel="stylesheet" href="styles.css?v=20260607-b2c-sidebar-clock">
   </head>
   <body>
     <aside class="sidebar">
-      <div class="brand">
-        <span class="brand-mark">B2C</span>
-        <div>
-          <strong>Роздрібна торгівля</strong>
-          <small>окремий блок магазину</small>
+      <div class="sidebar-head">
+        <div class="brand">
+          <span class="brand-mark">B2C</span>
+          <div class="brand-text">
+            <strong>Роздрібна торгівля</strong>
+            <small>окремий блок магазину</small>
+          </div>
         </div>
+        <button class="sidebar-toggle" type="button" data-toggle-sidebar aria-expanded="true" aria-label="Згорнути меню" title="Згорнути меню">&lt;</button>
       </div>
       <nav id="nav" class="nav" aria-label="Навігація B2C"></nav>
       <div class="version">
-        <span>v2026.06.06.7</span>
-        <small>20260606-b2c-login-session</small>
+        <span class="version-number">v2026.06.07.1</span>
+        <small class="version-build">20260607-b2c-sidebar-clock</small>
+        <small class="version-time">Дата/час: <span id="app-clock">--.--.---- --:--:--</span></small>
       </div>
     </aside>
 
@@ -36,6 +40,6 @@
       <section id="app" class="content" tabindex="-1"></section>
     </main>
 
-    <script src="app.js?v=20260606-b2c-login-session"></script>
+    <script src="app.js?v=20260607-b2c-sidebar-clock"></script>
   </body>
 </html>

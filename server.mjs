@@ -3,8 +3,8 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const APP_VERSION = "2026.06.06.7";
-const APP_BUILD = "20260606-b2c-login-session";
+const APP_VERSION = "2026.06.07.1";
+const APP_BUILD = "20260607-b2c-sidebar-clock";
 const ROOT_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 const DEFAULT_CONFIG = {

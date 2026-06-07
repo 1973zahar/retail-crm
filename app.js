@@ -1,9 +1,10 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.06.7";
-const APP_BUILD = "20260606-b2c-login-session";
+const APP_VERSION = "2026.06.07.1";
+const APP_BUILD = "20260607-b2c-sidebar-clock";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
+const SIDEBAR_COLLAPSED_KEY = "retail-crm-b2c-sidebar-collapsed-v1";
 const ROLE_PERMISSION_SCHEMA = "20260606-server-settings";
 const SCHEMA_DEFAULT_BLOCKS = ["settings"];
 const SCHEMA_DEFAULT_ACTIONS = ["customer_create", "drilldown_view", "document_edit", "document_list_view", "document_list_sort", "document_list_collapse", "exchange_view", "system_settings"];
@@ -575,11 +576,27 @@ const navItems = [
   ["log", "Журнал"]
 ];
 
+const NAV_ICONS = {
+  dashboard: "П",
+  pos: "₴",
+  directories: "Д",
+  catalog: "Т",
+  customers: "К",
+  stock: "З",
+  exchange: "О",
+  settings: "Н",
+  returns: "ПВ",
+  reports: "ЗД",
+  employees: "ПР",
+  log: "Ж"
+};
+
 const VIEW_ALIASES = { checkout: "pos", receipts: "pos", cash: "pos" };
 
 let sessionEmployeeId = loadSessionEmployeeId();
 let state = loadState();
 let loginDialog = { open: false, employeeId: "" };
+let sidebarCollapsed = loadSidebarCollapsed();
 
 function clone(value) {
   return typeof structuredClone === "function" ? structuredClone(value) : JSON.parse(JSON.stringify(value));
@@ -604,6 +621,39 @@ function storeSessionEmployeeId(employeeId) {
   } catch (error) {
     // Keep the in-memory session when browser storage is blocked.
   }
+}
+
+function loadSidebarCollapsed() {
+  try {
+    return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1";
+  } catch (error) {
+    return false;
+  }
+}
+
+function storeSidebarCollapsed(collapsed) {
+  sidebarCollapsed = Boolean(collapsed);
+  try {
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? "1" : "0");
+  } catch (error) {
+    // Keep the in-memory sidebar state when browser storage is blocked.
+  }
+}
+
+function applySidebarState() {
+  document.body.classList.toggle("sidebar-collapsed", sidebarCollapsed);
+  const toggle = document.querySelector("[data-toggle-sidebar]");
+  if (!toggle) return;
+  const label = sidebarCollapsed ? "Розгорнути меню" : "Згорнути меню";
+  toggle.textContent = sidebarCollapsed ? ">" : "<";
+  toggle.setAttribute("aria-label", label);
+  toggle.setAttribute("title", label);
+  toggle.setAttribute("aria-expanded", String(!sidebarCollapsed));
+}
+
+function toggleSidebar() {
+  storeSidebarCollapsed(!sidebarCollapsed);
+  applySidebarState();
 }
 
 function loadState() {
@@ -727,6 +777,10 @@ function normalizeSystemSettings(input) {
 
 function flatNavItems(items = navItems) {
   return items.flatMap((item) => Array.isArray(item) ? [item] : item.children || []);
+}
+
+function navIcon(id) {
+  return NAV_ICONS[id] || id.slice(0, 2).toUpperCase();
 }
 
 function normalizeProduct(product) {
@@ -2131,7 +2185,8 @@ function renderSessionCard() {
   const employee = currentEmployee();
   if (!employee) {
     return `
-      <div class="access-switch session-card">
+      <div class="access-switch session-card" title="Вхід не виконано">
+        <span class="card-icon" aria-hidden="true">В</span>
         <span>Сеанс</span>
         <strong>Вхід не виконано</strong>
         <small>Рольові блоки приховані</small>
@@ -2140,7 +2195,8 @@ function renderSessionCard() {
     `;
   }
   return `
-    <div class="access-switch session-card">
+    <div class="access-switch session-card" title="${escapeHtml(employee.name)} · ${escapeHtml(roleLabel(employee.role))}">
+      <span class="card-icon" aria-hidden="true">С</span>
       <span>Сеанс</span>
       <strong>${escapeHtml(employee.name)}</strong>
       <small>${escapeHtml(roleLabel(employee.role))}</small>
@@ -2155,7 +2211,8 @@ function renderSessionCard() {
 function renderNav() {
   const sessionCard = renderSessionCard();
   const serverSwitch = `
-    <div class="access-switch">
+    <div class="access-switch" title="Сервер: ${escapeHtml(serverSyncLabel())}">
+      <span class="card-icon" aria-hidden="true">S</span>
       <span>Сервер</span>
       <small class="pill ${serverSyncClass()}">${escapeHtml(serverSyncLabel())}</small>
       <small>${escapeHtml(state.systemSettings.publicBaseUrl || state.systemSettings.publicHost)}</small>
@@ -2165,7 +2222,7 @@ function renderNav() {
     if (Array.isArray(item)) {
       const [id, label] = item;
       if (!canOpenBlock(id)) return "";
-      return `<button type="button" class="${state.currentView === id ? "active" : ""}" data-view="${id}">${escapeHtml(label)}</button>`;
+      return `<button type="button" class="${state.currentView === id ? "active" : ""}" data-view="${id}" title="${escapeHtml(label)}"><span class="nav-icon" aria-hidden="true">${escapeHtml(navIcon(id))}</span><span class="nav-label">${escapeHtml(label)}</span></button>`;
     }
 
     const children = (item.children || []).filter(([id]) => canOpenBlock(id));
@@ -2173,12 +2230,13 @@ function renderNav() {
     const active = children.some(([id]) => state.currentView === id);
     return `
       <div class="nav-group ${active ? "open" : ""}">
-        <button type="button" class="nav-group-label" aria-haspopup="true" aria-expanded="${active ? "true" : "false"}">
-          <span>${escapeHtml(item.label)}</span>
+        <button type="button" class="nav-group-label" aria-haspopup="true" aria-expanded="${active ? "true" : "false"}" title="${escapeHtml(item.label)}">
+          <span class="nav-icon" aria-hidden="true">${escapeHtml(navIcon(item.id))}</span>
+          <span class="nav-label">${escapeHtml(item.label)}</span>
           <span class="nav-group-caret" aria-hidden="true">&gt;</span>
         </button>
         <div class="nav-submenu">
-          ${children.map(([id, label]) => `<button type="button" class="${state.currentView === id ? "active" : ""}" data-view="${id}">${escapeHtml(label)}</button>`).join("")}
+          ${children.map(([id, label]) => `<button type="button" class="${state.currentView === id ? "active" : ""}" data-view="${id}" title="${escapeHtml(label)}"><span class="nav-icon" aria-hidden="true">${escapeHtml(navIcon(id))}</span><span class="nav-label">${escapeHtml(label)}</span></button>`).join("")}
         </div>
       </div>
     `;
@@ -4332,6 +4390,8 @@ function updateCartField(target) {
 }
 
 function render() {
+  applySidebarState();
+  renderAppClock();
   if (!canOpenBlock(state.currentView)) {
     const allowedView = firstAllowedView();
     if (canOpenBlock(allowedView)) {
@@ -4374,6 +4434,8 @@ function renderNoAccess() {
 }
 
 document.addEventListener("click", (event) => {
+  const sidebarToggleButton = event.target.closest("[data-toggle-sidebar]");
+  if (sidebarToggleButton) return toggleSidebar();
   const openLoginButton = event.target.closest("[data-open-employee-login]");
   if (openLoginButton) return openEmployeeLogin();
   const closeLoginButton = event.target.closest("[data-close-employee-login]");
@@ -4556,8 +4618,34 @@ document.addEventListener("submit", (event) => {
   if (form.dataset.action === "close-shift") closeCashShift(form);
 });
 
+function formatAppDateTime(date = new Date()) {
+  try {
+    return new Intl.DateTimeFormat("uk-UA", {
+      timeZone: "Europe/Kyiv",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false
+    }).format(date).replace(",", "");
+  } catch (error) {
+    return date.toLocaleString();
+  }
+}
+
+function renderAppClock() {
+  const target = document.getElementById("app-clock");
+  if (!target) return;
+  target.textContent = formatAppDateTime();
+}
+
+applySidebarState();
+renderAppClock();
 render();
 bootstrapServerState();
+window.setInterval(renderAppClock, 1000);
 window.setInterval(() => {
   const seconds = Number(state.systemSettings?.autoRefreshSeconds || DEFAULT_SYSTEM_SETTINGS.autoRefreshSeconds);
   if (serverModeEnabled() && seconds > 0) refreshServerState(false);

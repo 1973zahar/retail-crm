@@ -25,6 +25,11 @@ body {
   grid-template-columns: 260px 1fr;
   background: var(--bg);
   color: var(--text);
+  transition: grid-template-columns 160ms ease;
+}
+
+body.sidebar-collapsed {
+  grid-template-columns: 76px 1fr;
 }
 
 .sidebar {
@@ -32,13 +37,44 @@ body {
   padding: 20px 16px;
   background: #17212f;
   color: #f8fafc;
+  overflow: visible;
+}
+
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 24px;
 }
 
 .brand {
   display: flex;
   gap: 12px;
   align-items: center;
-  margin-bottom: 24px;
+  min-width: 0;
+}
+
+.brand-text {
+  min-width: 0;
+}
+
+.sidebar-toggle {
+  width: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  border-color: rgba(255, 255, 255, 0.16);
+  background: #111827;
+  color: #e7edf5;
+  font-weight: 800;
+  line-height: 1;
+  text-align: center;
+}
+
+.sidebar-toggle:hover {
+  background: #243447;
+  color: #ffffff;
 }
 
 .brand-mark {
@@ -81,9 +117,33 @@ button {
 
 .nav button {
   width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   text-align: left;
   background: transparent;
   color: #e7edf5;
+}
+
+.nav-icon,
+.card-icon {
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.nav-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .nav button.active,
@@ -98,6 +158,14 @@ button {
   border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 8px;
   background: #111827;
+}
+
+.card-icon {
+  display: none;
+}
+
+.access-switch .card-icon {
+  color: #ffffff;
 }
 
 .access-switch span,
@@ -154,7 +222,7 @@ button {
 .nav-group-label {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 8px;
   width: 100%;
   background: transparent;
@@ -163,6 +231,7 @@ button {
 }
 
 .nav-group-caret {
+  margin-left: auto;
   color: #b6c3d2;
 }
 
@@ -213,6 +282,96 @@ button {
   padding-top: 16px;
   border-top: 1px solid rgba(255, 255, 255, 0.15);
   font-size: 13px;
+}
+
+.version-time {
+  line-height: 1.35;
+}
+
+body.sidebar-collapsed .sidebar {
+  padding: 16px 10px;
+}
+
+body.sidebar-collapsed .sidebar-head {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+}
+
+body.sidebar-collapsed .brand {
+  justify-content: center;
+}
+
+body.sidebar-collapsed .brand-text,
+body.sidebar-collapsed .nav-label,
+body.sidebar-collapsed .nav-group-caret,
+body.sidebar-collapsed .access-switch > :not(.card-icon),
+body.sidebar-collapsed .version-build,
+body.sidebar-collapsed .version-time {
+  display: none;
+}
+
+body.sidebar-collapsed .brand-mark {
+  width: 44px;
+  height: 44px;
+  font-size: 14px;
+}
+
+body.sidebar-collapsed .sidebar-toggle {
+  width: 44px;
+}
+
+body.sidebar-collapsed .nav,
+body.sidebar-collapsed .session-actions {
+  justify-items: center;
+}
+
+body.sidebar-collapsed .nav button,
+body.sidebar-collapsed .nav-group-label {
+  justify-content: center;
+  min-height: 44px;
+  padding: 8px;
+}
+
+body.sidebar-collapsed .nav-submenu button {
+  justify-content: flex-start;
+  min-height: 34px;
+  padding: 8px 10px;
+}
+
+body.sidebar-collapsed .nav-submenu .nav-label {
+  display: inline;
+}
+
+body.sidebar-collapsed .nav-icon {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+}
+
+body.sidebar-collapsed .nav-submenu .nav-icon {
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+}
+
+body.sidebar-collapsed .access-switch {
+  min-height: 44px;
+  padding: 8px;
+  place-items: center;
+}
+
+body.sidebar-collapsed .card-icon {
+  display: grid;
+}
+
+body.sidebar-collapsed .version {
+  padding-top: 14px;
+  text-align: center;
+}
+
+body.sidebar-collapsed .version-number {
+  font-size: 11px;
 }
 
 .workspace {
@@ -866,7 +1025,15 @@ th {
     grid-template-columns: 1fr;
   }
 
+  body.sidebar-collapsed {
+    grid-template-columns: 1fr;
+  }
+
   .sidebar {
+    min-height: auto;
+  }
+
+  body.sidebar-collapsed .sidebar {
     min-height: auto;
   }
 
