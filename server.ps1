@@ -7,14 +7,15 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$AppVersion = "2026.06.07.5"
-$AppBuild = "20260607-b2c-weapon-serials"
-$AppReleasedAt = "2026-06-07 14:49:18 +03:00"
+$AppVersion = "2026.06.07.6"
+$AppBuild = "20260607-b2c-live-reference-tables"
+$AppReleasedAt = "2026-06-07 17:57:37 +03:00"
 $RootDir = $PSScriptRoot
 $ResolvedDataDir = if ([System.IO.Path]::IsPathRooted($DataDir)) { $DataDir } else { Join-Path $RootDir $DataDir }
 $StatePath = Join-Path $ResolvedDataDir "retail-crm-state.json"
 $SettingsPath = Join-Path $ResolvedDataDir "retail-crm-settings.json"
 $PublicBaseUrl = "http://$PublicHost`:$Port"
+$CrmSqlApiBaseUrl = if ($env:CRM_SQL_API_BASE_URL) { $env:CRM_SQL_API_BASE_URL.TrimEnd("/") } else { "http://192.168.0.166:3000" }
 $Utf8 = [System.Text.Encoding]::UTF8
 $Ascii = [System.Text.Encoding]::ASCII
 
@@ -40,6 +41,7 @@ function New-DefaultSettings {
     port = $Port
     storageBackend = "server-json"
     dataDir = $DataDir
+    crmSqlApiBaseUrl = $CrmSqlApiBaseUrl
     multiUser = $true
     externalAccess = $true
     allowLocalFallback = $true
@@ -126,6 +128,7 @@ function New-HealthPayload($StateContainer) {
     host = $HostName
     publicHost = $PublicHost
     publicBaseUrl = $PublicBaseUrl
+    crmSqlApiBaseUrl = $CrmSqlApiBaseUrl
     port = $Port
     dataDir = $ResolvedDataDir
     revision = [int]($StateContainer.revision)
@@ -141,6 +144,7 @@ function Get-StatusText([int]$StatusCode) {
     403 { "Forbidden" }
     404 { "Not Found" }
     500 { "Internal Server Error" }
+    502 { "Bad Gateway" }
     default { "OK" }
   }
 }
@@ -212,6 +216,113 @@ function Get-BoundedParams($Params, [int]$DefaultLimit, [int]$MaxLimit) {
   if ($limit -gt $MaxLimit) { $limit = $MaxLimit }
   if ($offset -lt 0) { $offset = 0 }
   return @{ limit = $limit; offset = $offset }
+}
+
+function Get-LiveQueryParams($Params, [int]$DefaultLimit, [int]$MaxLimit) {
+  $bounds = Get-BoundedParams $Params $DefaultLimit $MaxLimit
+  $search = (Get-QueryValue $Params "search").Trim()
+  $barcode = (Get-QueryValue $Params "barcode").Trim()
+  $query = @{
+    limit = $bounds.limit
+    offset = $bounds.offset
+  }
+  if ($search) { $query.search = $search }
+  if ($barcode) {
+    $query.barcode = $barcode
+    if (-not $search) { $query.search = $barcode }
+  }
+  return @{
+    params = $query
+    limit = $bounds.limit
+    offset = $bounds.offset
+    search = $search
+    barcode = $barcode
+  }
+}
+
+function ConvertTo-QueryString($Params) {
+  $parts = @()
+  foreach ($key in $Params.Keys) {
+    if ($null -eq $Params[$key]) { continue }
+    $parts += ([System.Uri]::EscapeDataString([string]$key) + "=" + [System.Uri]::EscapeDataString([string]$Params[$key]))
+  }
+  return ($parts -join "&")
+}
+
+function Invoke-CrmSqlApi([string]$Path, $Params) {
+  $query = ConvertTo-QueryString $Params
+  $url = "$CrmSqlApiBaseUrl$Path"
+  if ($query) { $url = "$url`?$query" }
+  $client = New-Object System.Net.WebClient
+  $client.Encoding = $Utf8
+  $raw = $client.DownloadString($url)
+  if (-not $raw) { return @{} }
+  return $raw | ConvertFrom-Json
+}
+
+function Get-ObjectPropertyValue($Object, [string[]]$Names, $Default = $null) {
+  if (-not $Object) { return $Default }
+  foreach ($name in $Names) {
+    $property = $Object.PSObject.Properties[$name]
+    if ($property -and $null -ne $property.Value -and [string]$property.Value -ne "") {
+      return $property.Value
+    }
+  }
+  return $Default
+}
+
+function Get-TextValue($Object, [string[]]$Names, [string]$Default = "") {
+  $value = Get-ObjectPropertyValue $Object $Names $Default
+  if ($null -eq $value) { return $Default }
+  return ([string]$value).Trim()
+}
+
+function Get-NumberValue($Object, [string[]]$Names, [double]$Default = 0) {
+  $value = Get-ObjectPropertyValue $Object $Names $null
+  if ($null -eq $value) { return $Default }
+  $number = 0.0
+  if ([double]::TryParse([string]$value, [ref]$number)) { return $number }
+  return $Default
+}
+
+function Get-PayloadItems($Payload) {
+  if (-not $Payload) { return @() }
+  foreach ($name in @("items", "data", "rows")) {
+    $property = $Payload.PSObject.Properties[$name]
+    if ($property -and $null -ne $property.Value) { return @($property.Value) }
+  }
+  $content = $Payload.PSObject.Properties["content"]
+  if ($content -and $content.Value -and $content.Value.PSObject.Properties["items"]) {
+    return @($content.Value.items)
+  }
+  return @()
+}
+
+function Get-PayloadTotal($Payload, $Items) {
+  foreach ($name in @("total", "count")) {
+    $property = $Payload.PSObject.Properties[$name]
+    if ($property -and $null -ne $property.Value) {
+      $number = 0
+      if ([int]::TryParse([string]$property.Value, [ref]$number)) { return $number }
+    }
+  }
+  return @($Items).Count
+}
+
+function New-CrmSqlEnvelope([string]$Path, $Query, $Items, $Payload) {
+  return @{
+    items = @($Items)
+    total = Get-PayloadTotal $Payload $Items
+    limit = [int]$Query.limit
+    offset = [int]$Query.offset
+    query = @{ search = [string]$Query.search; barcode = [string]$Query.barcode }
+    source = "crm-sql-live"
+    sourceDetail = "$CrmSqlApiBaseUrl$Path"
+    bounded = $true
+    fallback = $false
+    productionReady = $true
+    loadedAt = (Get-Date).ToUniversalTime().ToString("o")
+  }
 }
 
 function Get-StateArray($StateContainer, [string]$Name) {
@@ -417,6 +528,107 @@ function ConvertTo-PublicCustomer($Customer) {
   }
 }
 
+function ConvertTo-LiveProduct($Row) {
+  $productCode = Get-TextValue $Row @("productCode", "product_code", "sku", "code")
+  $price = Get-NumberValue $Row @("latestPrice", "latest_price", "price", "amount")
+  $currency = Get-TextValue $Row @("latestPriceCurrency", "latest_price_currency", "currency") "UAH"
+  $priceType = Get-TextValue $Row @("latestPriceType", "latest_price_type", "priceTypeName", "price_type_name")
+  return @{
+    id = Get-TextValue $Row @("id", "productCode", "product_code", "sku", "oneCRef", "one_c_ref", "barcode")
+    sqlId = Get-TextValue $Row @("oneCRef", "one_c_ref", "externalId", "external_id", "id")
+    productCode = $productCode
+    sku = Get-TextValue $Row @("sku", "productCode", "product_code")
+    barcode = Get-TextValue $Row @("barcode", "bar_code")
+    qr = Get-TextValue $Row @("qr")
+    name = Get-TextValue $Row @("name", "productName", "product_name", "description") "SQL product"
+    category = Get-TextValue $Row @("category", "categoryName", "category_name", "productGroupName", "product_group_name") "Other"
+    categoryPrimary = Get-TextValue $Row @("categoryPrimary", "category_primary", "category", "categoryName") "Other"
+    categorySecondary = Get-TextValue $Row @("categorySecondary", "category_secondary")
+    supplyChannel = Get-TextValue $Row @("supplyChannel", "supply_channel")
+    importer = Get-TextValue $Row @("importer")
+    isSparePart = [bool](Get-ObjectPropertyValue $Row @("isSparePart", "is_spare_part") $false)
+    productGroupPath = Get-TextValue $Row @("productGroupPath", "product_group_path", "categoryPath")
+    productFullPath = Get-TextValue $Row @("productFullPath", "product_full_path", "productGroupPath", "product_group_path")
+    productGroupCodePath = Get-TextValue $Row @("productGroupCodePath", "product_group_code_path")
+    productGroupLevel = Get-NumberValue $Row @("productGroupLevel", "product_group_level")
+    productKind = Get-TextValue $Row @("productKind", "product_kind")
+    productSeries = Get-TextValue $Row @("productSeries", "product_series")
+    productGroup = Get-TextValue $Row @("productGroup", "product_group", "productGroupName", "product_group_name")
+    characteristics = if ($Row.characteristics) { @($Row.characteristics) } else { @() }
+    price = $price
+    cost = Get-NumberValue $Row @("cost")
+    priceSummary = if ($price -ne 0) { "$price $currency" } else { "" }
+    priceTypes = $priceType
+    priceCurrencies = $currency
+    prices = if ($price -ne 0) { @(@{ priceType = $priceType; currency = $currency; price = $price }) } else { @() }
+    minStock = Get-NumberValue $Row @("minStock", "min_stock")
+    retailStockQty = Get-NumberValue $Row @("availableQuantity", "available_quantity", "stockOnRetailWarehouse", "stock_on_retail_warehouse")
+    stockTotalQty = Get-NumberValue $Row @("totalQuantity", "total_quantity", "stockTotalAllWarehouses", "stock_total_all_warehouses")
+    stockWholesaleQty = Get-NumberValue $Row @("stockOnOtherWarehouses", "stock_on_other_warehouses")
+    source = "crm-sql-live"
+  }
+}
+
+function ConvertTo-LiveProductPrice($Row) {
+  return @{
+    id = Get-TextValue $Row @("id", "productCode", "product_code", "productName", "product_name")
+    productCode = Get-TextValue $Row @("productCode", "product_code", "sku")
+    productName = Get-TextValue $Row @("productName", "product_name", "name")
+    priceTypeCode = Get-TextValue $Row @("priceTypeCode", "price_type_code")
+    priceTypeName = Get-TextValue $Row @("priceTypeName", "price_type_name", "priceType", "price_type")
+    currency = Get-TextValue $Row @("currency") "UAH"
+    amount = Get-NumberValue $Row @("amount", "price")
+    price = Get-NumberValue $Row @("price", "amount")
+    snapshotAt = Get-TextValue $Row @("snapshotAt", "snapshot_at", "importedAt", "imported_at")
+    sourceFile = Get-TextValue $Row @("sourceFile", "source_file")
+    importedAt = Get-TextValue $Row @("importedAt", "imported_at")
+    source = "crm-sql-live"
+  }
+}
+
+function ConvertTo-LiveCounterparty($Row) {
+  $counterpartyCode = Get-TextValue $Row @("counterpartyCode", "counterparty_code", "externalId", "external_id")
+  return @{
+    id = Get-TextValue $Row @("id", "counterpartyCode", "counterparty_code", "oneCRef", "one_c_ref")
+    sqlId = Get-TextValue $Row @("oneCRef", "one_c_ref", "externalId", "external_id")
+    counterpartyCode = $counterpartyCode
+    name = Get-TextValue $Row @("name", "fullName", "full_name", "counterpartyName", "counterparty_name") "SQL counterparty"
+    fullName = Get-TextValue $Row @("fullName", "full_name", "counterpartyName", "counterparty_name", "name")
+    phone = Get-TextValue $Row @("phone")
+    email = Get-TextValue $Row @("email")
+    taxId = Get-TextValue $Row @("taxId", "tax_id")
+    sourceModule = Get-TextValue $Row @("sourceModule", "source_module")
+    sourceFile = Get-TextValue $Row @("sourceFile", "source_file")
+    importedAt = Get-TextValue $Row @("importedAt", "imported_at")
+    isDeleted = [bool](Get-ObjectPropertyValue $Row @("isDeleted", "is_deleted") $false)
+    source = "crm-sql-live"
+  }
+}
+
+function New-LiveProductsResponse($Params) {
+  $query = Get-LiveQueryParams $Params 20 100
+  $payload = Invoke-CrmSqlApi "/products" $query.params
+  $items = @()
+  foreach ($row in (Get-PayloadItems $payload)) { $items += ConvertTo-LiveProduct $row }
+  return New-CrmSqlEnvelope "/products" $query $items $payload
+}
+
+function New-LiveProductPricesResponse($Params) {
+  $query = Get-LiveQueryParams $Params 20 100
+  $payload = Invoke-CrmSqlApi "/one-c-mirror/product-prices" $query.params
+  $items = @()
+  foreach ($row in (Get-PayloadItems $payload)) { $items += ConvertTo-LiveProductPrice $row }
+  return New-CrmSqlEnvelope "/one-c-mirror/product-prices" $query $items $payload
+}
+
+function New-LiveCounterpartiesResponse($Params) {
+  $query = Get-LiveQueryParams $Params 20 100
+  $payload = Invoke-CrmSqlApi "/one-c-mirror/counterparties" $query.params
+  $items = @()
+  foreach ($row in (Get-PayloadItems $payload)) { $items += ConvertTo-LiveCounterparty $row }
+  return New-CrmSqlEnvelope "/one-c-mirror/counterparties" $query $items $payload
+}
+
 function New-CustomersResponse($StateContainer, $Params) {
   $bounds = Get-BoundedParams $Params 20 100
   $search = Get-QueryValue $Params "search"
@@ -598,9 +810,42 @@ function Handle-Api($Client, $Request) {
     return
   }
 
+  if ($method -eq "GET" -and $path -eq "/api/live/products") {
+    try {
+      Send-Json $Client 200 (New-LiveProductsResponse (Get-QueryParams $Request.RawPath))
+    } catch {
+      Send-Json $Client 502 @{ error = $_.Exception.Message; source = "crm-sql-live"; bounded = $true }
+    }
+    return
+  }
+
+  if ($method -eq "GET" -and $path -eq "/api/live/product-prices") {
+    try {
+      Send-Json $Client 200 (New-LiveProductPricesResponse (Get-QueryParams $Request.RawPath))
+    } catch {
+      Send-Json $Client 502 @{ error = $_.Exception.Message; source = "crm-sql-live"; bounded = $true }
+    }
+    return
+  }
+
+  if ($method -eq "GET" -and $path -eq "/api/live/counterparties") {
+    try {
+      Send-Json $Client 200 (New-LiveCounterpartiesResponse (Get-QueryParams $Request.RawPath))
+    } catch {
+      Send-Json $Client 502 @{ error = $_.Exception.Message; source = "crm-sql-live"; bounded = $true }
+    }
+    return
+  }
+
   if ($method -eq "GET" -and $path -eq "/api/products") {
-    $stateContainer = Read-JsonFile $StatePath (New-DefaultStateContainer)
-    Send-Json $Client 200 (New-ProductsResponse $stateContainer (Get-QueryParams $Request.RawPath))
+    try {
+      Send-Json $Client 200 (New-LiveProductsResponse (Get-QueryParams $Request.RawPath))
+    } catch {
+      $stateContainer = Read-JsonFile $StatePath (New-DefaultStateContainer)
+      $payload = New-ProductsResponse $stateContainer (Get-QueryParams $Request.RawPath)
+      $payload["fallbackError"] = $_.Exception.Message
+      Send-Json $Client 200 $payload
+    }
     return
   }
 

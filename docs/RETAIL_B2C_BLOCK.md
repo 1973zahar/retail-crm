@@ -10,9 +10,9 @@ Repo: D:\Codex\CRM\retail-crm
 Stable local runtime: http://127.0.0.1:18810/index.html
 Legacy/manual local runtime: http://127.0.0.1:8790/index.html
 MESER runtime: http://192.168.0.5:8790/index.html
-Current build: 20260607-b2c-weapon-serials
-App version: 2026.06.07.5
-Released at: 2026-06-07 14:49:18 +03:00
+Current build: 20260607-b2c-live-reference-tables
+App version: 2026.06.07.6
+Released at: 2026-06-07 17:57:37 +03:00
 Contract version: 2026.06.07-retail-live-api-1
 ```
 
@@ -39,7 +39,7 @@ Backend API/model layer = permissions, transactions, pagination and audit
 Frontend = bounded interactive view/cache only
 ```
 
-The browser must not load full products, stock, serials, customers, balances or orders as production data. Large lists must be read through backend endpoints with `search`, `limit`, `offset` and filters. The current local `server-json` responses are explicitly marked as fallback until the PostgreSQL-backed TypeScript/Odoo-like model layer replaces them.
+The browser must not load full products, stock, serials, customers, balances or orders as production data. Large lists must be read through backend endpoints with `search`, `limit`, `offset` and filters. Retail B2C now has live reference tables for products, prices and counterparties through its own backend proxy over the CRM SQL API. The current local `server-json` responses are fallback/demo only.
 
 The sidebar version footer shows fixed release/build metadata. `Дата/час версії` is the creation timestamp of the app version, not a live clock. Session and server status belong to the top page bar, while the sidebar is navigation-only plus the version footer.
 
@@ -119,6 +119,9 @@ GET /api/state
 PUT /api/state
 GET /api/settings
 PUT /api/settings
+GET /api/live/products?search=&limit=&offset=
+GET /api/live/product-prices?search=&limit=&offset=
+GET /api/live/counterparties?search=&limit=&offset=
 GET /api/products?search=&barcode=&limit=&offset=
 GET /api/products/:id
 GET /api/customers?search=&limit=&offset=
@@ -165,6 +168,23 @@ GET /api/products?search=<text>&barcode=<code>&limit=20&offset=0
 ```
 
 The POS product datalist renders only the current bounded result set. If the backend is unavailable, the UI shows an explicit `Fallback local/demo` status and uses the local demo/server-state data only as a fallback, not as production source of truth.
+
+## Live Reference Tables
+
+`Довідники -> Товари` now shows:
+
+```text
+SQL live товари: GET /api/live/products?search=&limit=&offset=
+SQL live ціни: GET /api/live/product-prices?search=&limit=&offset=
+```
+
+`Довідники -> Клієнти і лояльність` now keeps B2C-created clients separately and shows 1C/SQL counterparties through:
+
+```text
+GET /api/live/counterparties?search=&limit=&offset=
+```
+
+Operators see all accessible products, prices and counterparties by search plus Next/Back paging. The UI never requests a full table dump.
 
 ## Performance Rules
 

@@ -3,10 +3,12 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const APP_VERSION = "2026.06.07.5";
-const APP_BUILD = "20260607-b2c-weapon-serials";
-const APP_RELEASED_AT = "2026-06-07 14:49:18 +03:00";
+const APP_VERSION = "2026.06.07.6";
+const APP_BUILD = "20260607-b2c-live-reference-tables";
+const APP_RELEASED_AT = "2026-06-07 17:57:37 +03:00";
 const ROOT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const CRM_SQL_API_BASE_URL = String(process.env.CRM_SQL_API_BASE_URL || "http://192.168.0.166:3000").replace(/\/+$/, "");
+const CRM_SQL_API_TIMEOUT_MS = Math.max(1000, Number(process.env.CRM_SQL_API_TIMEOUT_MS || 30000));
 
 const DEFAULT_CONFIG = {
   host: "0.0.0.0",
@@ -26,6 +28,7 @@ const DEFAULT_SETTINGS = {
   port: 8790,
   storageBackend: "server-json",
   dataDir: "data",
+  crmSqlApiBaseUrl: CRM_SQL_API_BASE_URL,
   multiUser: true,
   externalAccess: true,
   allowLocalFallback: true,
@@ -152,9 +155,31 @@ async function handleApi(request, response, url) {
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/live/products") {
+    sendJson(response, 200, await listLiveProducts(url));
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/live/product-prices") {
+    sendJson(response, 200, await listLiveProductPrices(url));
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/live/counterparties") {
+    sendJson(response, 200, await listLiveCounterparties(url));
+    return;
+  }
+
   if (request.method === "GET" && url.pathname === "/api/products") {
-    const stateContainer = await readJson(statePath, defaultStateContainer());
-    sendJson(response, 200, listProducts(stateContainer, url));
+    try {
+      sendJson(response, 200, await listLiveProducts(url));
+    } catch (error) {
+      const stateContainer = await readJson(statePath, defaultStateContainer());
+      sendJson(response, 200, {
+        ...listProducts(stateContainer, url),
+        fallbackError: error.message || "CRM SQL API unavailable"
+      });
+    }
     return;
   }
 
@@ -518,6 +543,185 @@ function listWarehouses(stateContainer, url) {
   });
 }
 
+async function fetchCrmSql(pathName, params) {
+  const query = params ? params.toString() : "";
+  const url = `${CRM_SQL_API_BASE_URL}${pathName}${query ? `?${query}` : ""}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CRM_SQL_API_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.error || payload.message || `CRM SQL API ${response.status}`);
+    }
+    return { payload, url };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function liveQuery(url, defaultLimit = 20, maxLimit = 100) {
+  const { limit, offset } = boundedParams(url, defaultLimit, maxLimit);
+  const search = String(url.searchParams.get("search") || "").trim();
+  const barcode = String(url.searchParams.get("barcode") || "").trim();
+  const params = new URLSearchParams();
+  if (search) params.set("search", search);
+  if (barcode) {
+    params.set("barcode", barcode);
+    if (!search) params.set("search", barcode);
+  }
+  params.set("limit", String(limit));
+  params.set("offset", String(offset));
+  return { params, limit, offset, search, barcode };
+}
+
+function payloadItems(payload) {
+  if (Array.isArray(payload?.items)) return payload.items;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.rows)) return payload.rows;
+  if (Array.isArray(payload?.content?.items)) return payload.content.items;
+  return [];
+}
+
+function payloadTotal(payload, items) {
+  const value = payload?.total ?? payload?.count ?? payload?.meta?.total ?? payload?.pagination?.total;
+  const total = Number(value);
+  return Number.isFinite(total) ? total : items.length;
+}
+
+function textValue(...values) {
+  for (const value of values) {
+    if (value !== undefined && value !== null && String(value).trim()) return String(value).trim();
+  }
+  return "";
+}
+
+function numberValue(...values) {
+  for (const value of values) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) return numeric;
+  }
+  return 0;
+}
+
+function sqlEnvelope(pathName, url, query, items, payload) {
+  return {
+    items,
+    total: payloadTotal(payload, items),
+    limit: query.limit,
+    offset: query.offset,
+    query: { search: query.search, barcode: query.barcode },
+    source: "crm-sql-live",
+    sourceDetail: `${CRM_SQL_API_BASE_URL}${pathName}`,
+    bounded: true,
+    fallback: false,
+    productionReady: true,
+    loadedAt: new Date().toISOString()
+  };
+}
+
+function normalizeLiveProduct(row) {
+  const productCode = textValue(row.productCode, row.product_code, row.sku, row.code);
+  const id = textValue(row.id, productCode, row.oneCRef, row.one_c_ref, row.barcode);
+  const price = numberValue(row.latestPrice, row.latest_price, row.price, row.amount);
+  const currency = textValue(row.latestPriceCurrency, row.latest_price_currency, row.currency, "UAH");
+  const priceType = textValue(row.latestPriceType, row.latest_price_type, row.priceTypeName, row.price_type_name);
+  return {
+    id,
+    sqlId: textValue(row.oneCRef, row.one_c_ref, row.externalId, row.external_id, row.id),
+    productCode,
+    sku: textValue(row.sku, productCode),
+    barcode: textValue(row.barcode, row.bar_code),
+    qr: textValue(row.qr),
+    name: textValue(row.name, row.productName, row.product_name, row.description, "Товар з SQL"),
+    category: textValue(row.category, row.categoryName, row.category_name, row.productGroupName, row.product_group_name, "Інше"),
+    categoryPrimary: textValue(row.categoryPrimary, row.category_primary, row.category, row.categoryName, "Інше"),
+    categorySecondary: textValue(row.categorySecondary, row.category_secondary),
+    supplyChannel: textValue(row.supplyChannel, row.supply_channel),
+    importer: textValue(row.importer),
+    isSparePart: Boolean(row.isSparePart ?? row.is_spare_part),
+    productGroupPath: textValue(row.productGroupPath, row.product_group_path, row.categoryPath),
+    productFullPath: textValue(row.productFullPath, row.product_full_path, row.productGroupPath, row.product_group_path),
+    productGroupCodePath: textValue(row.productGroupCodePath, row.product_group_code_path),
+    productGroupLevel: numberValue(row.productGroupLevel, row.product_group_level),
+    productKind: textValue(row.productKind, row.product_kind),
+    productSeries: textValue(row.productSeries, row.product_series),
+    productGroup: textValue(row.productGroup, row.product_group, row.productGroupName, row.product_group_name),
+    characteristics: Array.isArray(row.characteristics) ? row.characteristics : [],
+    price,
+    cost: numberValue(row.cost),
+    priceSummary: price ? `${price} ${currency}` : "",
+    priceTypes: priceType,
+    priceCurrencies: currency,
+    prices: price ? [{ priceType, currency, price }] : [],
+    minStock: numberValue(row.minStock, row.min_stock),
+    retailStockQty: numberValue(row.availableQuantity, row.available_quantity, row.stockOnRetailWarehouse, row.stock_on_retail_warehouse),
+    stockTotalQty: numberValue(row.totalQuantity, row.total_quantity, row.stockTotalAllWarehouses, row.stock_total_all_warehouses),
+    stockWholesaleQty: numberValue(row.stockOnOtherWarehouses, row.stock_on_other_warehouses),
+    source: "crm-sql-live"
+  };
+}
+
+function normalizeLivePrice(row) {
+  return {
+    id: textValue(row.id, row.productCode, row.product_code, row.productName, row.product_name),
+    productCode: textValue(row.productCode, row.product_code, row.sku),
+    productName: textValue(row.productName, row.product_name, row.name),
+    priceTypeCode: textValue(row.priceTypeCode, row.price_type_code),
+    priceTypeName: textValue(row.priceTypeName, row.price_type_name, row.priceType, row.price_type),
+    currency: textValue(row.currency, "UAH"),
+    amount: numberValue(row.amount, row.price),
+    price: numberValue(row.price, row.amount),
+    snapshotAt: textValue(row.snapshotAt, row.snapshot_at, row.importedAt, row.imported_at),
+    sourceFile: textValue(row.sourceFile, row.source_file),
+    importedAt: textValue(row.importedAt, row.imported_at),
+    source: "crm-sql-live"
+  };
+}
+
+function normalizeLiveCounterparty(row) {
+  const counterpartyCode = textValue(row.counterpartyCode, row.counterparty_code, row.externalId, row.external_id);
+  return {
+    id: textValue(row.id, counterpartyCode, row.oneCRef, row.one_c_ref),
+    sqlId: textValue(row.oneCRef, row.one_c_ref, row.externalId, row.external_id),
+    counterpartyCode,
+    name: textValue(row.name, row.fullName, row.full_name, row.counterpartyName, row.counterparty_name, "Контрагент SQL"),
+    fullName: textValue(row.fullName, row.full_name, row.counterpartyName, row.counterparty_name, row.name),
+    phone: textValue(row.phone),
+    email: textValue(row.email),
+    taxId: textValue(row.taxId, row.tax_id),
+    sourceModule: textValue(row.sourceModule, row.source_module),
+    sourceFile: textValue(row.sourceFile, row.source_file),
+    importedAt: textValue(row.importedAt, row.imported_at),
+    isDeleted: Boolean(row.isDeleted ?? row.is_deleted),
+    source: "crm-sql-live"
+  };
+}
+
+async function listLiveProducts(url) {
+  const query = liveQuery(url, 20, 100);
+  const pathName = "/products";
+  const { payload } = await fetchCrmSql(pathName, query.params);
+  const items = payloadItems(payload).map(normalizeLiveProduct);
+  return sqlEnvelope(pathName, url, query, items, payload);
+}
+
+async function listLiveProductPrices(url) {
+  const query = liveQuery(url, 20, 100);
+  const pathName = "/one-c-mirror/product-prices";
+  const { payload } = await fetchCrmSql(pathName, query.params);
+  const items = payloadItems(payload).map(normalizeLivePrice);
+  return sqlEnvelope(pathName, url, query, items, payload);
+}
+
+async function listLiveCounterparties(url) {
+  const query = liveQuery(url, 20, 100);
+  const pathName = "/one-c-mirror/counterparties";
+  const { payload } = await fetchCrmSql(pathName, query.params);
+  const items = payloadItems(payload).map(normalizeLiveCounterparty);
+  return sqlEnvelope(pathName, url, query, items, payload);
+}
+
 function healthPayload(stateContainer) {
   return {
     ok: true,
@@ -528,6 +732,7 @@ function healthPayload(stateContainer) {
     host: config.host,
     publicHost: config.publicHost,
     publicBaseUrl: publicBaseUrl(),
+    crmSqlApiBaseUrl: CRM_SQL_API_BASE_URL,
     port: config.port,
     dataDir,
     revision: stateContainer.revision,
@@ -570,6 +775,7 @@ function normalizeSettings(input) {
     publicHost,
     publicBaseUrl: String(source.publicBaseUrl || publicBaseUrl()),
     apiBaseUrl: String(source.apiBaseUrl || "").replace(/\/+$/, ""),
+    crmSqlApiBaseUrl: String(source.crmSqlApiBaseUrl || CRM_SQL_API_BASE_URL).replace(/\/+$/, ""),
     bindAddress: String(source.bindAddress || config.host || DEFAULT_SETTINGS.bindAddress),
     port,
     storageBackend: source.storageBackend || DEFAULT_SETTINGS.storageBackend,

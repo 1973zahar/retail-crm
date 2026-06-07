@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.07.5";
-const APP_BUILD = "20260607-b2c-weapon-serials";
-const APP_RELEASED_AT = "2026-06-07 14:49:18 +03:00";
+const APP_VERSION = "2026.06.07.6";
+const APP_BUILD = "20260607-b2c-live-reference-tables";
+const APP_RELEASED_AT = "2026-06-07 17:57:37 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SIDEBAR_COLLAPSED_KEY = "retail-crm-b2c-sidebar-collapsed-v1";
@@ -58,6 +58,7 @@ const DEFAULT_SYSTEM_SETTINGS = {
   publicHost: "192.168.0.5",
   publicBaseUrl: "http://192.168.0.5:8790",
   apiBaseUrl: "",
+  crmSqlApiBaseUrl: "http://192.168.0.166:3000",
   bindAddress: "0.0.0.0",
   port: 8790,
   storageBackend: "server-json",
@@ -69,6 +70,30 @@ const DEFAULT_SYSTEM_SETTINGS = {
   lastSavedAt: ""
 };
 const LIVE_PRODUCT_LOOKUP_LIMIT = 20;
+const LIVE_TABLE_LIMIT_OPTIONS = [20, 50, 100];
+const LIVE_TABLES = {
+  products: {
+    endpoint: "/api/live/products",
+    defaultLimit: 20,
+    title: "SQL live товари",
+    subtitle: "one_c_mirror.crm_products_enriched / fast read model",
+    searchPlaceholder: "назва, SKU, штрихкод або група"
+  },
+  prices: {
+    endpoint: "/api/live/product-prices",
+    defaultLimit: 20,
+    title: "SQL live ціни",
+    subtitle: "one_c_mirror.crm_product_prices",
+    searchPlaceholder: "product_code, товар або тип ціни"
+  },
+  counterparties: {
+    endpoint: "/api/live/counterparties",
+    defaultLimit: 20,
+    title: "SQL live контрагенти",
+    subtitle: "one_c_mirror.crm_counterparties",
+    searchPlaceholder: "код, назва, телефон, email або ЄДРПОУ"
+  }
+};
 const serverSync = {
   enabled: true,
   online: false,
@@ -82,6 +107,7 @@ const serverSync = {
   timer: null
 };
 const liveProductCache = new Map();
+const liveTableLoadQueue = new Set();
 const liveProductLookup = {
   query: "",
   barcode: "",
@@ -502,6 +528,11 @@ const seedState = {
   stockUi: {
     serialProductId: ""
   },
+  liveTables: {
+    products: { search: "", limit: 20, offset: 0, total: 0, items: [], loading: false, error: "", source: "", lastLoadedAt: "" },
+    prices: { search: "", limit: 20, offset: 0, total: 0, items: [], loading: false, error: "", source: "", lastLoadedAt: "" },
+    counterparties: { search: "", limit: 20, offset: 0, total: 0, items: [], loading: false, error: "", source: "", lastLoadedAt: "" }
+  },
   rolePermissionSchema: ROLE_PERMISSION_SCHEMA,
   rolePermissions: defaultRolePermissions(),
   stock: [],
@@ -702,6 +733,7 @@ function normalizeState(input) {
     ...clone(seedState.stockUi),
     ...(next.stockUi || {})
   };
+  next.liveTables = normalizeLiveTables(next.liveTables);
   const inputRoleSchema = next.rolePermissionSchema || "";
   next.rolePermissions = normalizeRolePermissions(next.rolePermissions, inputRoleSchema);
   next.rolePermissionSchema = ROLE_PERMISSION_SCHEMA;
@@ -788,6 +820,7 @@ function normalizeSystemSettings(input) {
     publicHost,
     publicBaseUrl,
     apiBaseUrl: String(source.apiBaseUrl || "").trim().replace(/\/+$/, ""),
+    crmSqlApiBaseUrl: String(source.crmSqlApiBaseUrl || DEFAULT_SYSTEM_SETTINGS.crmSqlApiBaseUrl).trim().replace(/\/+$/, ""),
     bindAddress: String(source.bindAddress || DEFAULT_SYSTEM_SETTINGS.bindAddress).trim(),
     port,
     storageBackend: source.storageBackend || DEFAULT_SYSTEM_SETTINGS.storageBackend,
@@ -797,6 +830,96 @@ function normalizeSystemSettings(input) {
     allowLocalFallback: source.allowLocalFallback !== false,
     autoRefreshSeconds: refresh,
     lastSavedAt: source.lastSavedAt || ""
+  };
+}
+
+function clampLiveLimit(value, fallback = 20) {
+  const numeric = Number(value || fallback);
+  const limit = LIVE_TABLE_LIMIT_OPTIONS.includes(numeric) ? numeric : fallback;
+  return Math.max(1, Math.min(100, limit));
+}
+
+function normalizeLiveTables(input) {
+  return Object.fromEntries(Object.entries(LIVE_TABLES).map(([kind, config]) => [
+    kind,
+    normalizeLiveTableState(input?.[kind], kind, config)
+  ]));
+}
+
+function normalizeLiveTableState(table, kind, config = LIVE_TABLES[kind]) {
+  const source = table || {};
+  const limit = clampLiveLimit(source.limit, config.defaultLimit);
+  return {
+    search: String(source.search || ""),
+    limit,
+    offset: Math.max(0, Number(source.offset || 0)),
+    total: Math.max(0, Number(source.total || 0)),
+    items: Array.isArray(source.items) ? source.items.slice(0, limit).map((item) => normalizeLiveTableItem(kind, item)) : [],
+    loading: false,
+    error: String(source.error || ""),
+    source: String(source.source || ""),
+    lastLoadedAt: String(source.lastLoadedAt || "")
+  };
+}
+
+function normalizeLiveTableItem(kind, item) {
+  if (kind === "products") return normalizeProduct(item);
+  if (kind === "prices") return normalizeLivePrice(item);
+  if (kind === "counterparties") return normalizeLiveCounterparty(item);
+  return item || {};
+}
+
+function textField(source, fields, fallback = "") {
+  for (const field of fields) {
+    const value = source?.[field];
+    if (value !== undefined && value !== null && String(value).trim()) return String(value).trim();
+  }
+  return fallback;
+}
+
+function numberField(source, fields, fallback = 0) {
+  for (const field of fields) {
+    const value = Number(source?.[field]);
+    if (Number.isFinite(value)) return value;
+  }
+  return fallback;
+}
+
+function normalizeLivePrice(row) {
+  const source = row || {};
+  return {
+    id: textField(source, ["id", "productCode", "product_code", "productName", "product_name"], `price-${Date.now()}`),
+    productCode: textField(source, ["productCode", "product_code", "sku"]),
+    productName: textField(source, ["productName", "product_name", "name"]),
+    priceTypeCode: textField(source, ["priceTypeCode", "price_type_code"]),
+    priceTypeName: textField(source, ["priceTypeName", "price_type_name", "priceType", "price_type"]),
+    currency: textField(source, ["currency"], "UAH"),
+    amount: numberField(source, ["amount", "price"]),
+    price: numberField(source, ["price", "amount"]),
+    snapshotAt: textField(source, ["snapshotAt", "snapshot_at", "importedAt", "imported_at"]),
+    sourceFile: textField(source, ["sourceFile", "source_file"]),
+    importedAt: textField(source, ["importedAt", "imported_at"]),
+    source: textField(source, ["source"], "crm-sql-live")
+  };
+}
+
+function normalizeLiveCounterparty(row) {
+  const source = row || {};
+  const counterpartyCode = textField(source, ["counterpartyCode", "counterparty_code", "externalId", "external_id"]);
+  return {
+    id: textField(source, ["id", "counterpartyCode", "counterparty_code", "oneCRef", "one_c_ref"], `cp-${Date.now()}`),
+    sqlId: textField(source, ["sqlId", "oneCRef", "one_c_ref", "externalId", "external_id"]),
+    counterpartyCode,
+    name: textField(source, ["name", "fullName", "full_name", "counterpartyName", "counterparty_name"], "Контрагент SQL"),
+    fullName: textField(source, ["fullName", "full_name", "counterpartyName", "counterparty_name", "name"]),
+    phone: textField(source, ["phone"]),
+    email: textField(source, ["email"]),
+    taxId: textField(source, ["taxId", "tax_id"]),
+    sourceModule: textField(source, ["sourceModule", "source_module"]),
+    sourceFile: textField(source, ["sourceFile", "source_file"]),
+    importedAt: textField(source, ["importedAt", "imported_at"]),
+    isDeleted: Boolean(source.isDeleted ?? source.is_deleted),
+    source: textField(source, ["source"], "crm-sql-live")
   };
 }
 
@@ -820,7 +943,9 @@ function normalizeProduct(product) {
     qr: product.qr || "",
     category: product.category || "Інше",
     categoryPrimary: product.categoryPrimary || product.category || "Інше",
+    categorySecondary: product.categorySecondary || "",
     supplyChannel: product.supplyChannel || "",
+    importer: product.importer || "",
     isSparePart: Boolean(product.isSparePart),
     productGroupPath: product.productGroupPath || "",
     productFullPath: product.productFullPath || product.productGroupPath || "",
@@ -840,7 +965,10 @@ function normalizeProduct(product) {
     priceSummary: product.priceSummary || "",
     price: Number(product.price || 0),
     cost: Number(product.cost || 0),
-    minStock: Number(product.minStock || 0)
+    minStock: Number(product.minStock || 0),
+    retailStockQty: Number(product.retailStockQty || 0),
+    stockTotalQty: Number(product.stockTotalQty || 0),
+    stockWholesaleQty: Number(product.stockWholesaleQty || 0)
   };
 }
 
@@ -1308,6 +1436,112 @@ async function queryLiveProducts({ search = "", barcode = "", limit = LIVE_PRODU
   return { ...payload, items };
 }
 
+function liveTable(kind) {
+  if (!state.liveTables) state.liveTables = normalizeLiveTables({});
+  if (!state.liveTables[kind]) state.liveTables[kind] = normalizeLiveTableState({}, kind);
+  return state.liveTables[kind];
+}
+
+function liveTableConfig(kind) {
+  return LIVE_TABLES[kind] || LIVE_TABLES.products;
+}
+
+function payloadItems(payload) {
+  if (Array.isArray(payload?.items)) return payload.items;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.rows)) return payload.rows;
+  if (Array.isArray(payload?.content?.items)) return payload.content.items;
+  return [];
+}
+
+function normalizeLivePayloadItems(kind, payload) {
+  return payloadItems(payload).map((item) => {
+    const normalized = normalizeLiveTableItem(kind, item);
+    if (kind === "products") return rememberLiveProduct(normalized);
+    return normalized;
+  });
+}
+
+function liveTableTotal(payload, items) {
+  const total = Number(payload.total ?? payload.count ?? payload.meta?.total ?? payload.pagination?.total);
+  return Number.isFinite(total) ? total : items.length;
+}
+
+async function loadLiveTable(kind, options = {}) {
+  const config = liveTableConfig(kind);
+  const table = liveTable(kind);
+  const limit = clampLiveLimit(options.limit ?? table.limit, config.defaultLimit);
+  const offset = Math.max(0, Number(options.offset ?? table.offset ?? 0));
+  const params = new URLSearchParams();
+  const search = String(options.search ?? table.search ?? "").trim();
+  if (search) params.set("search", search);
+  params.set("limit", String(limit));
+  params.set("offset", String(offset));
+  table.loading = true;
+  table.error = "";
+  table.limit = limit;
+  table.offset = offset;
+  table.search = search;
+  saveState({ server: false });
+  render();
+  try {
+    const payload = await fetchJson(`${config.endpoint}?${params.toString()}`);
+    const items = normalizeLivePayloadItems(kind, payload);
+    table.items = items;
+    table.total = liveTableTotal(payload, items);
+    table.limit = Number(payload.limit || limit);
+    table.offset = Number(payload.offset || offset);
+    table.source = payload.sourceDetail || payload.source || "crm-sql-live";
+    table.lastLoadedAt = payload.loadedAt || nowIso();
+    table.error = "";
+    markServerOnline(payload);
+  } catch (error) {
+    table.items = [];
+    table.total = 0;
+    table.error = String(error?.message || error || "CRM SQL API недоступний");
+    table.source = "";
+    markServerOffline(error);
+  } finally {
+    table.loading = false;
+    saveState({ server: false });
+    render();
+  }
+}
+
+function ensureLiveTableLoaded(kind) {
+  const table = liveTable(kind);
+  if (!serverModeEnabled() || table.loading || table.lastLoadedAt || table.error || liveTableLoadQueue.has(kind)) return;
+  liveTableLoadQueue.add(kind);
+  window.setTimeout(async () => {
+    try {
+      await loadLiveTable(kind);
+    } finally {
+      liveTableLoadQueue.delete(kind);
+    }
+  }, 0);
+}
+
+function searchLiveTable(form) {
+  const kind = form.dataset.liveKind;
+  const formData = new FormData(form);
+  const search = String(formData.get("search") || "").trim();
+  const limit = clampLiveLimit(formData.get("limit"), liveTableConfig(kind).defaultLimit);
+  return loadLiveTable(kind, { search, limit, offset: 0 });
+}
+
+function refreshLiveTable(kind) {
+  const table = liveTable(kind);
+  return loadLiveTable(kind, { offset: table.offset });
+}
+
+function pageLiveTable(kind, direction) {
+  const table = liveTable(kind);
+  const limit = clampLiveLimit(table.limit, liveTableConfig(kind).defaultLimit);
+  const nextOffset = Math.max(0, Number(table.offset || 0) + Number(direction || 0) * limit);
+  if (nextOffset === table.offset && direction < 0) return;
+  return loadLiveTable(kind, { offset: nextOffset });
+}
+
 function queueLiveProductLookup(value) {
   const query = String(value || "").trim();
   window.clearTimeout(liveProductLookup.timer);
@@ -1668,6 +1902,7 @@ function updateSystemSettings(form) {
     publicHost: data.publicHost,
     publicBaseUrl: data.publicBaseUrl,
     apiBaseUrl: data.apiBaseUrl,
+    crmSqlApiBaseUrl: data.crmSqlApiBaseUrl,
     bindAddress: data.bindAddress,
     port: data.port,
     storageBackend: data.storageBackend,
@@ -3072,35 +3307,126 @@ function renderStock() {
   `;
 }
 
+function liveTableStatus(kind) {
+  const table = liveTable(kind);
+  if (!serverModeEnabled()) return { text: "server mode вимкнено", className: "warn" };
+  if (table.loading) return { text: "завантаження SQL...", className: "warn" };
+  if (table.error) return { text: table.error, className: "danger" };
+  if (table.lastLoadedAt) return { text: `${table.items.length} рядків · offset ${table.offset} · limit ${table.limit}`, className: "good" };
+  return { text: "очікує першого запиту", className: "warn" };
+}
+
+function renderLiveTableToolbar(kind) {
+  const config = liveTableConfig(kind);
+  const table = liveTable(kind);
+  const status = liveTableStatus(kind);
+  const canPrev = Number(table.offset || 0) > 0 && !table.loading;
+  const canNext = !table.loading && table.items.length >= table.limit;
+  return `
+    <div class="split">
+      <div>
+        <p class="eyebrow">${escapeHtml(config.subtitle)}</p>
+        <h2>${escapeHtml(config.title)}</h2>
+      </div>
+      <span class="pill ${status.className}">${escapeHtml(status.text)}</span>
+    </div>
+    <form class="form-grid live-table-toolbar" data-action="live-table-search" data-live-kind="${escapeHtml(kind)}">
+      <label class="field wide"><span>Пошук</span><input name="search" value="${escapeHtml(table.search)}" placeholder="${escapeHtml(config.searchPlaceholder)}"></label>
+      <label class="field"><span>Рядків</span><select name="limit">${LIVE_TABLE_LIMIT_OPTIONS.map((limit) => option(limit, limit, limit === table.limit)).join("")}</select></label>
+      <div class="toolbar full">
+        <button class="primary" type="submit" ${table.loading ? "disabled" : ""}>Пошук</button>
+        <button class="secondary" type="button" data-live-refresh="${escapeHtml(kind)}" ${table.loading ? "disabled" : ""}>Оновити</button>
+        <button class="secondary" type="button" data-live-table-page="${escapeHtml(kind)}" data-live-direction="-1" ${canPrev ? "" : "disabled"}>Назад</button>
+        <button class="secondary" type="button" data-live-table-page="${escapeHtml(kind)}" data-live-direction="1" ${canNext ? "" : "disabled"}>Вперед</button>
+      </div>
+    </form>
+    <p class="muted">Дані читаються з PostgreSQL/SQL API посторінково. Повний каталог у браузер не завантажується.</p>
+  `;
+}
+
+function renderLiveProductsTable() {
+  const table = liveTable("products");
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>product_code</th><th>Товар</th><th>Категорія/шлях</th><th>Ціна</th><th>Залишок</th><th>Джерело</th><th>Дії</th></tr></thead>
+        <tbody>
+          ${table.items.map((product) => `
+            <tr>
+              <td>${escapeHtml(product.productCode || product.sku || product.id)}<br><span class="muted">${escapeHtml(product.sqlId || "-")}</span></td>
+              <td><strong>${escapeHtml(product.name)}</strong><br><span class="muted">${escapeHtml(product.barcode || product.qr || "-")} · ${escapeHtml(product.sku || "-")}</span></td>
+              <td>${escapeHtml(product.productGroupPath || product.category)}<br><span class="muted">${escapeHtml(product.productFullPath || product.categorySecondary || "-")}</span></td>
+              <td>${escapeHtml(product.priceSummary || formatMoney(product.price))}<br><span class="muted">${escapeHtml(product.priceTypes || "-")} · ${escapeHtml(product.priceCurrencies || "UAH")}</span></td>
+              <td><strong>${Number(product.retailStockQty || stockQty(product.id) || 0)}</strong><br><span class="muted">усього ${Number(product.stockTotalQty || 0)} · інші ${Number(product.stockWholesaleQty || 0)}</span></td>
+              <td>${escapeHtml(product.source || "crm-sql-live")}<br><span class="muted">${escapeHtml(product.importer || product.supplyChannel || "-")}</span></td>
+              <td>${canDo("sale_create") ? `<button class="secondary" type="button" data-add-cart="${escapeHtml(product.id)}">У продаж</button>` : ""}</td>
+            </tr>
+          `).join("") || `<tr><td colspan="7" class="muted">${table.loading ? "Завантаження..." : table.error ? escapeHtml(table.error) : "Немає рядків на цій сторінці."}</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderLivePricesTable() {
+  const table = liveTable("prices");
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>product_code</th><th>Товар</th><th>Тип ціни</th><th>Ціна</th><th>Дата зрізу</th><th>Джерело</th></tr></thead>
+        <tbody>
+          ${table.items.map((price) => `
+            <tr>
+              <td>${escapeHtml(price.productCode || "-")}</td>
+              <td><strong>${escapeHtml(price.productName || "-")}</strong></td>
+              <td>${escapeHtml(price.priceTypeName || "-")}<br><span class="muted">${escapeHtml(price.priceTypeCode || "-")}</span></td>
+              <td><strong>${Number(price.amount || price.price || 0)}</strong> ${escapeHtml(price.currency || "UAH")}</td>
+              <td>${escapeHtml(price.snapshotAt || price.importedAt || "-")}</td>
+              <td>${escapeHtml(price.sourceFile || price.source || "crm-sql-live")}</td>
+            </tr>
+          `).join("") || `<tr><td colspan="6" class="muted">${table.loading ? "Завантаження..." : table.error ? escapeHtml(table.error) : "Немає цін на цій сторінці."}</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderLiveCounterpartiesTable() {
+  const table = liveTable("counterparties");
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>counterparty_code</th><th>Контрагент</th><th>Контакти</th><th>Податковий код</th><th>Статус</th><th>Джерело</th></tr></thead>
+        <tbody>
+          ${table.items.map((customer) => `
+            <tr>
+              <td>${escapeHtml(customer.counterpartyCode || customer.id)}<br><span class="muted">${escapeHtml(customer.sqlId || "-")}</span></td>
+              <td><strong>${escapeHtml(customer.name)}</strong><br><span class="muted">${escapeHtml(customer.fullName || "-")}</span></td>
+              <td>${escapeHtml(customer.phone || "-")}<br><span class="muted">${escapeHtml(customer.email || "-")}</span></td>
+              <td>${escapeHtml(customer.taxId || "-")}</td>
+              <td><span class="pill ${customer.isDeleted ? "danger" : "good"}">${customer.isDeleted ? "видалено в 1C" : "активний"}</span></td>
+              <td>${escapeHtml(customer.sourceFile || customer.sourceModule || "crm-sql-live")}<br><span class="muted">${escapeHtml(customer.importedAt || "-")}</span></td>
+            </tr>
+          `).join("") || `<tr><td colspan="6" class="muted">${table.loading ? "Завантаження..." : table.error ? escapeHtml(table.error) : "Немає контрагентів на цій сторінці."}</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
 function renderCatalog() {
   setTitle("Товари магазину");
+  ensureLiveTableLoaded("products");
+  ensureLiveTableLoaded("prices");
   return `
     <section class="stacked-panels">
       <article class="panel">
-        <div class="split">
-          <h2>B2C.4 Товари</h2>
-          <span class="pill">${state.products.length} SKU з SQL</span>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>product_code</th><th>Назва</th><th>Категорія/шлях</th><th>Рівень</th><th>Ціни/валюти</th><th>Вид/серія/група</th><th>Характеристики</th><th>Склад №1</th><th>Дії</th></tr></thead>
-            <tbody>
-              ${state.products.map((product) => `
-                <tr>
-                  <td>${escapeHtml(product.productCode || product.sku)}<br><span class="muted">${escapeHtml(product.sqlId || "-")}</span></td>
-                  <td><strong>${escapeHtml(product.name)}</strong><br><span class="muted">${escapeHtml(product.barcode || product.qr || "-")}</span></td>
-                  <td>${escapeHtml(product.productGroupPath || product.category)}<br><span class="muted">${escapeHtml(product.productFullPath || "-")}</span><br><span class="muted">${escapeHtml(product.productGroupCodePath || "-")}</span></td>
-                  <td>${product.productGroupLevel || "-"}</td>
-                  <td>${escapeHtml(product.priceSummary || formatMoney(product.price))}<br><span class="muted">${escapeHtml(product.priceCurrencies || "UAH")} · ${escapeHtml(product.priceTypes || "-")}</span></td>
-                  <td>${escapeHtml(product.productKind || "-")}<br><span class="muted">${escapeHtml(product.productSeries || "-")} · ${escapeHtml(product.productGroup || "-")}</span></td>
-                  <td>${(product.characteristics || []).map((item) => `<span class="pill">${escapeHtml(item)}</span>`).join(" ") || "-"}</td>
-                  <td>${stockQty(product.id)}</td>
-                  <td>${canDo("sale_create") ? `<button class="secondary" type="button" data-add-cart="${escapeHtml(product.id)}">У продаж</button>` : ""}</td>
-                </tr>
-              `).join("") || '<tr><td colspan="9" class="muted">Товарів ще не імпортовано з SQL. Ручне створення SKU вимкнено.</td></tr>'}
-            </tbody>
-          </table>
-        </div>
+        ${renderLiveTableToolbar("products")}
+        ${renderLiveProductsTable()}
+      </article>
+      <article class="panel">
+        ${renderLiveTableToolbar("prices")}
+        ${renderLivePricesTable()}
       </article>
       <article class="panel">
         <div class="split">
@@ -3127,6 +3453,7 @@ function renderCatalog() {
 
 function renderCustomers() {
   setTitle("Клієнти і лояльність");
+  ensureLiveTableLoaded("counterparties");
   const canCreateCustomer = canDo("customer_create");
   return `
     <section class="stacked-panels">
@@ -3182,6 +3509,10 @@ function renderCustomers() {
             </tbody>
           </table>
         </div>
+      </article>
+      <article class="panel">
+        ${renderLiveTableToolbar("counterparties")}
+        ${renderLiveCounterpartiesTable()}
       </article>
     </section>
   `;
@@ -3552,6 +3883,7 @@ function renderSettings() {
           <label class="field"><span>Публічний host</span><input name="publicHost" value="${escapeHtml(settings.publicHost)}" placeholder="192.168.0.5"></label>
           <label class="field"><span>Публічна адреса</span><input name="publicBaseUrl" value="${escapeHtml(settings.publicBaseUrl)}" placeholder="http://192.168.0.5:8790"></label>
           <label class="field"><span>API base URL</span><input name="apiBaseUrl" value="${escapeHtml(settings.apiBaseUrl)}" placeholder="порожньо = цей самий сервер"></label>
+          <label class="field wide"><span>CRM SQL API base URL</span><input name="crmSqlApiBaseUrl" value="${escapeHtml(settings.crmSqlApiBaseUrl)}" placeholder="http://192.168.0.166:3000"></label>
           <label class="field"><span>Bind address</span><input name="bindAddress" value="${escapeHtml(settings.bindAddress)}" placeholder="0.0.0.0"></label>
           <label class="field"><span>Порт</span><input name="port" type="number" min="1" max="65535" value="${Number(settings.port || 8790)}"></label>
           <label class="field"><span>Сховище</span><select name="storageBackend">${["server-json", "postgresql"].map((id) => option(id, id === "server-json" ? "JSON на сервері" : "PostgreSQL API layer", id === settings.storageBackend)).join("")}</select></label>
@@ -3577,6 +3909,7 @@ function renderSettings() {
           <table>
             <tbody>
               <tr><th>Health endpoint</th><td>${escapeHtml(apiLabel)}</td></tr>
+              <tr><th>CRM SQL API</th><td>${escapeHtml(settings.crmSqlApiBaseUrl || DEFAULT_SYSTEM_SETTINGS.crmSqlApiBaseUrl)}</td></tr>
               <tr><th>State revision</th><td>${Number(serverSync.revision || 0)}</td></tr>
               <tr><th>Останнє читання</th><td>${serverSync.lastLoadedAt ? formatDateTime(serverSync.lastLoadedAt) : "-"}</td></tr>
               <tr><th>Останнє збереження</th><td>${serverSync.lastSavedAt || settings.lastSavedAt ? formatDateTime(serverSync.lastSavedAt || settings.lastSavedAt) : "-"}</td></tr>
@@ -4774,6 +5107,10 @@ document.addEventListener("click", (event) => {
   if (syncStateNowButton) return flushServerState(true);
   const loadServerStateButton = event.target.closest("[data-load-server-state]");
   if (loadServerStateButton) return refreshServerState(true);
+  const liveRefreshButton = event.target.closest("[data-live-refresh]");
+  if (liveRefreshButton) return refreshLiveTable(liveRefreshButton.dataset.liveRefresh);
+  const livePageButton = event.target.closest("[data-live-table-page]");
+  if (livePageButton) return pageLiveTable(livePageButton.dataset.liveTablePage, Number(livePageButton.dataset.liveDirection || 0));
   if (event.target.id === "reset-local-state") {
     state = clone(seedState);
     audit("Скинуто локальний стан B2C. Товари, клієнти, залишки й чеки очищені до нового SQL-імпорту.", "manager");
@@ -4885,6 +5222,7 @@ document.addEventListener("submit", (event) => {
   if (form.dataset.action === "create-employee") createEmployee(form);
   if (form.dataset.action === "open-shift") openCashShift(form);
   if (form.dataset.action === "close-shift") closeCashShift(form);
+  if (form.dataset.action === "live-table-search") searchLiveTable(form);
 });
 
 function renderAppReleaseTime() {
