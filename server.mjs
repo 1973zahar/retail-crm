@@ -3,8 +3,9 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const APP_VERSION = "2026.06.07.2";
-const APP_BUILD = "20260607-b2c-live-api-slice";
+const APP_VERSION = "2026.06.07.3";
+const APP_BUILD = "20260607-b2c-release-timestamp";
+const APP_RELEASED_AT = "2026-06-07 12:59:37 +03:00";
 const ROOT_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 const DEFAULT_CONFIG = {
@@ -77,6 +78,7 @@ const server = http.createServer(async (request, response) => {
 server.listen(config.port, config.host, () => {
   const publicUrl = publicBaseUrl();
   console.log(`B2C Retail CRM ${APP_BUILD}`);
+  console.log(`Released:  ${APP_RELEASED_AT}`);
   console.log(`Listening: http://${config.host}:${config.port}`);
   console.log(`Public:    ${publicUrl}`);
   console.log(`Data dir:  ${dataDir}`);
@@ -219,6 +221,7 @@ async function handleApi(request, response, url) {
       savedBy: String(body.savedBy || "system"),
       build: String(body.build || APP_BUILD),
       appVersion: String(body.appVersion || APP_VERSION),
+      releasedAt: String(body.releasedAt || APP_RELEASED_AT),
       conflict: Number(body.baseRevision || 0) > 0 && Number(body.baseRevision || 0) < Number(current.revision || 0),
       state: body.state
     };
@@ -246,6 +249,7 @@ async function handleApi(request, response, url) {
       savedAt: new Date().toISOString(),
       savedBy: String(body.savedBy || "system"),
       build: String(body.build || APP_BUILD),
+      releasedAt: String(body.releasedAt || APP_RELEASED_AT),
       settings
     };
     await writeJsonAtomic(settingsPath, next);
@@ -519,6 +523,7 @@ function healthPayload(stateContainer) {
     ok: true,
     appVersion: APP_VERSION,
     build: APP_BUILD,
+    releasedAt: APP_RELEASED_AT,
     mode: "server",
     host: config.host,
     publicHost: config.publicHost,
@@ -537,6 +542,7 @@ function defaultStateContainer() {
     savedBy: "",
     build: APP_BUILD,
     appVersion: APP_VERSION,
+    releasedAt: APP_RELEASED_AT,
     conflict: false,
     state: null
   };
@@ -548,6 +554,7 @@ function defaultSettingsContainer() {
     savedAt: "",
     savedBy: "",
     build: APP_BUILD,
+    releasedAt: APP_RELEASED_AT,
     settings: normalizeSettings(DEFAULT_SETTINGS)
   };
 }

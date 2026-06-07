@@ -25,8 +25,9 @@
     "dataDir": "data"
   },
   "currentApp": {
-    "build": "20260607-b2c-live-api-slice",
-    "version": "2026.06.07.2",
+    "build": "20260607-b2c-release-timestamp",
+    "version": "2026.06.07.3",
+    "releasedAt": "2026-06-07 12:59:37 +03:00",
     "contractVersion": "2026.06.07-retail-live-api-1"
   },
   "sourceOfTruth": {

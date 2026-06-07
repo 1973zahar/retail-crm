@@ -7,8 +7,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$AppVersion = "2026.06.07.2"
-$AppBuild = "20260607-b2c-live-api-slice"
+$AppVersion = "2026.06.07.3"
+$AppBuild = "20260607-b2c-release-timestamp"
+$AppReleasedAt = "2026-06-07 12:59:37 +03:00"
 $RootDir = $PSScriptRoot
 $ResolvedDataDir = if ([System.IO.Path]::IsPathRooted($DataDir)) { $DataDir } else { Join-Path $RootDir $DataDir }
 $StatePath = Join-Path $ResolvedDataDir "retail-crm-state.json"
@@ -54,6 +55,7 @@ function New-DefaultStateContainer {
     savedBy = ""
     build = $AppBuild
     appVersion = $AppVersion
+    releasedAt = $AppReleasedAt
     conflict = $false
     state = $null
   }
@@ -65,6 +67,7 @@ function New-DefaultSettingsContainer {
     savedAt = ""
     savedBy = ""
     build = $AppBuild
+    releasedAt = $AppReleasedAt
     settings = New-DefaultSettings
   }
 }
@@ -118,6 +121,7 @@ function New-HealthPayload($StateContainer) {
     ok = $true
     appVersion = $AppVersion
     build = $AppBuild
+    releasedAt = $AppReleasedAt
     mode = "server-powershell"
     host = $HostName
     publicHost = $PublicHost
@@ -644,6 +648,7 @@ function Handle-Api($Client, $Request) {
       publicBaseUrl = $health.publicBaseUrl
       port = $health.port
       dataDir = $health.dataDir
+      releasedAt = $health.releasedAt
       revision = $health.revision
       savedAt = $health.savedAt
       settings = $settingsContainer.settings
@@ -674,6 +679,7 @@ function Handle-Api($Client, $Request) {
       savedBy = [string]($body.savedBy)
       build = if ($body.build) { [string]$body.build } else { $AppBuild }
       appVersion = if ($body.appVersion) { [string]$body.appVersion } else { $AppVersion }
+      releasedAt = if ($body.releasedAt) { [string]$body.releasedAt } else { $AppReleasedAt }
       conflict = ($baseRevision -gt 0 -and $baseRevision -lt [int]($current.revision))
       state = $body.state
     }
@@ -700,6 +706,7 @@ function Handle-Api($Client, $Request) {
       savedAt = [DateTime]::UtcNow.ToString("o")
       savedBy = [string]($body.savedBy)
       build = if ($body.build) { [string]$body.build } else { $AppBuild }
+      releasedAt = if ($body.releasedAt) { [string]$body.releasedAt } else { $AppReleasedAt }
       settings = $settings
     }
     Write-JsonFile $SettingsPath $next
@@ -709,6 +716,7 @@ function Handle-Api($Client, $Request) {
       savedAt = $next.savedAt
       savedBy = $next.savedBy
       build = $next.build
+      releasedAt = $next.releasedAt
       settings = $next.settings
       stateRevision = [int]($stateContainer.revision)
     }

@@ -1,7 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.07.2";
-const APP_BUILD = "20260607-b2c-live-api-slice";
+const APP_VERSION = "2026.06.07.3";
+const APP_BUILD = "20260607-b2c-release-timestamp";
+const APP_RELEASED_AT = "2026-06-07 12:59:37 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SIDEBAR_COLLAPSED_KEY = "retail-crm-b2c-sidebar-collapsed-v1";
@@ -1431,6 +1432,7 @@ async function flushServerState(renderAfter = false) {
         baseRevision: serverSync.revision,
         build: APP_BUILD,
         appVersion: APP_VERSION,
+        releasedAt: APP_RELEASED_AT,
         savedBy: currentEmployee()?.name || "system",
         state
       })
@@ -1475,7 +1477,8 @@ async function saveServerSettings(renderAfter = false) {
       body: JSON.stringify({
         settings: state.systemSettings,
         savedBy: currentEmployee()?.name || "system",
-        build: APP_BUILD
+        build: APP_BUILD,
+        releasedAt: APP_RELEASED_AT
       })
     });
     if (payload.settings) state.systemSettings = normalizeSystemSettings(payload.settings);
@@ -4583,7 +4586,7 @@ function updateCartField(target) {
 
 function render() {
   applySidebarState();
-  renderAppClock();
+  renderAppReleaseTime();
   if (!canOpenBlock(state.currentView)) {
     const allowedView = firstAllowedView();
     if (canOpenBlock(allowedView)) {
@@ -4810,34 +4813,16 @@ document.addEventListener("submit", (event) => {
   if (form.dataset.action === "close-shift") closeCashShift(form);
 });
 
-function formatAppDateTime(date = new Date()) {
-  try {
-    return new Intl.DateTimeFormat("uk-UA", {
-      timeZone: "Europe/Kyiv",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false
-    }).format(date).replace(",", "");
-  } catch (error) {
-    return date.toLocaleString();
-  }
-}
-
-function renderAppClock() {
-  const target = document.getElementById("app-clock");
+function renderAppReleaseTime() {
+  const target = document.getElementById("app-release-time");
   if (!target) return;
-  target.textContent = formatAppDateTime();
+  target.textContent = APP_RELEASED_AT;
 }
 
 applySidebarState();
-renderAppClock();
+renderAppReleaseTime();
 render();
 bootstrapServerState();
-window.setInterval(renderAppClock, 1000);
 window.setInterval(() => {
   const seconds = Number(state.systemSettings?.autoRefreshSeconds || DEFAULT_SYSTEM_SETTINGS.autoRefreshSeconds);
   if (serverModeEnabled() && seconds > 0) refreshServerState(false);

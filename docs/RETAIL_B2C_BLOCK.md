@@ -10,8 +10,9 @@ Repo: D:\Codex\CRM\retail-crm
 Stable local runtime: http://127.0.0.1:18810/index.html
 Legacy/manual local runtime: http://127.0.0.1:8790/index.html
 MESER runtime: http://192.168.0.5:8790/index.html
-Current build: 20260607-b2c-live-api-slice
-App version: 2026.06.07.2
+Current build: 20260607-b2c-release-timestamp
+App version: 2026.06.07.3
+Released at: 2026-06-07 12:59:37 +03:00
 Contract version: 2026.06.07-retail-live-api-1
 ```
 
@@ -39,6 +40,8 @@ Frontend = bounded interactive view/cache only
 ```
 
 The browser must not load full products, stock, serials, customers, balances or orders as production data. Large lists must be read through backend endpoints with `search`, `limit`, `offset` and filters. The current local `server-json` responses are explicitly marked as fallback until the PostgreSQL-backed TypeScript/Odoo-like model layer replaces them.
+
+The sidebar version footer shows fixed release/build metadata. `Дата/час версії` is the creation timestamp of the app version, not a live clock.
 
 ## Owned Workflows
 
