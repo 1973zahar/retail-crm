@@ -3,9 +3,9 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const APP_VERSION = "2026.06.07.4";
-const APP_BUILD = "20260607-b2c-top-status-bar";
-const APP_RELEASED_AT = "2026-06-07 14:11:20 +03:00";
+const APP_VERSION = "2026.06.07.5";
+const APP_BUILD = "20260607-b2c-weapon-serials";
+const APP_RELEASED_AT = "2026-06-07 14:49:18 +03:00";
 const ROOT_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 const DEFAULT_CONFIG = {

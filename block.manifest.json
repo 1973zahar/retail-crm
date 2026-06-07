@@ -25,9 +25,9 @@
     "dataDir": "data"
   },
   "currentApp": {
-    "build": "20260607-b2c-top-status-bar",
-    "version": "2026.06.07.4",
-    "releasedAt": "2026-06-07 14:11:20 +03:00",
+    "build": "20260607-b2c-weapon-serials",
+    "version": "2026.06.07.5",
+    "releasedAt": "2026-06-07 14:49:18 +03:00",
     "contractVersion": "2026.06.07-retail-live-api-1"
   },
   "sourceOfTruth": {
@@ -167,6 +167,7 @@
     "Do not manually create products, prices, stock balances, serial numbers or receipts.",
     "Do not duplicate SQL core master data as the local source of truth.",
     "Do not load full product, stock, serial, customer, balance or order tables into browser state as production data; use bounded backend endpoints.",
+    "Do not show or fetch serial numbers in the Stock reference screen until a selected product belongs to category/path Зброя.",
     "Do not paste passwords, secrets, raw .env, raw logs or credentials."
   ],
   "performanceGoals": {

@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.07.4";
-const APP_BUILD = "20260607-b2c-top-status-bar";
-const APP_RELEASED_AT = "2026-06-07 14:11:20 +03:00";
+const APP_VERSION = "2026.06.07.5";
+const APP_BUILD = "20260607-b2c-weapon-serials";
+const APP_RELEASED_AT = "2026-06-07 14:49:18 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SIDEBAR_COLLAPSED_KEY = "retail-crm-b2c-sidebar-collapsed-v1";
@@ -499,6 +499,9 @@ const seedState = {
   activeEmployeeId: "e-001",
   selectedCashierId: "e-004",
   selectedReturnId: "",
+  stockUi: {
+    serialProductId: ""
+  },
   rolePermissionSchema: ROLE_PERMISSION_SCHEMA,
   rolePermissions: defaultRolePermissions(),
   stock: [],
@@ -695,6 +698,10 @@ function normalizeState(input) {
     : next.employees.find((employee) => employee.role === "director")?.id || next.employees[0]?.id || "";
   next.selectedCashierId = next.selectedCashierId || next.employees.find((item) => item.role === "cashier" && item.status === "active")?.id || seedState.selectedCashierId;
   next.selectedReturnId = next.selectedReturnId || "";
+  next.stockUi = {
+    ...clone(seedState.stockUi),
+    ...(next.stockUi || {})
+  };
   const inputRoleSchema = next.rolePermissionSchema || "";
   next.rolePermissions = normalizeRolePermissions(next.rolePermissions, inputRoleSchema);
   next.rolePermissionSchema = ROLE_PERMISSION_SCHEMA;
@@ -1796,6 +1803,33 @@ function stockWholesaleQty(productId) {
     .reduce((sum, item) => sum + Number(item.qty || 0), 0);
 }
 
+function productCategoryText(product) {
+  return [
+    product.category,
+    product.categoryPrimary,
+    product.productGroup,
+    product.productGroupPath,
+    product.productFullPath,
+    product.productKind,
+    ...(Array.isArray(product.characteristics) ? product.characteristics : [])
+  ].filter(Boolean).join(" ");
+}
+
+function isWeaponProduct(product) {
+  const text = normalizeScanText(productCategoryText(product));
+  return text.includes("збро") || text.includes("оруж") || text.includes("weapon") || text.includes("firearm");
+}
+
+function serialRowsForSelectedWeaponProduct(productId) {
+  const product = productById(productId);
+  if (!product?.id || !isWeaponProduct(product)) return [];
+  return state.serialStock.filter((row) => (
+    row.productId === product.id
+    || (product.productCode && row.productCode === product.productCode)
+    || (product.sku && row.productCode === product.sku)
+  ));
+}
+
 function normalizeScanText(value) {
   return String(value ?? "").trim().toLowerCase();
 }
@@ -2881,6 +2915,17 @@ function renderStock() {
   const resortTotals = inventoryResortTotals();
   const canPostInventory = canDo("inventory_post");
   const canResortInventory = canDo("inventory_resort");
+  const weaponProducts = state.products.filter(isWeaponProduct);
+  const selectedSerialProductId = weaponProducts.some((product) => product.id === state.stockUi.serialProductId)
+    ? state.stockUi.serialProductId
+    : "";
+  const selectedSerialProduct = selectedSerialProductId ? productById(selectedSerialProductId) : null;
+  const serialRows = selectedSerialProductId ? serialRowsForSelectedWeaponProduct(selectedSerialProductId) : [];
+  const serialEmptyText = !weaponProducts.length
+    ? "У довіднику немає товарів категорії Зброя."
+    : selectedSerialProductId
+      ? "Для вибраного товару категорії Зброя серійних залишків ще не імпортовано з SQL."
+      : "Виберіть товар із категорії Зброя, щоб підтягнути серійні номери.";
   return `
     <section class="stacked-panels">
       <article class="panel">
@@ -2906,13 +2951,27 @@ function renderStock() {
       <article class="panel">
         <div class="split">
           <h2>Серійні номери</h2>
-          <span class="pill">${state.serialStock.length} рядків з SQL</span>
+          <span class="pill">${selectedSerialProductId ? `${serialRows.length} рядків з SQL` : "тільки Зброя"}</span>
         </div>
+        <div class="form-grid section-gap">
+          <label class="field wide">
+            <span>Товар категорії Зброя</span>
+            <select data-stock-serial-product>
+              <option value="">Виберіть товар зі Зброї</option>
+              ${weaponProducts.map((product) => option(product.id, `${product.productCode || product.sku} · ${product.name}`, product.id === selectedSerialProductId)).join("")}
+            </select>
+          </label>
+          <div class="field">
+            <span>Правило</span>
+            <small class="muted">Серійні номери не показуються без вибору товару з категорії Зброя.</small>
+          </div>
+        </div>
+        ${selectedSerialProduct ? `<p class="muted">Вибрано: ${escapeHtml(selectedSerialProduct.productFullPath || selectedSerialProduct.productGroupPath || selectedSerialProduct.categoryPrimary || selectedSerialProduct.category)}</p>` : ""}
         <div class="table-wrap">
           <table>
             <thead><tr><th>product_code</th><th>Товар</th><th>warehouse_code</th><th>Склад</th><th>Серійний номер</th><th>Кількість</th><th>Знак</th></tr></thead>
             <tbody>
-              ${state.serialStock.map((row) => `
+              ${serialRows.map((row) => `
                 <tr>
                   <td>${escapeHtml(row.productCode)}</td>
                   <td>${escapeHtml(row.productName || productById(row.productId).name)}</td>
@@ -2922,7 +2981,7 @@ function renderStock() {
                   <td>${row.quantity}</td>
                   <td><span class="pill ${row.balanceSign === "negative" ? "danger" : row.balanceSign === "zero" ? "warn" : "good"}">${escapeHtml(row.balanceSign)}</span></td>
                 </tr>
-              `).join("") || '<tr><td colspan="7" class="muted">Серійних залишків ще не імпортовано з SQL.</td></tr>'}
+              `).join("") || `<tr><td colspan="7" class="muted">${escapeHtml(serialEmptyText)}</td></tr>`}
             </tbody>
           </table>
         </div>
@@ -4754,6 +4813,12 @@ document.addEventListener("change", (event) => {
   if (event.target.dataset.checkoutField !== undefined) updateCheckoutField(event.target);
   if (event.target.dataset.customerLookup !== undefined) selectCustomerFromLookup(event.target.value);
   if (event.target.dataset.checkoutScan !== undefined && event.target.value.trim()) scanCheckoutProduct(event.target.value);
+  if (event.target.dataset.stockSerialProduct !== undefined) {
+    const product = productById(event.target.value);
+    state.stockUi.serialProductId = product?.id && isWeaponProduct(product) ? product.id : "";
+    saveState();
+    render();
+  }
   if (event.target.dataset.inventoryActual !== undefined) {
     setInventoryActual(event.target.dataset.inventoryActual, event.target.value);
     render();

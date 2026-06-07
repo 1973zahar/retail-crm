@@ -10,9 +10,9 @@ Repo: D:\Codex\CRM\retail-crm
 Stable local runtime: http://127.0.0.1:18810/index.html
 Legacy/manual local runtime: http://127.0.0.1:8790/index.html
 MESER runtime: http://192.168.0.5:8790/index.html
-Current build: 20260607-b2c-top-status-bar
-App version: 2026.06.07.4
-Released at: 2026-06-07 14:11:20 +03:00
+Current build: 20260607-b2c-weapon-serials
+App version: 2026.06.07.5
+Released at: 2026-06-07 14:49:18 +03:00
 Contract version: 2026.06.07-retail-live-api-1
 ```
 
@@ -42,6 +42,8 @@ Frontend = bounded interactive view/cache only
 The browser must not load full products, stock, serials, customers, balances or orders as production data. Large lists must be read through backend endpoints with `search`, `limit`, `offset` and filters. The current local `server-json` responses are explicitly marked as fallback until the PostgreSQL-backed TypeScript/Odoo-like model layer replaces them.
 
 The sidebar version footer shows fixed release/build metadata. `Дата/час версії` is the creation timestamp of the app version, not a live clock. Session and server status belong to the top page bar, while the sidebar is navigation-only plus the version footer.
+
+In `Довідники -> Залишки`, serial numbers are gated by product category. The serial-number table stays empty until a user selects a product from category/path `Зброя`; non-weapon products must not trigger serial-number loading or display.
 
 ## Owned Workflows
 
@@ -150,6 +152,7 @@ Do not switch workers through sidebar selectors; use login/logout sessions.
 Do not manually create products, prices, stock balances, serial numbers or receipts.
 Do not duplicate SQL core master data as the local source of truth.
 Do not load full product, stock, serial, customer, balance or order tables into browser state as production data.
+Do not show or fetch serial numbers in the Stock reference screen until a selected product belongs to category/path `Зброя`.
 Do not paste passwords, secrets, raw .env, raw logs or credentials.
 ```
 
