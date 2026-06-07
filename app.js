@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.07.8";
-const APP_BUILD = "20260607-b2c-warehouse-serial-sale";
-const APP_RELEASED_AT = "2026-06-07 20:27:49 +03:00";
+const APP_VERSION = "2026.06.07.9";
+const APP_BUILD = "20260607-b2c-in-stock-product-lookup";
+const APP_RELEASED_AT = "2026-06-07 21:30:23 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SIDEBAR_COLLAPSED_KEY = "retail-crm-b2c-sidebar-collapsed-v1";
@@ -1407,19 +1407,23 @@ function productSearchPool() {
 function localProductLookupItems(query, limit = LIVE_PRODUCT_LOOKUP_LIMIT) {
   return productSearchPool()
     .filter((product) => productMatchesQuery(product, query))
+    .filter(productHasMainWarehouseStock)
     .slice(0, Math.max(1, Math.min(100, Number(limit || LIVE_PRODUCT_LOOKUP_LIMIT))));
 }
 
 function currentProductLookupItems() {
   const query = state.checkout?.search || "";
   const liveQuery = liveProductLookup.query || "";
-  if (
-    serverModeEnabled()
-    && normalizeScanText(query) === normalizeScanText(liveQuery)
-    && Array.isArray(liveProductLookup.items)
-    && liveProductLookup.items.length
-  ) {
-    return liveProductLookup.items;
+  if (serverModeEnabled()) {
+    if (!String(query).trim()) return [];
+    if (
+      normalizeScanText(query) === normalizeScanText(liveQuery)
+      && Array.isArray(liveProductLookup.items)
+      && liveProductLookup.source
+    ) {
+      return liveProductLookup.items;
+    }
+    return [];
   }
   return localProductLookupItems(query);
 }
@@ -1427,14 +1431,17 @@ function currentProductLookupItems() {
 function productLookupStatusText() {
   const query = String(state.checkout?.search || "").trim();
   if (!query) return serverModeEnabled()
-    ? "Live API готовий: введіть назву, SKU або штрихкод."
-    : "Fallback local/demo: серверний endpoint не налаштовано.";
-  if (liveProductLookup.loading) return "Live API: пошук на сервері...";
+    ? `Live API готовий: введіть назву, SKU або штрихкод. У списку тільки ${SQL_MAIN_WAREHOUSE_NAME} > 0.`
+    : `Fallback local/demo: тільки товари із залишком ${SQL_MAIN_WAREHOUSE_NAME}.`;
+  if (liveProductLookup.loading) return `Live API: шукаю товари із залишком ${SQL_MAIN_WAREHOUSE_NAME}...`;
   if (serverModeEnabled() && !liveProductLookup.error && liveProductLookup.source) {
-    return `Live API: ${liveProductLookup.items.length} з ${liveProductLookup.total} · limit ${liveProductLookup.limit}`;
+    if (!liveProductLookup.items.length) return `Live API: товарів із залишком ${SQL_MAIN_WAREHOUSE_NAME} не знайдено`;
+    return `Live API: ${liveProductLookup.items.length} з ${liveProductLookup.total} із залишком ${SQL_MAIN_WAREHOUSE_NAME} · limit ${liveProductLookup.limit}`;
   }
-  if (liveProductLookup.error) return `Fallback local/demo: ${liveProductLookup.error}`;
-  return `Fallback local/demo: ${localProductLookupItems(query).length} збігів`;
+  if (liveProductLookup.error) return serverModeEnabled()
+    ? `Live API: ${liveProductLookup.error}. Локальний список не підмішується.`
+    : `Fallback local/demo: ${liveProductLookup.error}`;
+  return `Fallback local/demo: ${localProductLookupItems(query).length} товарів із залишком`;
 }
 
 function productLookupStatusClass() {
@@ -1458,22 +1465,115 @@ function renderProductLookupOptions() {
   }
 }
 
+function findStockedLiveLookupProduct(value) {
+  const raw = normalizeScanText(value);
+  if (!raw || !Array.isArray(liveProductLookup.items)) return null;
+  const items = liveProductLookup.items.filter(productHasMainWarehouseStock);
+  return items.find((product) => normalizeScanText(productLookupValue(product)) === raw)
+    || items.find((product) => productMatchesQuery(product, value))
+    || null;
+}
+
 async function queryLiveProducts({ search = "", barcode = "", limit = LIVE_PRODUCT_LOOKUP_LIMIT, offset = 0 } = {}) {
-  const params = new URLSearchParams();
-  if (search) params.set("search", search);
-  if (barcode) params.set("barcode", barcode);
-  params.set("limit", String(Math.max(1, Math.min(100, Number(limit || LIVE_PRODUCT_LOOKUP_LIMIT)))));
-  params.set("offset", String(Math.max(0, Number(offset || 0))));
-  const payload = await fetchJson(`/api/products?${params.toString()}`);
-  const items = Array.isArray(payload.items) ? payload.items.map(rememberLiveProduct) : [];
-  liveProductLookup.items = items;
-  liveProductLookup.total = Number(payload.total ?? items.length);
+  const payload = await fetchLiveProducts({ search, barcode, limit, offset });
+  liveProductLookup.items = payload.items;
+  liveProductLookup.total = Number(payload.total ?? payload.items.length);
   liveProductLookup.limit = Number(payload.limit || limit || LIVE_PRODUCT_LOOKUP_LIMIT);
   liveProductLookup.offset = Number(payload.offset || offset || 0);
   liveProductLookup.query = search || barcode || "";
   liveProductLookup.barcode = barcode || "";
   liveProductLookup.source = payload.source || payload.sourceDetail || "backend";
   liveProductLookup.fallback = Boolean(payload.fallback);
+  liveProductLookup.error = "";
+  liveProductLookup.lastLoadedAt = nowIso();
+  return payload;
+}
+
+async function fetchLiveProducts({ search = "", barcode = "", limit = LIVE_PRODUCT_LOOKUP_LIMIT, offset = 0 } = {}) {
+  const params = new URLSearchParams();
+  if (search) params.set("search", search);
+  if (barcode) params.set("barcode", barcode);
+  params.set("limit", String(Math.max(1, Math.min(100, Number(limit || LIVE_PRODUCT_LOOKUP_LIMIT)))));
+  params.set("offset", String(Math.max(0, Number(offset || 0))));
+  const payload = await fetchJson(`/api/products?${params.toString()}`);
+  const items = payloadItems(payload).map(rememberLiveProduct);
+  markServerOnline(payload);
+  return { ...payload, items };
+}
+
+function stockLookupAvailableQty(row) {
+  const qty = Number(row?.availableQty ?? row?.availableQuantity ?? row?.available_quantity ?? row?.qty ?? row?.quantity ?? row?.retailStockQty ?? 0);
+  return Number.isFinite(qty) ? qty : 0;
+}
+
+function liveStockProductCode(row) {
+  return String(row?.productCode || row?.product_code || row?.sku || row?.productId || row?.product_id || "").trim();
+}
+
+function mergeLiveProductWithStock(product, row) {
+  const stockQtyValue = stockLookupAvailableQty(row);
+  const productCode = liveStockProductCode(row) || liveProductCode(product);
+  return rememberLiveProduct({
+    ...(product || {}),
+    id: product?.id || productCode || `stock-${Date.now()}`,
+    sqlId: product?.sqlId || product?.id || productCode || "",
+    productCode: product?.productCode || productCode,
+    sku: product?.sku || productCode,
+    name: product?.name || row?.productName || row?.product_name || "Товар із залишком",
+    source: product?.source || row?.source || "crm-sql-live-stock",
+    retailStockQty: stockQtyValue,
+    stockTotalQty: Math.max(Number(product?.stockTotalQty || 0), stockQtyValue)
+  });
+}
+
+async function fetchLiveProductForStockRow(row) {
+  const productCode = liveStockProductCode(row);
+  if (!productCode) return mergeLiveProductWithStock(null, row);
+  try {
+    const payload = await fetchLiveProducts({ search: productCode, limit: 5, offset: 0 });
+    const target = normalizeScanText(productCode);
+    const exact = payload.items.find((product) => (
+      normalizeScanText(product.productCode) === target
+      || normalizeScanText(product.sku) === target
+      || normalizeScanText(product.id) === target
+      || normalizeScanText(product.barcode) === target
+    ));
+    return mergeLiveProductWithStock(exact || payload.items[0] || null, row);
+  } catch (error) {
+    return mergeLiveProductWithStock(null, row);
+  }
+}
+
+async function queryLiveStockedProducts({ search = "", barcode = "", limit = LIVE_PRODUCT_LOOKUP_LIMIT, offset = 0 } = {}) {
+  const lookup = String(search || barcode || "").trim();
+  const params = new URLSearchParams({
+    warehouseCode: SQL_MAIN_WAREHOUSE_CODE,
+    limit: String(Math.max(1, Math.min(100, Number(limit || LIVE_PRODUCT_LOOKUP_LIMIT)))),
+    offset: String(Math.max(0, Number(offset || 0)))
+  });
+  if (lookup) params.set("search", lookup);
+  const payload = await fetchJson(`/api/live/stock-balances?${params.toString()}`);
+  const seen = new Set();
+  const stockRows = payloadItems(payload)
+    .map(normalizeStockBalance)
+    .filter((row) => String(row.warehouseCode) === SQL_MAIN_WAREHOUSE_CODE && stockLookupAvailableQty(row) > 0)
+    .filter((row) => {
+      const key = normalizeScanText(liveStockProductCode(row) || row.productName);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  const items = (await Promise.all(stockRows.map(fetchLiveProductForStockRow)))
+    .filter(Boolean)
+    .filter(productHasMainWarehouseStock);
+  liveProductLookup.items = items;
+  liveProductLookup.total = Number(payload.total ?? items.length);
+  liveProductLookup.limit = Number(payload.limit || limit || LIVE_PRODUCT_LOOKUP_LIMIT);
+  liveProductLookup.offset = Number(payload.offset || offset || 0);
+  liveProductLookup.query = lookup;
+  liveProductLookup.barcode = barcode || "";
+  liveProductLookup.source = payload.source || payload.sourceDetail || "crm-sql-live-stock";
+  liveProductLookup.fallback = false;
   liveProductLookup.error = "";
   liveProductLookup.lastLoadedAt = nowIso();
   markServerOnline(payload);
@@ -1677,6 +1777,10 @@ function queueLiveProductLookup(value) {
     renderProductLookupOptions();
     return;
   }
+  liveProductLookup.items = [];
+  liveProductLookup.total = 0;
+  liveProductLookup.source = "";
+  liveProductLookup.fallback = false;
   const requestId = liveProductLookup.requestId + 1;
   liveProductLookup.requestId = requestId;
   liveProductLookup.loading = true;
@@ -1684,17 +1788,17 @@ function queueLiveProductLookup(value) {
   renderProductLookupOptions();
   liveProductLookup.timer = window.setTimeout(async () => {
     try {
-      const payload = await queryLiveProducts({ search: query, limit: LIVE_PRODUCT_LOOKUP_LIMIT });
+      const payload = await queryLiveStockedProducts({ search: query, limit: LIVE_PRODUCT_LOOKUP_LIMIT });
       if (requestId !== liveProductLookup.requestId) return;
       liveProductLookup.items = payload.items;
     } catch (error) {
       if (requestId !== liveProductLookup.requestId) return;
       markServerOffline(error);
-      liveProductLookup.items = localProductLookupItems(query);
-      liveProductLookup.total = liveProductLookup.items.length;
+      liveProductLookup.items = [];
+      liveProductLookup.total = 0;
       liveProductLookup.error = String(error?.message || error || "сервер недоступний");
-      liveProductLookup.source = "local-demo";
-      liveProductLookup.fallback = true;
+      liveProductLookup.source = "";
+      liveProductLookup.fallback = false;
     } finally {
       if (requestId === liveProductLookup.requestId) {
         liveProductLookup.loading = false;
@@ -1708,15 +1812,13 @@ async function resolveProductForSale(value, { scan = false } = {}) {
   const query = String(value || "").trim();
   if (!query) return null;
   if (serverModeEnabled()) {
+    const selected = findStockedLiveLookupProduct(query);
+    if (selected) return selected;
     liveProductLookup.loading = true;
     liveProductLookup.error = "";
     renderProductLookupOptions();
     try {
-      const payload = await queryLiveProducts({
-        search: scan ? "" : query,
-        barcode: scan ? query : "",
-        limit: LIVE_PRODUCT_LOOKUP_LIMIT
-      });
+      const payload = await queryLiveStockedProducts({ search: query, limit: LIVE_PRODUCT_LOOKUP_LIMIT });
       liveProductLookup.loading = false;
       renderProductLookupOptions();
       if (payload.items.length) return payload.items[0];
@@ -1724,10 +1826,11 @@ async function resolveProductForSale(value, { scan = false } = {}) {
       markServerOffline(error);
       liveProductLookup.loading = false;
       liveProductLookup.error = String(error?.message || error || "сервер недоступний");
-      liveProductLookup.source = "local-demo";
-      liveProductLookup.fallback = true;
+      liveProductLookup.source = "";
+      liveProductLookup.fallback = false;
       renderProductLookupOptions();
     }
+    return null;
   }
   return scan ? findProductByScan(query) : findProductByLookup(query);
 }
@@ -2183,6 +2286,10 @@ function productWarehouseStockFallback(product) {
   return stockQty(product?.id || "", SQL_MAIN_WAREHOUSE_CODE);
 }
 
+function productHasMainWarehouseStock(product) {
+  return productWarehouseStockFallback(product) > 0;
+}
+
 function checkoutLineWarehouseStock(line, product = productById(line.productId)) {
   const liveQty = Number(line.warehouseStockQty);
   if (Number.isFinite(liveQty) && (line.stockSource || line.stockError)) return liveQty;
@@ -2255,7 +2362,7 @@ function findProductByScan(value) {
   const raw = normalizeScanText(value);
   if (!raw) return null;
   const tokens = scanTokens(raw);
-  return productSearchPool().find((product) => (
+  return productSearchPool().filter(productHasMainWarehouseStock).find((product) => (
     productScanTargets(product).some((target) => tokens.has(target) || raw.includes(target))
   )) || null;
 }
@@ -2263,9 +2370,10 @@ function findProductByScan(value) {
 function findProductByLookup(value) {
   const raw = normalizeScanText(value);
   if (!raw) return null;
-  return productSearchPool().find((product) => normalizeScanText(productLookupValue(product)) === raw)
+  const pool = productSearchPool().filter(productHasMainWarehouseStock);
+  return pool.find((product) => normalizeScanText(productLookupValue(product)) === raw)
     || findProductByScan(value)
-    || productSearchPool().find((product) => productMatchesQuery(product, value))
+    || pool.find((product) => productMatchesQuery(product, value))
     || null;
 }
 
@@ -2990,7 +3098,7 @@ function renderCheckoutPanel(full = false) {
       <form class="form-grid checkout-form" data-action="create-receipt">
         <label class="field wide"><span>Покупець</span><input name="customerSearch" data-customer-lookup list="customer-options" value="${escapeHtml(customerLookup)}" autocomplete="off" placeholder="ім'я або телефон з довідника"><datalist id="customer-options">${state.customers.map((item) => `<option value="${escapeHtml(customerLookupValue(item))}"></option>`).join("")}</datalist></label>
         <label class="field"><span>Оплата</span><select name="paymentMethod" data-checkout-field>${["cash", "card", "bank"].map((method) => option(method, paymentLabel(method), method === state.checkout.paymentMethod)).join("")}</select></label>
-        <label class="field wide"><span>Товар / штрихкод / QR</span><input name="search" data-product-lookup list="product-options" value="${escapeHtml(state.checkout.search)}" autocomplete="off" placeholder="назва, SKU, штрихкод або QR з SQL"><datalist id="product-options">${productLookupItems.map((product) => `<option value="${escapeHtml(productLookupValue(product))}"></option>`).join("")}</datalist><small class="lookup-status ${productLookupStatusClass()}" data-product-lookup-status>${escapeHtml(productLookupStatusText())}</small></label>
+        <label class="field wide"><span>Товар із залишком / штрихкод / QR</span><input name="search" data-product-lookup list="product-options" value="${escapeHtml(state.checkout.search)}" autocomplete="off" placeholder="назва, SKU, штрихкод або QR із залишком на Склад №1"><datalist id="product-options">${productLookupItems.map((product) => `<option value="${escapeHtml(productLookupValue(product))}"></option>`).join("")}</datalist><small class="lookup-status ${productLookupStatusClass()}" data-product-lookup-status>${escapeHtml(productLookupStatusText())}</small></label>
         <div class="field lookup-action"><span>Додати</span><button class="secondary" type="button" data-add-selected-product>Додати товар</button></div>
         <div class="loyalty-note full">
           <span class="pill">${escapeHtml(LOYALTY_LABELS[customer.loyalty] || customer.loyalty)}</span>
