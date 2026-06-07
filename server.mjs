@@ -3,9 +3,9 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const APP_VERSION = "2026.06.07.7";
-const APP_BUILD = "20260607-b2c-standard-page-envelope";
-const APP_RELEASED_AT = "2026-06-07 19:26:14 +03:00";
+const APP_VERSION = "2026.06.07.8";
+const APP_BUILD = "20260607-b2c-warehouse-serial-sale";
+const APP_RELEASED_AT = "2026-06-07 20:27:49 +03:00";
 const ROOT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const CRM_SQL_API_BASE_URL = String(process.env.CRM_SQL_API_BASE_URL || "http://192.168.0.166:3000").replace(/\/+$/, "");
 const CRM_SQL_API_TIMEOUT_MS = Math.max(1000, Number(process.env.CRM_SQL_API_TIMEOUT_MS || 30000));
@@ -167,6 +167,43 @@ async function handleApi(request, response, url) {
 
   if (request.method === "GET" && url.pathname === "/api/live/counterparties") {
     sendJson(response, 200, await listLiveCounterparties(url));
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/live/stock-balances") {
+    try {
+      sendJson(response, 200, await listLiveStockBalances(url));
+    } catch (error) {
+      sendJson(response, 502, {
+        error: error.message || "CRM SQL stock API unavailable",
+        code: "CRM_SQL_STOCK_UPSTREAM_UNAVAILABLE",
+        source: "crm-sql-live",
+        bounded: true
+      });
+    }
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/live/serial-stock") {
+    if (!String(url.searchParams.get("productCode") || "").trim()) {
+      sendJson(response, 400, {
+        error: "productCode is required",
+        code: "SERIAL_PRODUCT_REQUIRED",
+        source: "crm-sql-live",
+        bounded: true
+      });
+      return;
+    }
+    try {
+      sendJson(response, 200, await listLiveSerialStock(url));
+    } catch (error) {
+      sendJson(response, 502, {
+        error: error.message || "CRM SQL serial API unavailable",
+        code: "CRM_SQL_SERIAL_UPSTREAM_UNAVAILABLE",
+        source: "crm-sql-live",
+        bounded: true
+      });
+    }
     return;
   }
 
@@ -575,19 +612,26 @@ async function fetchCrmSql(pathName, params) {
   }
 }
 
-function liveQuery(url, defaultLimit = 20, maxLimit = 100) {
+function liveQuery(url, defaultLimit = 20, maxLimit = 100, filterNames = []) {
   const { limit, offset } = boundedParams(url, defaultLimit, maxLimit);
   const search = String(url.searchParams.get("search") || "").trim();
   const barcode = String(url.searchParams.get("barcode") || "").trim();
+  const filters = {};
   const params = new URLSearchParams();
   if (search) params.set("search", search);
   if (barcode) {
     params.set("barcode", barcode);
     if (!search) params.set("search", barcode);
   }
+  filterNames.forEach((name) => {
+    const value = String(url.searchParams.get(name) || "").trim();
+    if (!value) return;
+    filters[name] = value;
+    params.set(name, value);
+  });
   params.set("limit", String(limit));
   params.set("offset", String(offset));
-  return { params, limit, offset, search, barcode };
+  return { params, limit, offset, search, barcode, filters };
 }
 
 function payloadItems(payload) {
@@ -651,7 +695,7 @@ function sqlEnvelope(pathName, url, query, items, payload) {
     hasMore,
     nextOffset,
     totalExact: exact,
-    query: { search: query.search, barcode: query.barcode },
+    query: { search: query.search, barcode: query.barcode, ...(query.filters || {}) },
     source: "crm-sql-live",
     sourceDetail: `${CRM_SQL_API_BASE_URL}${pathName}`,
     bounded: true,
@@ -739,6 +783,64 @@ function normalizeLiveCounterparty(row) {
   };
 }
 
+function normalizeLiveStockBalance(row) {
+  const productCode = textValue(row.productCode, row.product_code, row.sku);
+  const warehouseCode = textValue(row.warehouseCode, row.warehouse_code, row.warehouseId, row.warehouse_id);
+  const qty = numberValue(
+    row.availableQty,
+    row.available_qty,
+    row.availableQuantity,
+    row.available_quantity,
+    row.qty,
+    row.quantity,
+    row.balance
+  );
+  return {
+    id: textValue(row.id, `${productCode}:${warehouseCode}`),
+    productId: textValue(row.productId, row.product_id, productCode),
+    productCode,
+    sku: textValue(row.sku, productCode),
+    productName: textValue(row.productName, row.product_name, row.name),
+    warehouseId: textValue(row.warehouseId, row.warehouse_id, warehouseCode),
+    warehouseCode,
+    warehouseName: textValue(row.warehouseName, row.warehouse_name, row.warehouse, "Склад"),
+    qty,
+    quantity: numberValue(row.quantity, row.qty, qty),
+    availableQty: qty,
+    reservedQty: numberValue(row.reservedQty, row.reserved_qty, row.reservedQuantity, row.reserved_quantity),
+    snapshotAt: textValue(row.snapshotAt, row.snapshot_at, row.importedAt, row.imported_at),
+    sourceFile: textValue(row.sourceFile, row.source_file),
+    importedAt: textValue(row.importedAt, row.imported_at),
+    source: "crm-sql-live"
+  };
+}
+
+function normalizeLiveSerialStock(row) {
+  const productCode = textValue(row.productCode, row.product_code, row.sku);
+  const warehouseCode = textValue(row.warehouseCode, row.warehouse_code, row.warehouseId, row.warehouse_id);
+  const serialName = textValue(row.serialName, row.serial_name, row.serialNumber, row.serial_number, row.serial, row.name);
+  const quantity = numberValue(row.availableQty, row.available_qty, row.quantity, row.qty, row.balance);
+  return {
+    id: textValue(row.id, `${productCode}:${warehouseCode}:${serialName}`),
+    productId: textValue(row.productId, row.product_id, productCode),
+    productCode,
+    sku: textValue(row.sku, productCode),
+    productName: textValue(row.productName, row.product_name, row.name),
+    warehouseId: textValue(row.warehouseId, row.warehouse_id, warehouseCode),
+    warehouseCode,
+    warehouseName: textValue(row.warehouseName, row.warehouse_name, row.warehouse, "Склад"),
+    serialName,
+    serialNumber: textValue(row.serialNumber, row.serial_number, serialName),
+    quantity,
+    availableQty: quantity,
+    balanceSign: textValue(row.balanceSign, row.balance_sign, quantity > 0 ? "positive" : quantity < 0 ? "negative" : "zero"),
+    snapshotAt: textValue(row.snapshotAt, row.snapshot_at, row.importedAt, row.imported_at),
+    sourceFile: textValue(row.sourceFile, row.source_file),
+    importedAt: textValue(row.importedAt, row.imported_at),
+    source: "crm-sql-live"
+  };
+}
+
 async function listLiveProducts(url) {
   const query = liveQuery(url, 20, 100);
   const pathName = "/products";
@@ -760,6 +862,22 @@ async function listLiveCounterparties(url) {
   const pathName = "/one-c-mirror/counterparties";
   const { payload } = await fetchCrmSql(pathName, query.params);
   const items = payloadItems(payload).map(normalizeLiveCounterparty);
+  return sqlEnvelope(pathName, url, query, items, payload);
+}
+
+async function listLiveStockBalances(url) {
+  const query = liveQuery(url, 20, 100, ["productCode", "warehouseCode"]);
+  const pathName = "/one-c-mirror/stock-balances";
+  const { payload } = await fetchCrmSql(pathName, query.params);
+  const items = payloadItems(payload).map(normalizeLiveStockBalance);
+  return sqlEnvelope(pathName, url, query, items, payload);
+}
+
+async function listLiveSerialStock(url) {
+  const query = liveQuery(url, 20, 100, ["productCode", "warehouseCode"]);
+  const pathName = "/one-c-mirror/serial-stock";
+  const { payload } = await fetchCrmSql(pathName, query.params);
+  const items = payloadItems(payload).map(normalizeLiveSerialStock);
   return sqlEnvelope(pathName, url, query, items, payload);
 }
 

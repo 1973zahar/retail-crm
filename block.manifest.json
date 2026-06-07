@@ -25,9 +25,9 @@
     "dataDir": "data"
   },
   "currentApp": {
-    "build": "20260607-b2c-standard-page-envelope",
-    "version": "2026.06.07.7",
-    "releasedAt": "2026-06-07 19:26:14 +03:00",
+    "build": "20260607-b2c-warehouse-serial-sale",
+    "version": "2026.06.07.8",
+    "releasedAt": "2026-06-07 20:27:49 +03:00",
     "contractVersion": "2026.06.07-retail-live-api-1"
   },
   "sourceOfTruth": {
@@ -89,6 +89,8 @@
       "GET /api/live/products?search=&limit=&offset=",
       "GET /api/live/product-prices?search=&limit=&offset=",
       "GET /api/live/counterparties?search=&limit=&offset=",
+      "GET /api/live/stock-balances?productCode=&warehouseCode=&limit=&offset=",
+      "GET /api/live/serial-stock?productCode=&warehouseCode=&limit=&offset=",
       "GET /api/products?search=&barcode=&limit=&offset=",
       "GET /api/products/:id",
       "GET /api/customers?search=&limit=&offset=",
@@ -148,6 +150,26 @@
       "maxLimit": 100,
       "filters": ["search", "offset"],
       "source": "CRM SQL API /one-c-mirror/counterparties",
+      "fallback": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/live/stock-balances",
+      "model": "StockBalance",
+      "defaultLimit": 20,
+      "maxLimit": 100,
+      "filters": ["productCode", "warehouseCode", "search", "offset"],
+      "source": "CRM SQL API /one-c-mirror/stock-balances",
+      "fallback": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/live/serial-stock",
+      "model": "SerialStock",
+      "defaultLimit": 20,
+      "maxLimit": 100,
+      "filters": ["productCode", "warehouseCode", "offset"],
+      "source": "CRM SQL API /one-c-mirror/serial-stock; productCode required",
       "fallback": false
     },
     {

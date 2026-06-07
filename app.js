@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.07.7";
-const APP_BUILD = "20260607-b2c-standard-page-envelope";
-const APP_RELEASED_AT = "2026-06-07 19:26:14 +03:00";
+const APP_VERSION = "2026.06.07.8";
+const APP_BUILD = "20260607-b2c-warehouse-serial-sale";
+const APP_RELEASED_AT = "2026-06-07 20:27:49 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SIDEBAR_COLLAPSED_KEY = "retail-crm-b2c-sidebar-collapsed-v1";
@@ -70,6 +70,8 @@ const DEFAULT_SYSTEM_SETTINGS = {
   lastSavedAt: ""
 };
 const LIVE_PRODUCT_LOOKUP_LIMIT = 20;
+const LIVE_STOCK_LOOKUP_LIMIT = 20;
+const LIVE_SERIAL_LOOKUP_LIMIT = 100;
 const LIVE_TABLE_LIMIT_OPTIONS = [20, 50, 100];
 const LIVE_TABLES = {
   products: {
@@ -771,7 +773,9 @@ function normalizeState(input) {
     ...clone(seedState.checkout),
     ...(next.checkout || {})
   };
-  next.checkout.lines = Array.isArray(next.checkout.lines) && next.checkout.lines.length ? next.checkout.lines : clone(seedState.checkout.lines);
+  next.checkout.lines = Array.isArray(next.checkout.lines) && next.checkout.lines.length
+    ? next.checkout.lines.map(normalizeCheckoutLine)
+    : clone(seedState.checkout.lines).map(normalizeCheckoutLine);
   next.checkout.printReceiptId = next.checkout.printReceiptId || next.receipts[0]?.id || "";
   next.saleConfirm = {
     ...clone(seedState.saleConfirm),
@@ -999,26 +1003,57 @@ function normalizeCustomer(customer) {
 }
 
 function normalizeStockBalance(row) {
+  const qty = Number(row.availableQty ?? row.available_quantity ?? row.availableQuantity ?? row.qty ?? row.quantity ?? 0);
   return {
-    productId: row.productId || "",
-    productCode: row.productCode || "",
-    warehouseCode: row.warehouseCode || SQL_MAIN_WAREHOUSE_CODE,
-    warehouseName: row.warehouseName || SQL_MAIN_WAREHOUSE_NAME,
-    qty: Number(row.qty || 0),
-    reservedQty: Number(row.reservedQty || 0)
+    productId: row.productId || row.product_id || row.productCode || row.product_code || "",
+    productCode: row.productCode || row.product_code || row.sku || "",
+    productName: row.productName || row.product_name || row.name || "",
+    warehouseCode: String(row.warehouseCode || row.warehouse_code || row.warehouseId || row.warehouse_id || SQL_MAIN_WAREHOUSE_CODE),
+    warehouseName: row.warehouseName || row.warehouse_name || row.warehouse || SQL_MAIN_WAREHOUSE_NAME,
+    qty,
+    availableQty: qty,
+    reservedQty: Number(row.reservedQty ?? row.reserved_qty ?? row.reservedQuantity ?? row.reserved_quantity ?? 0),
+    source: row.source || ""
   };
 }
 
 function normalizeSerialStock(row) {
+  const quantity = Number(row.availableQty ?? row.available_qty ?? row.quantity ?? row.qty ?? 0);
   return {
-    productId: row.productId || "",
-    productCode: row.productCode || "",
-    productName: row.productName || "",
-    warehouseCode: row.warehouseCode || "",
-    warehouseName: row.warehouseName || "",
-    serialName: row.serialName || "",
-    quantity: Number(row.quantity || 0),
-    balanceSign: row.balanceSign || (Number(row.quantity || 0) > 0 ? "positive" : Number(row.quantity || 0) < 0 ? "negative" : "zero")
+    productId: row.productId || row.product_id || row.productCode || row.product_code || "",
+    productCode: row.productCode || row.product_code || row.sku || "",
+    productName: row.productName || row.product_name || row.name || "",
+    warehouseCode: String(row.warehouseCode || row.warehouse_code || row.warehouseId || row.warehouse_id || ""),
+    warehouseName: row.warehouseName || row.warehouse_name || row.warehouse || "",
+    serialName: row.serialName || row.serial_name || row.serialNumber || row.serial_number || row.serial || "",
+    serialNumber: row.serialNumber || row.serial_number || row.serialName || row.serial_name || row.serial || "",
+    quantity,
+    availableQty: quantity,
+    balanceSign: row.balanceSign || row.balance_sign || (quantity > 0 ? "positive" : quantity < 0 ? "negative" : "zero"),
+    source: row.source || ""
+  };
+}
+
+function normalizeCheckoutLine(line) {
+  const serialOptions = Array.isArray(line.serialOptions) ? line.serialOptions.map(normalizeSerialStock) : [];
+  return {
+    lineId: line.lineId || `cart-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    productId: line.productId || "",
+    qty: Math.max(1, Number(line.qty || 1)),
+    price: Number(line.price || 0),
+    discount: Math.max(0, Number(line.discount || 0)),
+    warehouseCode: line.warehouseCode || SQL_MAIN_WAREHOUSE_CODE,
+    warehouseName: line.warehouseName || SQL_MAIN_WAREHOUSE_NAME,
+    warehouseStockQty: Number(line.warehouseStockQty ?? line.availableQty ?? 0),
+    warehouseReservedQty: Number(line.warehouseReservedQty || 0),
+    stockLoading: Boolean(line.stockLoading),
+    stockError: line.stockError || "",
+    stockSource: line.stockSource || "",
+    serialName: line.serialName || line.serialNumber || "",
+    serialNumber: line.serialNumber || line.serialName || "",
+    serialOptions,
+    serialLoading: Boolean(line.serialLoading),
+    serialError: line.serialError || ""
   };
 }
 
@@ -1139,7 +1174,12 @@ function normalizeReceipt(receipt, products) {
       qty: Number(line.qty || 0),
       price: Number(line.price || 0),
       discount: Number(line.discount || 0),
-      total: Number(line.total || 0)
+      total: Number(line.total || 0),
+      warehouseCode: line.warehouseCode || SQL_MAIN_WAREHOUSE_CODE,
+      warehouseName: line.warehouseName || SQL_MAIN_WAREHOUSE_NAME,
+      warehouseStockQty: Number(line.warehouseStockQty || 0),
+      serialName: line.serialName || line.serialNumber || "",
+      serialNumber: line.serialNumber || line.serialName || ""
     }));
     const linesTotal = lines.reduce((sum, line) => {
       const fallbackTotal = Math.max(0, Number(line.qty || 0) * Number(line.price || 0) - Number(line.discount || 0));
@@ -1456,6 +1496,69 @@ function payloadItems(payload) {
   if (Array.isArray(payload?.rows)) return payload.rows;
   if (Array.isArray(payload?.content?.items)) return payload.content.items;
   return [];
+}
+
+function liveProductCode(product) {
+  return String(product?.productCode || product?.sku || product?.id || "").trim();
+}
+
+async function queryLiveStockForProduct(product) {
+  const productCode = liveProductCode(product);
+  if (!productCode) throw new Error("productCode товару відсутній");
+  const params = new URLSearchParams({
+    productCode,
+    warehouseCode: SQL_MAIN_WAREHOUSE_CODE,
+    limit: String(LIVE_STOCK_LOOKUP_LIMIT),
+    offset: "0"
+  });
+  const payload = await fetchJson(`/api/live/stock-balances?${params.toString()}`);
+  const items = payloadItems(payload).map((item) => normalizeStockBalance({
+    ...item,
+    productId: item.productId || product.id,
+    productCode: item.productCode || productCode,
+    warehouseCode: item.warehouseCode || SQL_MAIN_WAREHOUSE_CODE,
+    warehouseName: item.warehouseName || SQL_MAIN_WAREHOUSE_NAME
+  }));
+  markServerOnline(payload);
+  return { ...payload, items };
+}
+
+async function queryLiveSerialsForProduct(product) {
+  const productCode = liveProductCode(product);
+  if (!productCode) throw new Error("productCode товару відсутній");
+  const params = new URLSearchParams({
+    productCode,
+    warehouseCode: SQL_MAIN_WAREHOUSE_CODE,
+    limit: String(LIVE_SERIAL_LOOKUP_LIMIT),
+    offset: "0"
+  });
+  const payload = await fetchJson(`/api/live/serial-stock?${params.toString()}`);
+  const items = payloadItems(payload)
+    .map((item) => normalizeSerialStock({
+      ...item,
+      productId: item.productId || product.id,
+      productCode: item.productCode || productCode,
+      productName: item.productName || product.name,
+      warehouseCode: item.warehouseCode || SQL_MAIN_WAREHOUSE_CODE,
+      warehouseName: item.warehouseName || SQL_MAIN_WAREHOUSE_NAME
+    }))
+    .filter((item) => item.serialName && String(item.warehouseCode) === SQL_MAIN_WAREHOUSE_CODE && Number(item.quantity || 0) > 0);
+  markServerOnline(payload);
+  return { ...payload, items };
+}
+
+function localSerialOptionsForProduct(product) {
+  if (!isWeaponProduct(product)) return [];
+  return state.serialStock
+    .filter((row) => (
+      String(row.warehouseCode) === SQL_MAIN_WAREHOUSE_CODE
+      && Number(row.quantity || 0) > 0
+      && (
+        row.productId === product.id
+        || (row.productCode && row.productCode === liveProductCode(product))
+      )
+    ))
+    .map(normalizeSerialStock);
 }
 
 function normalizeLivePayloadItems(kind, payload) {
@@ -2074,6 +2177,40 @@ function serialRowsForSelectedWeaponProduct(productId) {
   ));
 }
 
+function productWarehouseStockFallback(product) {
+  const direct = Number(product?.retailStockQty);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  return stockQty(product?.id || "", SQL_MAIN_WAREHOUSE_CODE);
+}
+
+function checkoutLineWarehouseStock(line, product = productById(line.productId)) {
+  const liveQty = Number(line.warehouseStockQty);
+  if (Number.isFinite(liveQty) && (line.stockSource || line.stockError)) return liveQty;
+  return productWarehouseStockFallback(product);
+}
+
+function checkoutLineStockHint(line, product = productById(line.productId)) {
+  if (line.stockLoading) return `${SQL_MAIN_WAREHOUSE_NAME}: завантаження...`;
+  if (line.stockError) return `${SQL_MAIN_WAREHOUSE_NAME}: ${checkoutLineWarehouseStock(line, product)} · ${line.stockError}`;
+  return `${SQL_MAIN_WAREHOUSE_NAME}: ${checkoutLineWarehouseStock(line, product)}`;
+}
+
+function checkoutLineSerialOptions(line) {
+  return Array.isArray(line.serialOptions) ? line.serialOptions.filter((item) => item.serialName && Number(item.quantity || 0) > 0) : [];
+}
+
+function selectedSerialOption(line) {
+  return checkoutLineSerialOptions(line).find((item) => item.serialName === line.serialName) || null;
+}
+
+function decreaseLocalStockIfPresent(line) {
+  const row = state.stock.find((item) => item.productId === line.productId && (
+    item.warehouseCode === (line.warehouseCode || SQL_MAIN_WAREHOUSE_CODE)
+    || (!item.warehouseCode && (line.warehouseCode || SQL_MAIN_WAREHOUSE_CODE) === SQL_MAIN_WAREHOUSE_CODE)
+  ));
+  if (row) row.qty = Number(row.qty || 0) - Number(line.qty || 0);
+}
+
 function normalizeScanText(value) {
   return String(value ?? "").trim().toLowerCase();
 }
@@ -2234,11 +2371,25 @@ function cartLines() {
   return state.checkout.lines.map((line) => {
     const product = productById(line.productId);
     if (!product.id) return null;
+    const normalized = normalizeCheckoutLine(line);
     return {
       productId: product.id,
-      qty: Math.max(1, Number(line.qty || 1)),
-      price: Number(line.price ?? product.price),
-      discount: Math.max(0, Number(line.discount || 0))
+      lineId: normalized.lineId,
+      qty: isWeaponProduct(product) ? 1 : Math.max(1, Number(normalized.qty || 1)),
+      price: Number(normalized.price || product.price || 0),
+      discount: Math.max(0, Number(normalized.discount || 0)),
+      warehouseCode: normalized.warehouseCode || SQL_MAIN_WAREHOUSE_CODE,
+      warehouseName: normalized.warehouseName || SQL_MAIN_WAREHOUSE_NAME,
+      warehouseStockQty: normalized.warehouseStockQty,
+      warehouseReservedQty: normalized.warehouseReservedQty,
+      stockLoading: normalized.stockLoading,
+      stockError: normalized.stockError,
+      stockSource: normalized.stockSource,
+      serialName: normalized.serialName,
+      serialNumber: normalized.serialNumber,
+      serialOptions: normalized.serialOptions,
+      serialLoading: normalized.serialLoading,
+      serialError: normalized.serialError
     };
   }).filter(Boolean);
 }
@@ -2266,7 +2417,10 @@ function drilldownPill(type, label) {
 }
 
 function documentLineSummary(lines = []) {
-  return lines.map((line) => `${productById(line.productId).sku} x ${line.qty}`).join(", ");
+  return lines.map((line) => {
+    const serial = line.serialName ? ` SN ${line.serialName}` : "";
+    return `${productById(line.productId).sku} x ${line.qty}${serial}`;
+  }).join(", ");
 }
 
 function receiptDrilldownRow(receipt, amount = Number(receipt.total || 0), note = "") {
@@ -2846,15 +3000,30 @@ function renderCheckoutPanel(full = false) {
         <label class="field full"><span>Коментар</span><input name="note" data-checkout-field value="${escapeHtml(state.checkout.note || "")}" placeholder="примітка до продажу"></label>
         <div class="table-wrap full">
           <table>
-            <thead><tr><th>Товар</th><th>Ціна</th><th>К-сть</th><th>Знижка</th><th>Сума</th><th></th></tr></thead>
+            <thead><tr><th>Товар</th><th>Склад №1</th><th>Серійний номер</th><th>Ціна</th><th>К-сть</th><th>Знижка</th><th>Сума</th><th></th></tr></thead>
             <tbody>
               ${lines.map((line, index) => {
                 const product = productById(line.productId);
+                const weapon = isWeaponProduct(product);
+                const serialOptions = checkoutLineSerialOptions(line);
+                const stockAvailable = checkoutLineWarehouseStock(line, product);
+                const stockClass = line.stockError ? "warn" : stockAvailable > 0 ? "good" : "danger";
+                const serialControl = weapon
+                  ? `
+                    <select class="mini-select" data-cart-serial="${index}" ${line.serialLoading ? "disabled" : ""}>
+                      <option value="">Виберіть серійний номер</option>
+                      ${serialOptions.map((item) => option(item.serialName, item.serialName, item.serialName === line.serialName)).join("")}
+                    </select>
+                    <small class="lookup-status ${line.serialError ? "warn" : line.serialName ? "good" : "warn"}">${escapeHtml(line.serialLoading ? "Завантаження серійників..." : line.serialError || `${serialOptions.length} доступно`)}</small>
+                  `
+                  : '<span class="muted">не потрібно</span>';
                 return `
                   <tr>
-                    <td>${escapeHtml(product.name)}<br><span class="muted">${escapeHtml(product.sku)} · доступно ${stockQty(product.id)}</span></td>
+                    <td>${escapeHtml(product.name)}<br><span class="muted">${escapeHtml(product.productCode || product.sku)}${weapon ? " · зброя" : ""}</span></td>
+                    <td><span class="pill ${stockClass}">${escapeHtml(checkoutLineStockHint(line, product))}</span></td>
+                    <td>${serialControl}</td>
                     <td>${formatMoney(line.price)}</td>
-                    <td><input class="mini-input" data-cart-qty="${index}" type="number" min="1" value="${line.qty}"></td>
+                    <td><input class="mini-input" data-cart-qty="${index}" type="number" min="1" ${weapon ? 'max="1"' : ""} value="${line.qty}"></td>
                     <td><input class="mini-input" data-cart-discount="${index}" type="number" min="0" value="${line.discount}"></td>
                     <td><strong>${formatMoney(lineTotal(line))}</strong></td>
                     <td><button class="secondary" type="button" data-remove-cart="${index}">Прибрати</button></td>
@@ -2984,7 +3153,12 @@ function renderReceiptSlip(receipt) {
       <hr>
       ${receipt.lines.map((line) => {
         const product = productById(line.productId);
-        return `<div class="receipt-line"><span>${escapeHtml(product.sku)} x ${line.qty}</span><strong>${formatMoney(line.total)}</strong></div>`;
+        const details = [
+          `${product.sku} x ${line.qty}`,
+          line.warehouseName || SQL_MAIN_WAREHOUSE_NAME,
+          line.serialName ? `SN ${line.serialName}` : ""
+        ].filter(Boolean).join(" · ");
+        return `<div class="receipt-line"><span>${escapeHtml(details)}</span><strong>${formatMoney(line.total)}</strong></div>`;
       }).join("")}
       ${Number(receipt.loyaltyDiscount || 0) ? `<div class="receipt-line muted"><span>Знижка лояльності</span><strong>-${formatMoney(receipt.loyaltyDiscount)}</strong></div>` : ""}
       <hr>
@@ -3956,6 +4130,99 @@ function renderLog() {
   `;
 }
 
+function checkoutLineById(lineId) {
+  return state.checkout.lines.find((line) => line.lineId === lineId);
+}
+
+function prepareCheckoutLine(product) {
+  return normalizeCheckoutLine({
+    lineId: `cart-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    productId: product.id,
+    qty: 1,
+    discount: 0,
+    price: Number(product.price || 0),
+    warehouseCode: SQL_MAIN_WAREHOUSE_CODE,
+    warehouseName: SQL_MAIN_WAREHOUSE_NAME,
+    warehouseStockQty: productWarehouseStockFallback(product),
+    stockSource: product.retailStockQty ? "crm-sql-product-summary" : "local-fallback",
+    serialOptions: localSerialOptionsForProduct(product),
+    serialName: "",
+    serialError: ""
+  });
+}
+
+async function hydrateCheckoutLine(lineId) {
+  const line = checkoutLineById(lineId);
+  if (!line) return;
+  const product = productById(line.productId);
+  if (!product.id) return;
+  line.stockLoading = serverModeEnabled();
+  line.stockError = "";
+  if (isWeaponProduct(product)) {
+    line.qty = 1;
+    line.serialLoading = serverModeEnabled();
+    line.serialError = "";
+  }
+  saveState();
+  render();
+  try {
+    if (serverModeEnabled()) {
+      const stockPayload = await queryLiveStockForProduct(product);
+      const latestLine = checkoutLineById(lineId);
+      if (latestLine) {
+        const rows = stockPayload.items.filter((item) => String(item.warehouseCode) === SQL_MAIN_WAREHOUSE_CODE);
+        latestLine.warehouseStockQty = rows.reduce((sum, item) => sum + Number(item.availableQty ?? item.qty ?? 0), 0);
+        latestLine.warehouseReservedQty = rows.reduce((sum, item) => sum + Number(item.reservedQty || 0), 0);
+        latestLine.warehouseCode = SQL_MAIN_WAREHOUSE_CODE;
+        latestLine.warehouseName = rows[0]?.warehouseName || SQL_MAIN_WAREHOUSE_NAME;
+        latestLine.stockSource = stockPayload.source || "crm-sql-live";
+        latestLine.stockError = "";
+      }
+    }
+  } catch (error) {
+    markServerOffline(error);
+    const latestLine = checkoutLineById(lineId);
+    if (latestLine) {
+      latestLine.warehouseStockQty = productWarehouseStockFallback(product);
+      latestLine.stockSource = product.retailStockQty ? "crm-sql-product-summary" : "local-fallback";
+      latestLine.stockError = String(error?.message || error || "stock unavailable");
+    }
+  } finally {
+    const latestLine = checkoutLineById(lineId);
+    if (latestLine) latestLine.stockLoading = false;
+  }
+  if (isWeaponProduct(product)) {
+    try {
+      const serialPayload = serverModeEnabled()
+        ? await queryLiveSerialsForProduct(product)
+        : { items: localSerialOptionsForProduct(product), source: "local-fallback" };
+      const latestLine = checkoutLineById(lineId);
+      if (latestLine) {
+        latestLine.serialOptions = serialPayload.items;
+        latestLine.serialLoading = false;
+        latestLine.serialError = "";
+        if (!latestLine.serialOptions.some((item) => item.serialName === latestLine.serialName)) {
+          latestLine.serialName = "";
+          latestLine.serialNumber = "";
+        }
+      }
+    } catch (error) {
+      markServerOffline(error);
+      const latestLine = checkoutLineById(lineId);
+      if (latestLine) {
+        const fallback = localSerialOptionsForProduct(product);
+        latestLine.serialOptions = fallback;
+        latestLine.serialLoading = false;
+        latestLine.serialError = fallback.length
+          ? "live serial API недоступний, показано локальний fallback"
+          : String(error?.message || error || "serial stock unavailable");
+      }
+    }
+  }
+  saveState();
+  render();
+}
+
 function addCartProduct(productOrId) {
   if (!canDo("sale_create")) return alert("Немає дозволу створювати продаж.");
   const product = typeof productOrId === "object" && productOrId
@@ -3963,15 +4230,17 @@ function addCartProduct(productOrId) {
     : productById(productOrId);
   if (!product.id) return alert("Товар не знайдено в довіднику.");
   const productId = product.id;
-  const existing = state.checkout.lines.find((line) => line.productId === productId);
+  const weapon = isWeaponProduct(product);
+  const existing = weapon ? null : state.checkout.lines.find((line) => line.productId === productId);
   if (existing) {
     existing.qty = Number(existing.qty || 1) + 1;
   } else {
-    state.checkout.lines.push({ productId, qty: 1, discount: 0, price: Number(product.price || 0) });
+    state.checkout.lines.push(prepareCheckoutLine(product));
   }
   audit(`Додано товар у кошик: ${product.sku}`);
   saveState();
   render();
+  hydrateCheckoutLine(existing?.lineId || state.checkout.lines[state.checkout.lines.length - 1]?.lineId);
 }
 
 async function addSelectedCheckoutProduct(value = state.checkout.search) {
@@ -4015,16 +4284,53 @@ function removeCartLine(index) {
 function currentSaleLines() {
   return cartLines().map((line) => {
     const product = productById(line.productId);
-    return { ...line, price: Number(product.price || line.price || 0), total: lineTotal(line) };
+    const saleLine = {
+      ...line,
+      qty: isWeaponProduct(product) ? 1 : Math.max(1, Number(line.qty || 1)),
+      price: Number(product.price || line.price || 0),
+      warehouseCode: line.warehouseCode || SQL_MAIN_WAREHOUSE_CODE,
+      warehouseName: line.warehouseName || SQL_MAIN_WAREHOUSE_NAME,
+      warehouseStockQty: checkoutLineWarehouseStock(line, product),
+      serialName: line.serialName || "",
+      serialNumber: line.serialNumber || line.serialName || ""
+    };
+    return { ...saleLine, total: lineTotal(saleLine) };
   });
 }
 
 function validateSaleStock(lines) {
+  const usedSerials = new Set();
   for (const line of lines) {
-    if (stockQty(line.productId) < line.qty) {
-      alert(`Недостатньо залишку: ${productById(line.productId).name}`);
+    const product = productById(line.productId);
+    const available = checkoutLineWarehouseStock(line, product);
+    if (line.stockLoading) {
+      alert(`Залишок складу №1 ще завантажується: ${product.name}`);
       return false;
     }
+    if (available < line.qty) {
+      alert(`Недостатньо залишку на складі №1: ${product.name}. Доступно ${available}, потрібно ${line.qty}.`);
+      return false;
+    }
+    if (!isWeaponProduct(product)) continue;
+    if (line.serialLoading) {
+      alert(`Серійні номери ще завантажуються: ${product.name}`);
+      return false;
+    }
+    if (Number(line.qty || 1) !== 1) {
+      alert(`Для зброї кількість у рядку має бути 1: ${product.name}`);
+      return false;
+    }
+    const selected = selectedSerialOption(line);
+    if (!line.serialName || !selected) {
+      alert(`Для товару з папки "Зброя" оберіть доступний серійний номер: ${product.name}`);
+      return false;
+    }
+    const serialKey = `${liveProductCode(product)}:${line.serialName}`;
+    if (usedSerials.has(serialKey)) {
+      alert(`Серійний номер уже вибраний у цьому чеку: ${line.serialName}`);
+      return false;
+    }
+    usedSerials.add(serialKey);
   }
   return true;
 }
@@ -4096,9 +4402,7 @@ function postConfirmedReceipt() {
   const loyalDiscount = loyaltyDiscount(lines, state.checkout.customerId);
   const total = checkoutTotal(lines, state.checkout.customerId);
   if (!validateSaleStock(lines)) return;
-  lines.forEach((line) => {
-    stockRow(line.productId).qty -= line.qty;
-  });
+  lines.forEach(decreaseLocalStockIfPresent);
   const receipt = {
     id: nextId("B2C", state.receipts),
     date: today(),
@@ -4989,12 +5293,29 @@ function updateCheckoutField(target) {
 function updateCartField(target) {
   if (target.dataset.cartQty !== undefined) {
     const index = Number(target.dataset.cartQty);
-    state.checkout.lines[index].qty = Math.max(1, Number(target.value || 1));
+    const line = state.checkout.lines[index];
+    if (!line) return;
+    const product = productById(line?.productId);
+    line.qty = isWeaponProduct(product) ? 1 : Math.max(1, Number(target.value || 1));
   }
   if (target.dataset.cartDiscount !== undefined) {
     const index = Number(target.dataset.cartDiscount);
+    if (!state.checkout.lines[index]) return;
     state.checkout.lines[index].discount = Math.max(0, Number(target.value || 0));
   }
+  saveState();
+  render();
+}
+
+function updateCartSerial(index, serialName) {
+  const line = state.checkout.lines[index];
+  if (!line) return;
+  const product = productById(line.productId);
+  if (!isWeaponProduct(product)) return;
+  const selected = checkoutLineSerialOptions(line).find((item) => item.serialName === serialName);
+  line.serialName = selected?.serialName || "";
+  line.serialNumber = selected?.serialNumber || selected?.serialName || "";
+  line.qty = 1;
   saveState();
   render();
 }
@@ -5162,6 +5483,7 @@ document.addEventListener("change", (event) => {
   }
   if (event.target.dataset.saleConfirmPayment !== undefined) updateSaleConfirmPayment(event.target.value);
   if (event.target.dataset.returnConfirmRefund !== undefined) updateReturnConfirmRefund(event.target.value);
+  if (event.target.dataset.cartSerial !== undefined) updateCartSerial(Number(event.target.dataset.cartSerial), event.target.value);
   if (event.target.dataset.checkoutField !== undefined) updateCheckoutField(event.target);
   if (event.target.dataset.customerLookup !== undefined) selectCustomerFromLookup(event.target.value);
   if (event.target.dataset.checkoutScan !== undefined && event.target.value.trim()) scanCheckoutProduct(event.target.value);

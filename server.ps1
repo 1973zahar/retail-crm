@@ -7,9 +7,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$AppVersion = "2026.06.07.7"
-$AppBuild = "20260607-b2c-standard-page-envelope"
-$AppReleasedAt = "2026-06-07 19:26:14 +03:00"
+$AppVersion = "2026.06.07.8"
+$AppBuild = "20260607-b2c-warehouse-serial-sale"
+$AppReleasedAt = "2026-06-07 20:27:49 +03:00"
 $RootDir = $PSScriptRoot
 $ResolvedDataDir = if ([System.IO.Path]::IsPathRooted($DataDir)) { $DataDir } else { Join-Path $RootDir $DataDir }
 $StatePath = Join-Path $ResolvedDataDir "retail-crm-state.json"
@@ -218,10 +218,11 @@ function Get-BoundedParams($Params, [int]$DefaultLimit, [int]$MaxLimit) {
   return @{ limit = $limit; offset = $offset }
 }
 
-function Get-LiveQueryParams($Params, [int]$DefaultLimit, [int]$MaxLimit) {
+function Get-LiveQueryParams($Params, [int]$DefaultLimit, [int]$MaxLimit, [string[]]$FilterNames = @()) {
   $bounds = Get-BoundedParams $Params $DefaultLimit $MaxLimit
   $search = (Get-QueryValue $Params "search").Trim()
   $barcode = (Get-QueryValue $Params "barcode").Trim()
+  $filters = @{}
   $query = @{
     limit = $bounds.limit
     offset = $bounds.offset
@@ -231,12 +232,20 @@ function Get-LiveQueryParams($Params, [int]$DefaultLimit, [int]$MaxLimit) {
     $query.barcode = $barcode
     if (-not $search) { $query.search = $barcode }
   }
+  foreach ($name in $FilterNames) {
+    $value = (Get-QueryValue $Params $name).Trim()
+    if ($value) {
+      $filters[$name] = $value
+      $query[$name] = $value
+    }
+  }
   return @{
     params = $query
     limit = $bounds.limit
     offset = $bounds.offset
     search = $search
     barcode = $barcode
+    filters = $filters
   }
 }
 
@@ -341,6 +350,12 @@ function New-CrmSqlEnvelope([string]$Path, $Query, $Items, $Payload) {
     if ([int]::TryParse([string]$nextOffsetProperty.Value, [ref]$parsed)) { $nextOffset = $parsed }
   }
   if ($null -eq $nextOffset -and $hasMore) { $nextOffset = $offset + $limit }
+  $queryInfo = @{ search = [string]$Query.search; barcode = [string]$Query.barcode }
+  if ($Query.filters) {
+    foreach ($key in $Query.filters.Keys) {
+      $queryInfo[$key] = [string]$Query.filters[$key]
+    }
+  }
   return @{
     data = $itemArray
     items = $itemArray
@@ -350,7 +365,7 @@ function New-CrmSqlEnvelope([string]$Path, $Query, $Items, $Payload) {
     hasMore = $hasMore
     nextOffset = $nextOffset
     totalExact = [bool]$totalInfo.exact
-    query = @{ search = [string]$Query.search; barcode = [string]$Query.barcode }
+    query = $queryInfo
     source = "crm-sql-live"
     sourceDetail = "$CrmSqlApiBaseUrl$Path"
     bounded = $true
@@ -652,6 +667,60 @@ function ConvertTo-LiveCounterparty($Row) {
   }
 }
 
+function ConvertTo-LiveStockBalance($Row) {
+  $productCode = Get-TextValue $Row @("productCode", "product_code", "sku")
+  $warehouseCode = Get-TextValue $Row @("warehouseCode", "warehouse_code", "warehouseId", "warehouse_id")
+  $qty = Get-NumberValue $Row @("availableQty", "available_qty", "availableQuantity", "available_quantity", "qty", "quantity", "balance")
+  return @{
+    id = Get-TextValue $Row @("id") "$productCode`:$warehouseCode"
+    productId = Get-TextValue $Row @("productId", "product_id", "productCode", "product_code", "sku")
+    productCode = $productCode
+    sku = Get-TextValue $Row @("sku", "productCode", "product_code")
+    productName = Get-TextValue $Row @("productName", "product_name", "name")
+    warehouseId = Get-TextValue $Row @("warehouseId", "warehouse_id", "warehouseCode", "warehouse_code")
+    warehouseCode = $warehouseCode
+    warehouseName = Get-TextValue $Row @("warehouseName", "warehouse_name", "warehouse") "Склад"
+    qty = $qty
+    quantity = Get-NumberValue $Row @("quantity", "qty") $qty
+    availableQty = $qty
+    reservedQty = Get-NumberValue $Row @("reservedQty", "reserved_qty", "reservedQuantity", "reserved_quantity")
+    snapshotAt = Get-TextValue $Row @("snapshotAt", "snapshot_at", "importedAt", "imported_at")
+    sourceFile = Get-TextValue $Row @("sourceFile", "source_file")
+    importedAt = Get-TextValue $Row @("importedAt", "imported_at")
+    source = "crm-sql-live"
+  }
+}
+
+function ConvertTo-LiveSerialStock($Row) {
+  $productCode = Get-TextValue $Row @("productCode", "product_code", "sku")
+  $warehouseCode = Get-TextValue $Row @("warehouseCode", "warehouse_code", "warehouseId", "warehouse_id")
+  $serialName = Get-TextValue $Row @("serialName", "serial_name", "serialNumber", "serial_number", "serial", "name")
+  $quantity = Get-NumberValue $Row @("availableQty", "available_qty", "quantity", "qty", "balance")
+  $balanceSign = Get-TextValue $Row @("balanceSign", "balance_sign")
+  if (-not $balanceSign) {
+    $balanceSign = if ($quantity -gt 0) { "positive" } elseif ($quantity -lt 0) { "negative" } else { "zero" }
+  }
+  return @{
+    id = Get-TextValue $Row @("id") "$productCode`:$warehouseCode`:$serialName"
+    productId = Get-TextValue $Row @("productId", "product_id", "productCode", "product_code", "sku")
+    productCode = $productCode
+    sku = Get-TextValue $Row @("sku", "productCode", "product_code")
+    productName = Get-TextValue $Row @("productName", "product_name", "name")
+    warehouseId = Get-TextValue $Row @("warehouseId", "warehouse_id", "warehouseCode", "warehouse_code")
+    warehouseCode = $warehouseCode
+    warehouseName = Get-TextValue $Row @("warehouseName", "warehouse_name", "warehouse") "Склад"
+    serialName = $serialName
+    serialNumber = Get-TextValue $Row @("serialNumber", "serial_number", "serialName", "serial_name", "serial")
+    quantity = $quantity
+    availableQty = $quantity
+    balanceSign = $balanceSign
+    snapshotAt = Get-TextValue $Row @("snapshotAt", "snapshot_at", "importedAt", "imported_at")
+    sourceFile = Get-TextValue $Row @("sourceFile", "source_file")
+    importedAt = Get-TextValue $Row @("importedAt", "imported_at")
+    source = "crm-sql-live"
+  }
+}
+
 function New-LiveProductsResponse($Params) {
   $query = Get-LiveQueryParams $Params 20 100
   $payload = Invoke-CrmSqlApi "/products" $query.params
@@ -674,6 +743,22 @@ function New-LiveCounterpartiesResponse($Params) {
   $items = @()
   foreach ($row in (Get-PayloadItems $payload)) { $items += ConvertTo-LiveCounterparty $row }
   return New-CrmSqlEnvelope "/one-c-mirror/counterparties" $query $items $payload
+}
+
+function New-LiveStockBalancesResponse($Params) {
+  $query = Get-LiveQueryParams $Params 20 100 @("productCode", "warehouseCode")
+  $payload = Invoke-CrmSqlApi "/one-c-mirror/stock-balances" $query.params
+  $items = @()
+  foreach ($row in (Get-PayloadItems $payload)) { $items += ConvertTo-LiveStockBalance $row }
+  return New-CrmSqlEnvelope "/one-c-mirror/stock-balances" $query $items $payload
+}
+
+function New-LiveSerialStockResponse($Params) {
+  $query = Get-LiveQueryParams $Params 20 100 @("productCode", "warehouseCode")
+  $payload = Invoke-CrmSqlApi "/one-c-mirror/serial-stock" $query.params
+  $items = @()
+  foreach ($row in (Get-PayloadItems $payload)) { $items += ConvertTo-LiveSerialStock $row }
+  return New-CrmSqlEnvelope "/one-c-mirror/serial-stock" $query $items $payload
 }
 
 function New-CustomersResponse($StateContainer, $Params) {
@@ -878,6 +963,34 @@ function Handle-Api($Client, $Request) {
   if ($method -eq "GET" -and $path -eq "/api/live/counterparties") {
     try {
       Send-Json $Client 200 (New-LiveCounterpartiesResponse (Get-QueryParams $Request.RawPath))
+    } catch {
+      Send-Json $Client 502 @{ error = $_.Exception.Message; source = "crm-sql-live"; bounded = $true }
+    }
+    return
+  }
+
+  if ($method -eq "GET" -and $path -eq "/api/live/stock-balances") {
+    try {
+      Send-Json $Client 200 (New-LiveStockBalancesResponse (Get-QueryParams $Request.RawPath))
+    } catch {
+      Send-Json $Client 502 @{ error = $_.Exception.Message; source = "crm-sql-live"; bounded = $true }
+    }
+    return
+  }
+
+  if ($method -eq "GET" -and $path -eq "/api/live/serial-stock") {
+    $params = Get-QueryParams $Request.RawPath
+    if (-not (Get-QueryValue $params "productCode").Trim()) {
+      Send-Json $Client 400 @{
+        error = "productCode is required"
+        code = "SERIAL_PRODUCT_REQUIRED"
+        source = "crm-sql-live"
+        bounded = $true
+      }
+      return
+    }
+    try {
+      Send-Json $Client 200 (New-LiveSerialStockResponse $params)
     } catch {
       Send-Json $Client 502 @{ error = $_.Exception.Message; source = "crm-sql-live"; bounded = $true }
     }

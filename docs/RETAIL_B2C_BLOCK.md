@@ -10,9 +10,9 @@ Repo: D:\Codex\CRM\retail-crm
 Stable local runtime: http://127.0.0.1:18810/index.html
 Legacy/manual local runtime: http://127.0.0.1:8790/index.html
 MESER runtime: http://192.168.0.5:8790/index.html
-Current build: 20260607-b2c-standard-page-envelope
-App version: 2026.06.07.7
-Released at: 2026-06-07 19:26:14 +03:00
+Current build: 20260607-b2c-warehouse-serial-sale
+App version: 2026.06.07.8
+Released at: 2026-06-07 20:27:49 +03:00
 Contract version: 2026.06.07-retail-live-api-1
 ```
 
@@ -30,6 +30,8 @@ This block is one autonomous module in the Odoo-like modular CRM.
 ```
 
 The block owns retail workflows, not master data. Product, price, stock, serial number, receipt and 1C-origin facts come from the SQL core.
+
+Retail sale product selection reads Warehouse 1 stock through a bounded live endpoint by `productCode` and `warehouseCode`. Serial numbers are fetched only after a concrete weapon product is selected; weapon rows require one available serial number before a sale can be posted.
 
 Current migration direction:
 
