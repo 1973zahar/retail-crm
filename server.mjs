@@ -3,9 +3,9 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const APP_VERSION = "2026.06.07.6";
-const APP_BUILD = "20260607-b2c-live-reference-tables";
-const APP_RELEASED_AT = "2026-06-07 17:57:37 +03:00";
+const APP_VERSION = "2026.06.07.7";
+const APP_BUILD = "20260607-b2c-standard-page-envelope";
+const APP_RELEASED_AT = "2026-06-07 19:26:14 +03:00";
 const ROOT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const CRM_SQL_API_BASE_URL = String(process.env.CRM_SQL_API_BASE_URL || "http://192.168.0.166:3000").replace(/\/+$/, "");
 const CRM_SQL_API_TIMEOUT_MS = Math.max(1000, Number(process.env.CRM_SQL_API_TIMEOUT_MS || 30000));
@@ -287,8 +287,23 @@ async function handleApi(request, response, url) {
 }
 
 function liveApiEnvelope(stateContainer, payload = {}) {
+  const data = Array.isArray(payload.data) ? payload.data : (Array.isArray(payload.items) ? payload.items : []);
+  const limit = Number(payload.limit || data.length || 0);
+  const offset = Number(payload.offset || 0);
+  const total = Number(payload.total ?? data.length);
+  const explicitHasMore = typeof payload.hasMore === "boolean" ? payload.hasMore : null;
+  const hasMore = explicitHasMore ?? (limit > 0 && data.length >= limit);
+  const nextOffset = payload.nextOffset ?? (hasMore ? offset + limit : null);
   return {
     ...payload,
+    data,
+    items: Array.isArray(payload.items) ? payload.items : data,
+    limit,
+    offset,
+    total,
+    hasMore,
+    nextOffset,
+    totalExact: typeof payload.totalExact === "boolean" ? payload.totalExact : false,
     source: "server-json-fallback",
     sourceDetail: "retail-crm-state.json; target production source is PostgreSQL crm_hub through backend model layer",
     bounded: true,
@@ -583,10 +598,23 @@ function payloadItems(payload) {
   return [];
 }
 
-function payloadTotal(payload, items) {
-  const value = payload?.total ?? payload?.count ?? payload?.meta?.total ?? payload?.pagination?.total;
+function payloadTotalInfo(payload, items, query) {
+  const value = payload?.total ?? payload?.meta?.total ?? payload?.pagination?.total;
   const total = Number(value);
-  return Number.isFinite(total) ? total : items.length;
+  const exact = Number.isFinite(total);
+  return {
+    total: exact ? total : query.offset + items.length,
+    exact
+  };
+}
+
+function payloadBoolean(...values) {
+  for (const value of values) {
+    if (typeof value === "boolean") return value;
+    if (value === "true") return true;
+    if (value === "false") return false;
+  }
+  return null;
 }
 
 function textValue(...values) {
@@ -605,11 +633,24 @@ function numberValue(...values) {
 }
 
 function sqlEnvelope(pathName, url, query, items, payload) {
+  const { total, exact } = payloadTotalInfo(payload, items, query);
+  const explicitHasMore = payloadBoolean(payload?.hasMore, payload?.pagination?.hasMore, payload?.meta?.hasMore);
+  const limit = query.limit;
+  const offset = query.offset;
+  const pageLooksFull = items.length >= limit;
+  const hasMore = explicitHasMore ?? (exact && !pageLooksFull ? offset + items.length < total : pageLooksFull);
+  const rawNextOffset = payload?.nextOffset ?? payload?.pagination?.nextOffset ?? payload?.meta?.nextOffset;
+  const parsedNextOffset = Number(rawNextOffset);
+  const nextOffset = Number.isFinite(parsedNextOffset) ? parsedNextOffset : (hasMore ? offset + limit : null);
   return {
+    data: items,
     items,
-    total: payloadTotal(payload, items),
-    limit: query.limit,
-    offset: query.offset,
+    total,
+    limit,
+    offset,
+    hasMore,
+    nextOffset,
+    totalExact: exact,
     query: { search: query.search, barcode: query.barcode },
     source: "crm-sql-live",
     sourceDetail: `${CRM_SQL_API_BASE_URL}${pathName}`,

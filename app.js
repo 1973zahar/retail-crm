@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.07.6";
-const APP_BUILD = "20260607-b2c-live-reference-tables";
-const APP_RELEASED_AT = "2026-06-07 17:57:37 +03:00";
+const APP_VERSION = "2026.06.07.7";
+const APP_BUILD = "20260607-b2c-standard-page-envelope";
+const APP_RELEASED_AT = "2026-06-07 19:26:14 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SIDEBAR_COLLAPSED_KEY = "retail-crm-b2c-sidebar-collapsed-v1";
@@ -529,9 +529,9 @@ const seedState = {
     serialProductId: ""
   },
   liveTables: {
-    products: { search: "", limit: 20, offset: 0, total: 0, items: [], loading: false, error: "", source: "", lastLoadedAt: "" },
-    prices: { search: "", limit: 20, offset: 0, total: 0, items: [], loading: false, error: "", source: "", lastLoadedAt: "" },
-    counterparties: { search: "", limit: 20, offset: 0, total: 0, items: [], loading: false, error: "", source: "", lastLoadedAt: "" }
+    products: { search: "", limit: 20, offset: 0, total: 0, totalExact: false, hasMore: false, nextOffset: null, items: [], loading: false, error: "", source: "", lastLoadedAt: "" },
+    prices: { search: "", limit: 20, offset: 0, total: 0, totalExact: false, hasMore: false, nextOffset: null, items: [], loading: false, error: "", source: "", lastLoadedAt: "" },
+    counterparties: { search: "", limit: 20, offset: 0, total: 0, totalExact: false, hasMore: false, nextOffset: null, items: [], loading: false, error: "", source: "", lastLoadedAt: "" }
   },
   rolePermissionSchema: ROLE_PERMISSION_SCHEMA,
   rolePermissions: defaultRolePermissions(),
@@ -849,12 +849,16 @@ function normalizeLiveTables(input) {
 function normalizeLiveTableState(table, kind, config = LIVE_TABLES[kind]) {
   const source = table || {};
   const limit = clampLiveLimit(source.limit, config.defaultLimit);
+  const rows = Array.isArray(source.items) ? source.items : (Array.isArray(source.data) ? source.data : []);
   return {
     search: String(source.search || ""),
     limit,
     offset: Math.max(0, Number(source.offset || 0)),
     total: Math.max(0, Number(source.total || 0)),
-    items: Array.isArray(source.items) ? source.items.slice(0, limit).map((item) => normalizeLiveTableItem(kind, item)) : [],
+    totalExact: Boolean(source.totalExact),
+    hasMore: Boolean(source.hasMore),
+    nextOffset: source.nextOffset === null || source.nextOffset === undefined ? null : Math.max(0, Number(source.nextOffset || 0)),
+    items: rows.slice(0, limit).map((item) => normalizeLiveTableItem(kind, item)),
     loading: false,
     error: String(source.error || ""),
     source: String(source.source || ""),
@@ -1489,8 +1493,11 @@ async function loadLiveTable(kind, options = {}) {
     const items = normalizeLivePayloadItems(kind, payload);
     table.items = items;
     table.total = liveTableTotal(payload, items);
+    table.totalExact = Boolean(payload.totalExact);
     table.limit = Number(payload.limit || limit);
     table.offset = Number(payload.offset || offset);
+    table.hasMore = typeof payload.hasMore === "boolean" ? payload.hasMore : items.length >= table.limit;
+    table.nextOffset = payload.nextOffset === null || payload.nextOffset === undefined ? null : Math.max(0, Number(payload.nextOffset || 0));
     table.source = payload.sourceDetail || payload.source || "crm-sql-live";
     table.lastLoadedAt = payload.loadedAt || nowIso();
     table.error = "";
@@ -1537,7 +1544,9 @@ function refreshLiveTable(kind) {
 function pageLiveTable(kind, direction) {
   const table = liveTable(kind);
   const limit = clampLiveLimit(table.limit, liveTableConfig(kind).defaultLimit);
-  const nextOffset = Math.max(0, Number(table.offset || 0) + Number(direction || 0) * limit);
+  const nextOffset = direction > 0 && table.nextOffset !== null && table.nextOffset !== undefined
+    ? Math.max(0, Number(table.nextOffset || 0))
+    : Math.max(0, Number(table.offset || 0) + Number(direction || 0) * limit);
   if (nextOffset === table.offset && direction < 0) return;
   return loadLiveTable(kind, { offset: nextOffset });
 }
@@ -3312,7 +3321,13 @@ function liveTableStatus(kind) {
   if (!serverModeEnabled()) return { text: "server mode вимкнено", className: "warn" };
   if (table.loading) return { text: "завантаження SQL...", className: "warn" };
   if (table.error) return { text: table.error, className: "danger" };
-  if (table.lastLoadedAt) return { text: `${table.items.length} рядків · offset ${table.offset} · limit ${table.limit}`, className: "good" };
+  if (table.lastLoadedAt) {
+    const from = table.items.length ? Number(table.offset || 0) + 1 : Number(table.offset || 0);
+    const to = Number(table.offset || 0) + table.items.length;
+    const totalText = table.totalExact && table.total ? ` з ${table.total}` : "";
+    const moreText = table.hasMore ? " · є наступна сторінка" : "";
+    return { text: `${from}-${to}${totalText} · limit ${table.limit}${moreText}`, className: "good" };
+  }
   return { text: "очікує першого запиту", className: "warn" };
 }
 
@@ -3321,7 +3336,7 @@ function renderLiveTableToolbar(kind) {
   const table = liveTable(kind);
   const status = liveTableStatus(kind);
   const canPrev = Number(table.offset || 0) > 0 && !table.loading;
-  const canNext = !table.loading && table.items.length >= table.limit;
+  const canNext = !table.loading && Boolean(table.hasMore);
   return `
     <div class="split">
       <div>

@@ -10,9 +10,9 @@ Repo: D:\Codex\CRM\retail-crm
 Stable local runtime: http://127.0.0.1:18810/index.html
 Legacy/manual local runtime: http://127.0.0.1:8790/index.html
 MESER runtime: http://192.168.0.5:8790/index.html
-Current build: 20260607-b2c-live-reference-tables
-App version: 2026.06.07.6
-Released at: 2026-06-07 17:57:37 +03:00
+Current build: 20260607-b2c-standard-page-envelope
+App version: 2026.06.07.7
+Released at: 2026-06-07 19:26:14 +03:00
 Contract version: 2026.06.07-retail-live-api-1
 ```
 
@@ -40,6 +40,21 @@ Frontend = bounded interactive view/cache only
 ```
 
 The browser must not load full products, stock, serials, customers, balances or orders as production data. Large lists must be read through backend endpoints with `search`, `limit`, `offset` and filters. Retail B2C now has live reference tables for products, prices and counterparties through its own backend proxy over the CRM SQL API. The current local `server-json` responses are fallback/demo only.
+
+Large reference responses must use the standard paged envelope:
+
+```json
+{
+  "data": [],
+  "limit": 100,
+  "offset": 0,
+  "total": 12345,
+  "hasMore": true,
+  "nextOffset": 100
+}
+```
+
+Retail B2C also keeps `items` as a backward-compatible alias for existing UI code, but new code should read `data`.
 
 The sidebar version footer shows fixed release/build metadata. `Дата/час версії` is the creation timestamp of the app version, not a live clock. Session and server status belong to the top page bar, while the sidebar is navigation-only plus the version footer.
 

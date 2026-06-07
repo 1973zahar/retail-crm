@@ -7,9 +7,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$AppVersion = "2026.06.07.6"
-$AppBuild = "20260607-b2c-live-reference-tables"
-$AppReleasedAt = "2026-06-07 17:57:37 +03:00"
+$AppVersion = "2026.06.07.7"
+$AppBuild = "20260607-b2c-standard-page-envelope"
+$AppReleasedAt = "2026-06-07 19:26:14 +03:00"
 $RootDir = $PSScriptRoot
 $ResolvedDataDir = if ([System.IO.Path]::IsPathRooted($DataDir)) { $DataDir } else { Join-Path $RootDir $DataDir }
 $StatePath = Join-Path $ResolvedDataDir "retail-crm-state.json"
@@ -298,23 +298,58 @@ function Get-PayloadItems($Payload) {
   return @()
 }
 
-function Get-PayloadTotal($Payload, $Items) {
-  foreach ($name in @("total", "count")) {
+function Get-PayloadTotalInfo($Payload, $Items, $Query) {
+  foreach ($name in @("total")) {
     $property = $Payload.PSObject.Properties[$name]
     if ($property -and $null -ne $property.Value) {
       $number = 0
-      if ([int]::TryParse([string]$property.Value, [ref]$number)) { return $number }
+      if ([int]::TryParse([string]$property.Value, [ref]$number)) { return @{ total = $number; exact = $true } }
     }
   }
-  return @($Items).Count
+  return @{ total = ([int]$Query.offset + @($Items).Count); exact = $false }
+}
+
+function Get-PayloadBoolean($Payload, [string[]]$Names) {
+  foreach ($name in $Names) {
+    $property = $Payload.PSObject.Properties[$name]
+    if ($property -and $null -ne $property.Value) {
+      if ($property.Value -is [bool]) { return $property.Value }
+      $text = ([string]$property.Value).ToLowerInvariant()
+      if ($text -eq "true") { return $true }
+      if ($text -eq "false") { return $false }
+    }
+  }
+  return $null
 }
 
 function New-CrmSqlEnvelope([string]$Path, $Query, $Items, $Payload) {
+  $itemArray = @($Items)
+  $totalInfo = Get-PayloadTotalInfo $Payload $itemArray $Query
+  $limit = [int]$Query.limit
+  $offset = [int]$Query.offset
+  $explicitHasMore = Get-PayloadBoolean $Payload @("hasMore")
+  if ($null -eq $explicitHasMore) {
+    $pageLooksFull = @($itemArray).Count -ge $limit
+    $hasMore = if ($totalInfo.exact -and -not $pageLooksFull) { ($offset + @($itemArray).Count) -lt [int]$totalInfo.total } else { $pageLooksFull }
+  } else {
+    $hasMore = [bool]$explicitHasMore
+  }
+  $nextOffset = $null
+  $nextOffsetProperty = $Payload.PSObject.Properties["nextOffset"]
+  if ($nextOffsetProperty -and $null -ne $nextOffsetProperty.Value) {
+    $parsed = 0
+    if ([int]::TryParse([string]$nextOffsetProperty.Value, [ref]$parsed)) { $nextOffset = $parsed }
+  }
+  if ($null -eq $nextOffset -and $hasMore) { $nextOffset = $offset + $limit }
   return @{
-    items = @($Items)
-    total = Get-PayloadTotal $Payload $Items
-    limit = [int]$Query.limit
-    offset = [int]$Query.offset
+    data = $itemArray
+    items = $itemArray
+    total = [int]$totalInfo.total
+    limit = $limit
+    offset = $offset
+    hasMore = $hasMore
+    nextOffset = $nextOffset
+    totalExact = [bool]$totalInfo.exact
     query = @{ search = [string]$Query.search; barcode = [string]$Query.barcode }
     source = "crm-sql-live"
     sourceDetail = "$CrmSqlApiBaseUrl$Path"
@@ -341,6 +376,18 @@ function New-LiveApiEnvelope($StateContainer, $Payload) {
   foreach ($key in $Payload.Keys) {
     $result[$key] = $Payload[$key]
   }
+  $items = if ($Payload.ContainsKey("data")) { @($Payload.data) } elseif ($Payload.ContainsKey("items")) { @($Payload.items) } else { @() }
+  $limit = if ($Payload.ContainsKey("limit")) { [int]$Payload.limit } else { @($items).Count }
+  $offset = if ($Payload.ContainsKey("offset")) { [int]$Payload.offset } else { 0 }
+  $total = if ($Payload.ContainsKey("total")) { [int]$Payload.total } else { @($items).Count }
+  $result.data = $items
+  $result.items = $items
+  $result.limit = $limit
+  $result.offset = $offset
+  $result.total = $total
+  $result.hasMore = if ($Payload.ContainsKey("hasMore")) { [bool]$Payload.hasMore } else { @($items).Count -ge $limit }
+  $result.nextOffset = if ($Payload.ContainsKey("nextOffset")) { $Payload.nextOffset } elseif ($result.hasMore) { $offset + $limit } else { $null }
+  $result.totalExact = if ($Payload.ContainsKey("totalExact")) { [bool]$Payload.totalExact } else { $true }
   $result.source = "server-json-fallback"
   $result.sourceDetail = "retail-crm-state.json; target production source is PostgreSQL crm_hub through backend model layer"
   $result.bounded = $true

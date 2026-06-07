@@ -25,9 +25,9 @@
     "dataDir": "data"
   },
   "currentApp": {
-    "build": "20260607-b2c-live-reference-tables",
-    "version": "2026.06.07.6",
-    "releasedAt": "2026-06-07 17:57:37 +03:00",
+    "build": "20260607-b2c-standard-page-envelope",
+    "version": "2026.06.07.7",
+    "releasedAt": "2026-06-07 19:26:14 +03:00",
     "contractVersion": "2026.06.07-retail-live-api-1"
   },
   "sourceOfTruth": {
