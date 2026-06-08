@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.08.3";
-const APP_BUILD = "20260608-b2c-live-serial-stock";
-const APP_RELEASED_AT = "2026-06-08 14:44:01 +03:00";
+const APP_VERSION = "2026.06.08.4";
+const APP_BUILD = "20260608-b2c-multi-user-ui-isolation";
+const APP_RELEASED_AT = "2026-06-08 18:57:06 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SIDEBAR_COLLAPSED_KEY = "retail-crm-b2c-sidebar-collapsed-v1";
@@ -119,6 +119,7 @@ const serverSync = {
   pending: false,
   saving: false,
   loading: false,
+  lastSharedStateFingerprint: "",
   lastLoadedAt: "",
   lastSavedAt: "",
   error: "",
@@ -655,6 +656,22 @@ const seedState = {
   ]
 };
 
+const CLIENT_LOCAL_STATE_KEYS = [
+  "currentView",
+  "activeEmployeeId",
+  "selectedCashierId",
+  "selectedReturnId",
+  "checkout",
+  "saleConfirm",
+  "returnConfirm",
+  "drilldown",
+  "documentEdit",
+  "listUi",
+  "stockUi",
+  "liveTables",
+  "inventory"
+];
+
 const navItems = [
   ["dashboard", "Панель"],
   ["pos", "Продаж"],
@@ -854,6 +871,49 @@ function normalizeState(input) {
   next.listUi = normalizeListUi(next.listUi);
   if (!canOpenBlock(next.currentView, next)) next.currentView = firstAllowedView(next);
   return next;
+}
+
+function clientLocalStateSnapshot(source = state) {
+  return Object.fromEntries(CLIENT_LOCAL_STATE_KEYS.map((key) => [key, clone(source?.[key] ?? seedState[key])]));
+}
+
+function sharedStateForServer(source = state) {
+  const shared = clone(source || seedState);
+  CLIENT_LOCAL_STATE_KEYS.forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(seedState, key)) {
+      shared[key] = clone(seedState[key]);
+    } else {
+      delete shared[key];
+    }
+  });
+  shared.activeEmployeeId = "";
+  return shared;
+}
+
+function sharedStateFingerprint(source = state) {
+  try {
+    return JSON.stringify(sharedStateForServer(source));
+  } catch (error) {
+    return `${Date.now()}`;
+  }
+}
+
+function rememberSharedStateFingerprint(source = state) {
+  serverSync.lastSharedStateFingerprint = sharedStateFingerprint(source);
+}
+
+function mergeServerStateWithClientUi(serverState, clientUi = clientLocalStateSnapshot()) {
+  const next = normalizeState(serverState || seedState);
+  CLIENT_LOCAL_STATE_KEYS.forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(clientUi, key)) {
+      next[key] = clone(clientUi[key]);
+    }
+  });
+  if (sessionEmployeeId && next.employees.some((employee) => employee.id === sessionEmployeeId && employee.status === "active")) {
+    next.activeEmployeeId = sessionEmployeeId;
+  }
+  if (!canOpenBlock(next.currentView, next)) next.currentView = firstAllowedView(next);
+  return normalizeState(next);
 }
 
 function normalizeView(view) {
@@ -2181,14 +2241,16 @@ async function bootstrapServerState() {
   if (!serverModeEnabled() || serverSync.loading) return;
   serverSync.loading = true;
   try {
+    const clientUi = clientLocalStateSnapshot();
     const payload = await fetchJson("/api/bootstrap");
     if (payload.settings) {
       state.systemSettings = normalizeSystemSettings({ ...state.systemSettings, ...payload.settings });
     }
     if (payload.state) {
-      state = normalizeState(payload.state);
+      state = mergeServerStateWithClientUi(payload.state, clientUi);
       if (payload.settings) state.systemSettings = normalizeSystemSettings({ ...state.systemSettings, ...payload.settings });
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      rememberSharedStateFingerprint(state);
     } else {
       queueServerStateSave();
     }
@@ -2211,6 +2273,12 @@ async function flushServerState(renderAfter = false) {
   serverSync.saving = true;
   serverSync.pending = false;
   try {
+    const sharedState = sharedStateForServer(state);
+    const sharedFingerprint = sharedStateFingerprint(sharedState);
+    if (sharedFingerprint === serverSync.lastSharedStateFingerprint) {
+      if (renderAfter) render();
+      return;
+    }
     const payload = await fetchJson("/api/state", {
       method: "PUT",
       body: JSON.stringify({
@@ -2219,10 +2287,11 @@ async function flushServerState(renderAfter = false) {
         appVersion: APP_VERSION,
         releasedAt: APP_RELEASED_AT,
         savedBy: currentEmployee()?.name || "system",
-        state
+        state: sharedState
       })
     });
     markServerOnline(payload);
+    serverSync.lastSharedStateFingerprint = sharedFingerprint;
     state.systemSettings.lastSavedAt = payload.savedAt || nowIso();
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     if (renderAfter) render();
@@ -2237,6 +2306,7 @@ async function flushServerState(renderAfter = false) {
 async function refreshServerState(force = false) {
   if (!serverModeEnabled() || serverSync.loading || serverSync.saving || serverSync.pending) return;
   try {
+    const clientUi = clientLocalStateSnapshot();
     const previousRevision = Number(serverSync.revision || 0);
     const payload = await fetchJson(`/api/state?revision=${encodeURIComponent(serverSync.revision)}`);
     markServerOnline({
@@ -2245,8 +2315,9 @@ async function refreshServerState(force = false) {
       loadedAt: nowIso()
     });
     if ((force || Number(payload.revision || 0) > previousRevision) && payload.state) {
-      state = normalizeState(payload.state);
+      state = mergeServerStateWithClientUi(payload.state, clientUi);
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      rememberSharedStateFingerprint(state);
       render();
     }
   } catch (error) {

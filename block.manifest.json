@@ -25,9 +25,9 @@
     "dataDir": "data"
   },
   "currentApp": {
-    "build": "20260608-b2c-live-serial-stock",
-    "version": "2026.06.08.3",
-    "releasedAt": "2026-06-08 14:44:01 +03:00",
+    "build": "20260608-b2c-multi-user-ui-isolation",
+    "version": "2026.06.08.4",
+    "releasedAt": "2026-06-08 18:57:06 +03:00",
     "contractVersion": "2026.06.07-retail-live-api-1"
   },
   "sourceOfTruth": {

@@ -10,9 +10,9 @@ Repo: D:\Codex\CRM\retail-crm
 Stable local runtime: http://127.0.0.1:18810/index.html
 Legacy/manual local runtime: http://127.0.0.1:8790/index.html
 MESER runtime: http://192.168.0.5:8790/index.html
-Current build: 20260608-b2c-live-serial-stock
-App version: 2026.06.08.3
-Released at: 2026-06-08 14:44:01 +03:00
+Current build: 20260608-b2c-multi-user-ui-isolation
+App version: 2026.06.08.4
+Released at: 2026-06-08 18:57:06 +03:00
 Contract version: 2026.06.07-retail-live-api-1
 ```
 
@@ -36,6 +36,8 @@ Retail sale product selection reads Warehouse 1 stock through bounded live endpo
 Retail sale customer selection reads SQL counterparties through bounded live endpoints. The POS customer autocomplete uses `/api/live/counterparties?search=&limit=20&offset=0`; B2C stores only the selected SQL customer card for receipts and does not import the full client directory into browser memory. The client screen shows SQL live counterparties first with search/pagination and keeps local B2C-created/export-pending cards in a separate cache table.
 
 The stock directory screen reads real Warehouse 1 balances through `/api/live/stock-balances?warehouseCode=2&search=&limit=&offset=`. Local/demo `state.stock` rows must not be the visible source-of-truth table in `Довідники -> Залишки`; they are only fallback/demo data for offline prototype flows.
+
+Multi-user server sync stores only shared business state. Browser-local UI and draft state stays local per operator/session: current screen, active employee session, selected cashier, selected document row, checkout draft, confirm modals, drilldowns, live table pages, stock serial lookup page and inventory draft must not be written back as another user's global `/api/state`.
 
 Current migration direction:
 
@@ -177,6 +179,7 @@ Do not manually create products, prices, stock balances, serial numbers or recei
 Do not duplicate SQL core master data as the local source of truth.
 Do not load full product, stock, serial, customer, balance or order tables into browser state as production data.
 Do not show or fetch serial numbers in the Stock reference screen until a selected product belongs to category/path `Зброя`.
+Do not sync per-operator UI/draft state as shared server state in multi-user mode.
 Do not paste passwords, secrets, raw .env, raw logs or credentials.
 ```
 
