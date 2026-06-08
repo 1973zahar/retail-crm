@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.08.1";
-const APP_BUILD = "20260608-b2c-live-clients-directories";
-const APP_RELEASED_AT = "2026-06-08 12:06:22 +03:00";
+const APP_VERSION = "2026.06.08.2";
+const APP_BUILD = "20260608-b2c-live-stock-directory";
+const APP_RELEASED_AT = "2026-06-08 13:11:11 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SIDEBAR_COLLAPSED_KEY = "retail-crm-b2c-sidebar-collapsed-v1";
@@ -95,6 +95,14 @@ const LIVE_TABLES = {
     title: "SQL live контрагенти",
     subtitle: "one_c_mirror.crm_counterparties",
     searchPlaceholder: "код, назва, телефон, email або ЄДРПОУ"
+  },
+  stock: {
+    endpoint: "/api/live/stock-balances",
+    defaultLimit: 20,
+    title: "SQL live залишки",
+    subtitle: "one_c_mirror.crm_stock_balances · Склад №1",
+    searchPlaceholder: "product_code, товар або SKU",
+    params: { warehouseCode: SQL_MAIN_WAREHOUSE_CODE }
   },
   warehouses: {
     endpoint: "/api/live/warehouses",
@@ -896,6 +904,7 @@ function normalizeLiveTableItem(kind, item) {
   if (kind === "products") return normalizeProduct(item);
   if (kind === "prices") return normalizeLivePrice(item);
   if (kind === "counterparties") return normalizeLiveCounterparty(item);
+  if (kind === "stock") return normalizeStockBalance(item);
   if (kind === "warehouses") return normalizeLiveWarehouse(item);
   return item || {};
 }
@@ -1049,6 +1058,10 @@ function normalizeStockBalance(row) {
     qty,
     availableQty: qty,
     reservedQty: Number(row.reservedQty ?? row.reserved_qty ?? row.reservedQuantity ?? row.reserved_quantity ?? 0),
+    quantity: Number(row.quantity ?? row.qty ?? qty),
+    snapshotAt: row.snapshotAt || row.snapshot_at || "",
+    sourceFile: row.sourceFile || row.source_file || "",
+    importedAt: row.importedAt || row.imported_at || "",
     source: row.source || ""
   };
 }
@@ -1925,6 +1938,7 @@ async function loadLiveTable(kind, options = {}) {
   const params = new URLSearchParams();
   const search = String(options.search ?? table.search ?? "").trim();
   if (search) params.set("search", search);
+  Object.entries(config.params || {}).forEach(([key, value]) => params.set(key, String(value)));
   params.set("limit", String(limit));
   params.set("offset", String(offset));
   table.loading = true;
@@ -3679,6 +3693,7 @@ function renderInventorySheet(rows, totals) {
 
 function renderStock() {
   setTitle("Залишки магазину");
+  ensureLiveTableLoaded("stock");
   const allRows = inventoryRows();
   const inventorySearch = String(state.inventory.search || "").trim();
   const rows = allRows.filter((row) => productMatchesQuery(row.product, inventorySearch));
@@ -3702,23 +3717,14 @@ function renderStock() {
     <section class="stacked-panels">
       <article class="panel">
         <div class="split">
-          <h2>B2C.6 Залишки</h2>
-          <span class="pill">склад магазину</span>
+          <div>
+            <h2>B2C.6 Залишки</h2>
+            <p class="muted">Реальні залишки з SQL по ${escapeHtml(SQL_MAIN_WAREHOUSE_NAME)}. Повний довідник відкривається сторінками, без завантаження всієї бази в браузер.</p>
+          </div>
+          <span class="pill">live SQL · склад №1</span>
         </div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>product_code</th><th>Товар</th><th>Категорія</th><th>Склад №1</th><th>Склад Гуртовий</th><th>Всі склади</th><th>Вартість роздробу</th><th>Стан</th></tr></thead>
-            <tbody>
-              ${state.products.map((product) => {
-                const qty = stockQty(product.id);
-                const wholesaleQty = stockWholesaleQty(product.id);
-                const totalQty = stockTotalQty(product.id);
-                const low = qty <= product.minStock;
-                return `<tr><td>${escapeHtml(product.productCode || product.sku)}</td><td>${escapeHtml(product.name)}<br><span class="muted">${escapeHtml(product.productFullPath || product.productGroupPath || "-")}</span></td><td>${escapeHtml(product.categoryPrimary || product.category)}</td><td><strong>${qty}</strong></td><td>${wholesaleQty}</td><td>${totalQty}</td><td>${formatMoney(totalQty * product.price)}</td><td><span class="pill ${low ? "danger" : "good"}">${low ? "поповнити" : "доступно"}</span></td></tr>`;
-              }).join("")}
-            </tbody>
-          </table>
-        </div>
+        ${renderLiveTableToolbar("stock")}
+        ${renderLiveStockTable()}
       </article>
       <article class="panel">
         <div class="split">
@@ -3852,7 +3858,7 @@ function liveTableStatus(kind) {
   if (table.lastLoadedAt) {
     const from = table.items.length ? Number(table.offset || 0) + 1 : Number(table.offset || 0);
     const to = Number(table.offset || 0) + table.items.length;
-    const totalText = table.totalExact && table.total ? ` з ${table.total}` : "";
+    const totalText = table.total ? ` з ${table.totalExact ? "" : "~"}${table.total}` : "";
     const moreText = table.hasMore ? " · є наступна сторінка" : "";
     return { text: `${from}-${to}${totalText} · limit ${table.limit}${moreText}`, className: "good" };
   }
@@ -3955,6 +3961,37 @@ function renderLiveCounterpartiesTable() {
               </tr>
             `;
           }).join("") || `<tr><td colspan="7" class="muted">${table.loading ? "Завантаження..." : table.error ? escapeHtml(table.error) : "Немає контрагентів на цій сторінці."}</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderLiveStockTable() {
+  const table = liveTable("stock");
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>product_code</th><th>Товар</th><th>Склад</th><th>Доступно</th><th>Резерв</th><th>К-сть</th><th>Дата зрізу</th><th>Джерело</th></tr></thead>
+        <tbody>
+          ${table.items.map((row) => {
+            const available = stockLookupAvailableQty(row);
+            const reserved = Number(row.reservedQty || 0);
+            const statusClass = available <= 0 ? "danger" : available <= 1 ? "warn" : "good";
+            const statusText = available <= 0 ? "немає" : available <= 1 ? "мало" : "доступно";
+            return `
+              <tr>
+                <td>${escapeHtml(row.productCode || row.productId || "-")}</td>
+                <td><strong>${escapeHtml(row.productName || "-")}</strong></td>
+                <td>${escapeHtml(row.warehouseName || SQL_MAIN_WAREHOUSE_NAME)}<br><span class="muted">${escapeHtml(row.warehouseCode || SQL_MAIN_WAREHOUSE_CODE)}</span></td>
+                <td><strong>${available}</strong><br><span class="pill ${statusClass}">${statusText}</span></td>
+                <td>${reserved}</td>
+                <td>${Number(row.quantity ?? row.qty ?? available)}</td>
+                <td>${escapeHtml(row.snapshotAt || "-")}</td>
+                <td>${escapeHtml(row.sourceFile || row.source || "crm-sql-live")}<br><span class="muted">${escapeHtml(row.importedAt || "-")}</span></td>
+              </tr>
+            `;
+          }).join("") || `<tr><td colspan="8" class="muted">${table.loading ? "Завантаження реальних залишків з SQL..." : table.error ? escapeHtml(table.error) : "Немає залишків на цій сторінці."}</td></tr>`}
         </tbody>
       </table>
     </div>

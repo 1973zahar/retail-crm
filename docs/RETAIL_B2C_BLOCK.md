@@ -10,9 +10,9 @@ Repo: D:\Codex\CRM\retail-crm
 Stable local runtime: http://127.0.0.1:18810/index.html
 Legacy/manual local runtime: http://127.0.0.1:8790/index.html
 MESER runtime: http://192.168.0.5:8790/index.html
-Current build: 20260608-b2c-live-clients-directories
-App version: 2026.06.08.1
-Released at: 2026-06-08 12:06:22 +03:00
+Current build: 20260608-b2c-live-stock-directory
+App version: 2026.06.08.2
+Released at: 2026-06-08 13:11:11 +03:00
 Contract version: 2026.06.07-retail-live-api-1
 ```
 
@@ -34,6 +34,8 @@ The block owns retail workflows, not master data. Product, price, stock, serial 
 Retail sale product selection reads Warehouse 1 stock through bounded live endpoints. The POS product autocomplete uses `/api/live/stock-balances?warehouseCode=2&search=&limit=&offset=` and shows only products with a positive `Склад №1` balance; in server mode it must not fall back to the local/demo full product list when live stock search returns zero rows. After a product is selected, the sale line reloads product-scoped stock by `productCode` and `warehouseCode`. Serial numbers are fetched only after a concrete weapon product is selected; weapon rows require one available serial number before a sale can be posted.
 
 Retail sale customer selection reads SQL counterparties through bounded live endpoints. The POS customer autocomplete uses `/api/live/counterparties?search=&limit=20&offset=0`; B2C stores only the selected SQL customer card for receipts and does not import the full client directory into browser memory. The client screen shows SQL live counterparties first with search/pagination and keeps local B2C-created/export-pending cards in a separate cache table.
+
+The stock directory screen reads real Warehouse 1 balances through `/api/live/stock-balances?warehouseCode=2&search=&limit=&offset=`. Local/demo `state.stock` rows must not be the visible source-of-truth table in `Довідники -> Залишки`; they are only fallback/demo data for offline prototype flows.
 
 Current migration direction:
 
