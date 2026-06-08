@@ -7,12 +7,12 @@ This document defines the current autonomous Retail B2C block before future chan
 ```text
 Block ID: retail-b2c
 Repo: D:\Codex\CRM\retail-crm
-Stable local runtime: http://127.0.0.1:18810/index.html
-Legacy/manual local runtime: http://127.0.0.1:8790/index.html
+Stable LAN runtime: http://<LAN-IP>:18810/index.html
+Legacy/manual local runtime: internal diagnostics only, not the working URL
 MESER runtime: http://192.168.0.5:8790/index.html
-Current build: 20260608-b2c-multi-user-ui-isolation
-App version: 2026.06.08.4
-Released at: 2026-06-08 18:57:06 +03:00
+Current build: 20260608-b2c-lan-only-launcher
+App version: 2026.06.08.5
+Released at: 2026-06-08 20:40:22 +03:00
 Contract version: 2026.06.07-retail-live-api-1
 ```
 
@@ -244,8 +244,9 @@ Default behavior:
 
 ```text
 Start server if /api/health is not ready.
-Use stable local port 18810.
-Open http://127.0.0.1:18810/index.html after health passes.
+Bind to 0.0.0.0 and use stable LAN port 18810.
+Auto-detect LAN IPv4 unless -PublicHost is provided.
+Open http://<LAN-IP>:18810/index.html after health passes.
 Keep Retail B2C CRM.cmd open as a launcher watchdog.
 Keep persistent data in D:\Codex\CRM\retail-crm\data.
 Write launcher/server logs under data without exposing raw logs in chat.

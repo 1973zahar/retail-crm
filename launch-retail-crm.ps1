@@ -1,5 +1,5 @@
 param(
-  [string]$HostName = "127.0.0.1",
+  [string]$HostName = "0.0.0.0",
   [int]$Port = 18810,
   [string]$PublicHost = "",
   [string]$DataDir = "data",
@@ -19,12 +19,89 @@ if (-not (Test-Path -LiteralPath $StartScript)) {
   throw "Cannot find start-server.ps1 at $StartScript"
 }
 
+function Test-RetailLanCandidate {
+  param([string]$Address)
+
+  if (-not $Address) {
+    return $false
+  }
+
+  if ($Address -eq "127.0.0.1" -or $Address -eq "0.0.0.0" -or $Address -eq "255.255.255.255") {
+    return $false
+  }
+
+  if ($Address.StartsWith("169.254.")) {
+    return $false
+  }
+
+  return ($Address -match '^\d{1,3}(\.\d{1,3}){3}$')
+}
+
+function Resolve-RetailLanPublicHost {
+  $candidates = @()
+
+  try {
+    $interfaces = [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()
+    foreach ($adapter in $interfaces) {
+      if ($adapter.OperationalStatus -ne [System.Net.NetworkInformation.OperationalStatus]::Up) {
+        continue
+      }
+
+      if ($adapter.NetworkInterfaceType -eq [System.Net.NetworkInformation.NetworkInterfaceType]::Loopback -or
+          $adapter.NetworkInterfaceType -eq [System.Net.NetworkInformation.NetworkInterfaceType]::Tunnel -or
+          $adapter.NetworkInterfaceType -eq [System.Net.NetworkInformation.NetworkInterfaceType]::Ppp) {
+        continue
+      }
+
+      foreach ($unicast in $adapter.GetIPProperties().UnicastAddresses) {
+        if ($unicast.Address.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) {
+          continue
+        }
+
+        $address = $unicast.Address.ToString()
+        if (Test-RetailLanCandidate $address) {
+          $candidates += $address
+        }
+      }
+    }
+  } catch {
+    $candidates = @()
+  }
+
+  $preferred = $candidates | Where-Object { $_ -like "192.168.*" } | Select-Object -First 1
+  if ($preferred) {
+    return $preferred
+  }
+
+  $preferred = $candidates | Where-Object { $_ -like "10.*" } | Select-Object -First 1
+  if ($preferred) {
+    return $preferred
+  }
+
+  $preferred = $candidates | Where-Object { $_ -match '^172\.(1[6-9]|2[0-9]|3[0-1])\.' } | Select-Object -First 1
+  if ($preferred) {
+    return $preferred
+  }
+
+  if ($candidates.Count -gt 0) {
+    return $candidates[0]
+  }
+
+  throw "Cannot auto-detect a LAN IPv4 address. Pass -PublicHost <LAN IP> explicitly."
+}
+
 if (-not $PublicHost) {
-  if ($HostName -eq "0.0.0.0") {
-    $PublicHost = "127.0.0.1"
+  if ($HostName -eq "0.0.0.0" -or $HostName -eq "*" -or $HostName -eq "+") {
+    $PublicHost = Resolve-RetailLanPublicHost
+  } elseif ($HostName -eq "127.0.0.1" -or $HostName -eq "localhost") {
+    throw "Retail B2C launcher is LAN-only. Use -HostName 0.0.0.0 -PublicHost <LAN IP>."
   } else {
     $PublicHost = $HostName
   }
+}
+
+if ($PublicHost -eq "127.0.0.1" -or $PublicHost -eq "localhost") {
+  throw "Retail B2C launcher is LAN-only. PublicHost cannot be $PublicHost."
 }
 
 function Resolve-RetailPath {

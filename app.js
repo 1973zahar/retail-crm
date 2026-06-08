@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.08.4";
-const APP_BUILD = "20260608-b2c-multi-user-ui-isolation";
-const APP_RELEASED_AT = "2026-06-08 18:57:06 +03:00";
+const APP_VERSION = "2026.06.08.5";
+const APP_BUILD = "20260608-b2c-lan-only-launcher";
+const APP_RELEASED_AT = "2026-06-08 20:40:22 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SIDEBAR_COLLAPSED_KEY = "retail-crm-b2c-sidebar-collapsed-v1";

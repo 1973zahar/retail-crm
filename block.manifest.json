@@ -10,12 +10,14 @@
     "branch": "main"
   },
   "runtime": {
-    "localUrl": "http://127.0.0.1:18810/index.html",
-    "legacyLocalUrl": "http://127.0.0.1:8790/index.html",
+    "localUrl": "http://<LAN-IP>:18810/index.html",
+    "legacyLocalUrl": "manual/internal only; do not use as working URL",
     "meserUrl": "http://192.168.0.5:8790/index.html",
     "host": "192.168.0.5",
     "port": 8790,
     "stableLocalPort": 18810,
+    "launcherHost": "0.0.0.0",
+    "launcherPublicHost": "auto-detected LAN IPv4",
     "launcherScript": "launch-retail-crm.ps1",
     "launcherCommand": "Retail B2C CRM.cmd",
     "shortcutScript": "create-retail-crm-desktop-shortcut.ps1",
@@ -25,9 +27,9 @@
     "dataDir": "data"
   },
   "currentApp": {
-    "build": "20260608-b2c-multi-user-ui-isolation",
-    "version": "2026.06.08.4",
-    "releasedAt": "2026-06-08 18:57:06 +03:00",
+    "build": "20260608-b2c-lan-only-launcher",
+    "version": "2026.06.08.5",
+    "releasedAt": "2026-06-08 20:40:22 +03:00",
     "contractVersion": "2026.06.07-retail-live-api-1"
   },
   "sourceOfTruth": {
