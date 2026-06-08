@@ -7,9 +7,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$AppVersion = "2026.06.07.9"
-$AppBuild = "20260607-b2c-in-stock-product-lookup"
-$AppReleasedAt = "2026-06-07 21:30:23 +03:00"
+$AppVersion = "2026.06.08.1"
+$AppBuild = "20260608-b2c-live-clients-directories"
+$AppReleasedAt = "2026-06-08 12:06:22 +03:00"
 $RootDir = $PSScriptRoot
 $ResolvedDataDir = if ([System.IO.Path]::IsPathRooted($DataDir)) { $DataDir } else { Join-Path $RootDir $DataDir }
 $StatePath = Join-Path $ResolvedDataDir "retail-crm-state.json"
@@ -667,6 +667,18 @@ function ConvertTo-LiveCounterparty($Row) {
   }
 }
 
+function ConvertTo-LiveWarehouse($Row) {
+  $warehouseCode = Get-TextValue $Row @("warehouseCode", "warehouse_code", "code", "id")
+  return @{
+    id = Get-TextValue $Row @("id", "warehouseCode", "warehouse_code", "code") $warehouseCode
+    warehouseCode = $warehouseCode
+    warehouseName = Get-TextValue $Row @("warehouseName", "warehouse_name", "name") "SQL warehouse"
+    sourceFile = Get-TextValue $Row @("sourceFile", "source_file")
+    importedAt = Get-TextValue $Row @("importedAt", "imported_at")
+    source = "crm-sql-live"
+  }
+}
+
 function ConvertTo-LiveStockBalance($Row) {
   $productCode = Get-TextValue $Row @("productCode", "product_code", "sku")
   $warehouseCode = Get-TextValue $Row @("warehouseCode", "warehouse_code", "warehouseId", "warehouse_id")
@@ -743,6 +755,14 @@ function New-LiveCounterpartiesResponse($Params) {
   $items = @()
   foreach ($row in (Get-PayloadItems $payload)) { $items += ConvertTo-LiveCounterparty $row }
   return New-CrmSqlEnvelope "/one-c-mirror/counterparties" $query $items $payload
+}
+
+function New-LiveWarehousesResponse($Params) {
+  $query = Get-LiveQueryParams $Params 20 100
+  $payload = Invoke-CrmSqlApi "/one-c-mirror/warehouses" $query.params
+  $items = @()
+  foreach ($row in (Get-PayloadItems $payload)) { $items += ConvertTo-LiveWarehouse $row }
+  return New-CrmSqlEnvelope "/one-c-mirror/warehouses" $query $items $payload
 }
 
 function New-LiveStockBalancesResponse($Params) {
@@ -963,6 +983,15 @@ function Handle-Api($Client, $Request) {
   if ($method -eq "GET" -and $path -eq "/api/live/counterparties") {
     try {
       Send-Json $Client 200 (New-LiveCounterpartiesResponse (Get-QueryParams $Request.RawPath))
+    } catch {
+      Send-Json $Client 502 @{ error = $_.Exception.Message; source = "crm-sql-live"; bounded = $true }
+    }
+    return
+  }
+
+  if ($method -eq "GET" -and $path -eq "/api/live/warehouses") {
+    try {
+      Send-Json $Client 200 (New-LiveWarehousesResponse (Get-QueryParams $Request.RawPath))
     } catch {
       Send-Json $Client 502 @{ error = $_.Exception.Message; source = "crm-sql-live"; bounded = $true }
     }

@@ -25,9 +25,9 @@
     "dataDir": "data"
   },
   "currentApp": {
-    "build": "20260607-b2c-in-stock-product-lookup",
-    "version": "2026.06.07.9",
-    "releasedAt": "2026-06-07 21:30:23 +03:00",
+    "build": "20260608-b2c-live-clients-directories",
+    "version": "2026.06.08.1",
+    "releasedAt": "2026-06-08 12:06:22 +03:00",
     "contractVersion": "2026.06.07-retail-live-api-1"
   },
   "sourceOfTruth": {

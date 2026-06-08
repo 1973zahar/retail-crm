@@ -3,9 +3,9 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const APP_VERSION = "2026.06.07.9";
-const APP_BUILD = "20260607-b2c-in-stock-product-lookup";
-const APP_RELEASED_AT = "2026-06-07 21:30:23 +03:00";
+const APP_VERSION = "2026.06.08.1";
+const APP_BUILD = "20260608-b2c-live-clients-directories";
+const APP_RELEASED_AT = "2026-06-08 12:06:22 +03:00";
 const ROOT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const CRM_SQL_API_BASE_URL = String(process.env.CRM_SQL_API_BASE_URL || "http://192.168.0.166:3000").replace(/\/+$/, "");
 const CRM_SQL_API_TIMEOUT_MS = Math.max(1000, Number(process.env.CRM_SQL_API_TIMEOUT_MS || 30000));
@@ -167,6 +167,11 @@ async function handleApi(request, response, url) {
 
   if (request.method === "GET" && url.pathname === "/api/live/counterparties") {
     sendJson(response, 200, await listLiveCounterparties(url));
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/live/warehouses") {
+    sendJson(response, 200, await listLiveWarehouses(url));
     return;
   }
 
@@ -783,6 +788,18 @@ function normalizeLiveCounterparty(row) {
   };
 }
 
+function normalizeLiveWarehouse(row) {
+  const warehouseCode = textValue(row.warehouseCode, row.warehouse_code, row.code, row.id);
+  return {
+    id: textValue(row.id, row.warehouseCode, row.warehouse_code, row.code, warehouseCode),
+    warehouseCode,
+    warehouseName: textValue(row.warehouseName, row.warehouse_name, row.name, "Склад SQL"),
+    sourceFile: textValue(row.sourceFile, row.source_file),
+    importedAt: textValue(row.importedAt, row.imported_at),
+    source: "crm-sql-live"
+  };
+}
+
 function normalizeLiveStockBalance(row) {
   const productCode = textValue(row.productCode, row.product_code, row.sku);
   const warehouseCode = textValue(row.warehouseCode, row.warehouse_code, row.warehouseId, row.warehouse_id);
@@ -862,6 +879,14 @@ async function listLiveCounterparties(url) {
   const pathName = "/one-c-mirror/counterparties";
   const { payload } = await fetchCrmSql(pathName, query.params);
   const items = payloadItems(payload).map(normalizeLiveCounterparty);
+  return sqlEnvelope(pathName, url, query, items, payload);
+}
+
+async function listLiveWarehouses(url) {
+  const query = liveQuery(url, 20, 100);
+  const pathName = "/one-c-mirror/warehouses";
+  const { payload } = await fetchCrmSql(pathName, query.params);
+  const items = payloadItems(payload).map(normalizeLiveWarehouse);
   return sqlEnvelope(pathName, url, query, items, payload);
 }
 

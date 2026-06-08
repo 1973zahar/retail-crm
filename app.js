@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.07.9";
-const APP_BUILD = "20260607-b2c-in-stock-product-lookup";
-const APP_RELEASED_AT = "2026-06-07 21:30:23 +03:00";
+const APP_VERSION = "2026.06.08.1";
+const APP_BUILD = "20260608-b2c-live-clients-directories";
+const APP_RELEASED_AT = "2026-06-08 12:06:22 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SIDEBAR_COLLAPSED_KEY = "retail-crm-b2c-sidebar-collapsed-v1";
@@ -70,6 +70,7 @@ const DEFAULT_SYSTEM_SETTINGS = {
   lastSavedAt: ""
 };
 const LIVE_PRODUCT_LOOKUP_LIMIT = 20;
+const LIVE_CUSTOMER_LOOKUP_LIMIT = 20;
 const LIVE_STOCK_LOOKUP_LIMIT = 20;
 const LIVE_SERIAL_LOOKUP_LIMIT = 100;
 const LIVE_TABLE_LIMIT_OPTIONS = [20, 50, 100];
@@ -94,6 +95,13 @@ const LIVE_TABLES = {
     title: "SQL live контрагенти",
     subtitle: "one_c_mirror.crm_counterparties",
     searchPlaceholder: "код, назва, телефон, email або ЄДРПОУ"
+  },
+  warehouses: {
+    endpoint: "/api/live/warehouses",
+    defaultLimit: 20,
+    title: "SQL live склади",
+    subtitle: "one_c_mirror.crm_warehouses",
+    searchPlaceholder: "код або назва складу"
   }
 };
 const serverSync = {
@@ -116,6 +124,20 @@ const liveProductLookup = {
   items: [],
   total: 0,
   limit: LIVE_PRODUCT_LOOKUP_LIMIT,
+  offset: 0,
+  loading: false,
+  error: "",
+  source: "",
+  fallback: false,
+  requestId: 0,
+  timer: null,
+  lastLoadedAt: ""
+};
+const liveCustomerLookup = {
+  query: "",
+  items: [],
+  total: 0,
+  limit: LIVE_CUSTOMER_LOOKUP_LIMIT,
   offset: 0,
   loading: false,
   error: "",
@@ -874,6 +896,7 @@ function normalizeLiveTableItem(kind, item) {
   if (kind === "products") return normalizeProduct(item);
   if (kind === "prices") return normalizeLivePrice(item);
   if (kind === "counterparties") return normalizeLiveCounterparty(item);
+  if (kind === "warehouses") return normalizeLiveWarehouse(item);
   return item || {};
 }
 
@@ -927,6 +950,19 @@ function normalizeLiveCounterparty(row) {
     sourceFile: textField(source, ["sourceFile", "source_file"]),
     importedAt: textField(source, ["importedAt", "imported_at"]),
     isDeleted: Boolean(source.isDeleted ?? source.is_deleted),
+    source: textField(source, ["source"], "crm-sql-live")
+  };
+}
+
+function normalizeLiveWarehouse(row) {
+  const source = row || {};
+  const warehouseCode = textField(source, ["warehouseCode", "warehouse_code", "code", "id"]);
+  return {
+    id: textField(source, ["id", "warehouseCode", "warehouse_code", "code"], warehouseCode),
+    warehouseCode,
+    warehouseName: textField(source, ["warehouseName", "warehouse_name", "name"], "Склад SQL"),
+    sourceFile: textField(source, ["sourceFile", "source_file"]),
+    importedAt: textField(source, ["importedAt", "imported_at"]),
     source: textField(source, ["source"], "crm-sql-live")
   };
 }
@@ -1463,6 +1499,213 @@ function renderProductLookupOptions() {
     status.classList.toggle("good", productLookupStatusClass() === "good");
     status.classList.toggle("warn", productLookupStatusClass() === "warn");
   }
+}
+
+function liveCounterpartyIdentity(counterparty) {
+  return String(
+    counterparty?.counterpartyCode
+    || counterparty?.sqlId
+    || counterparty?.id
+    || counterparty?.phone
+    || counterparty?.email
+    || counterparty?.name
+    || ""
+  ).trim();
+}
+
+function customerFromLiveCounterparty(row) {
+  const counterparty = normalizeLiveCounterparty(row);
+  const identity = liveCounterpartyIdentity(counterparty) || `live-${Date.now()}`;
+  return normalizeCustomer({
+    id: String(identity).startsWith("sql-") ? identity : `sql-${identity}`,
+    sqlId: counterparty.sqlId || counterparty.id,
+    counterpartyCode: counterparty.counterpartyCode || counterparty.id,
+    name: counterparty.name || counterparty.fullName,
+    phone: counterparty.phone,
+    email: counterparty.email,
+    loyalty: "standard",
+    contracts: [],
+    settlements: [],
+    balance: 0,
+    balanceCurrency: "UAH",
+    source: "sql-live",
+    exportStatus: "imported",
+    note: [counterparty.taxId, counterparty.sourceModule, counterparty.sourceFile].filter(Boolean).join(" · ")
+  });
+}
+
+function customerIdentityKeys(customer) {
+  return [
+    customer?.id,
+    customer?.counterpartyCode,
+    customer?.sqlId,
+    customer?.phone,
+    customer?.email
+  ].map(normalizeScanText).filter(Boolean);
+}
+
+function rememberLiveCustomer(customer) {
+  const normalized = normalizeCustomer(customer);
+  const keys = new Set(customerIdentityKeys(normalized));
+  const existing = state.customers.find((item) => customerIdentityKeys(item).some((key) => keys.has(key)));
+  if (!existing) {
+    state.customers.unshift(normalized);
+    return normalized;
+  }
+  if (existing.source === "b2c") return existing;
+  Object.assign(existing, {
+    ...existing,
+    ...normalized,
+    loyalty: existing.loyalty || normalized.loyalty,
+    contracts: existing.contracts?.length ? existing.contracts : normalized.contracts,
+    settlements: existing.settlements?.length ? existing.settlements : normalized.settlements,
+    exportStatus: "imported"
+  });
+  return existing;
+}
+
+function customerSearchPool() {
+  const byKey = new Map();
+  const add = (customer) => {
+    const normalized = normalizeCustomer(customer);
+    const key = customerIdentityKeys(normalized)[0] || normalized.id;
+    if (key && !byKey.has(key)) byKey.set(key, normalized);
+  };
+  state.customers.forEach(add);
+  liveCustomerLookup.items.forEach(add);
+  liveTable("counterparties").items.map(customerFromLiveCounterparty).forEach(add);
+  return Array.from(byKey.values());
+}
+
+function currentCustomerLookupItems() {
+  const query = String(state.checkout?.customerSearch || "").trim();
+  const queryKey = normalizeScanText(query);
+  const liveKey = normalizeScanText(liveCustomerLookup.query);
+  const pool = customerSearchPool();
+  if (!query) {
+    return pool.slice(0, LIVE_CUSTOMER_LOOKUP_LIMIT);
+  }
+  const localMatches = state.customers.filter((customer) => customerMatchesQuery(customer, query));
+  const liveMatches = serverModeEnabled() && queryKey === liveKey && liveCustomerLookup.source
+    ? liveCustomerLookup.items
+    : [];
+  const merged = new Map();
+  [...localMatches, ...liveMatches].forEach((customer) => {
+    const normalized = normalizeCustomer(customer);
+    const key = customerIdentityKeys(normalized)[0] || normalized.id;
+    if (key && !merged.has(key)) merged.set(key, normalized);
+  });
+  return Array.from(merged.values()).slice(0, LIVE_CUSTOMER_LOOKUP_LIMIT);
+}
+
+function customerLookupStatusText() {
+  const query = String(state.checkout?.customerSearch || "").trim();
+  if (!query) return serverModeEnabled()
+    ? "Live API готовий: введіть ім'я, телефон, код або email клієнта."
+    : "Fallback local/demo: тільки локальні B2C-картки.";
+  if (liveCustomerLookup.loading) return "Live API: шукаю клієнтів у SQL...";
+  if (serverModeEnabled() && !liveCustomerLookup.error && liveCustomerLookup.source) {
+    if (!liveCustomerLookup.items.length) return "Live API: клієнтів за цим пошуком не знайдено";
+    return `Live API: ${liveCustomerLookup.items.length} з ${liveCustomerLookup.total} клієнтів · limit ${liveCustomerLookup.limit}`;
+  }
+  if (liveCustomerLookup.error) return serverModeEnabled()
+    ? `Live API: ${liveCustomerLookup.error}. Повний список у браузер не підмішується.`
+    : `Fallback local/demo: ${liveCustomerLookup.error}`;
+  return `Локально: ${currentCustomerLookupItems().length} карток`;
+}
+
+function customerLookupStatusClass() {
+  if (liveCustomerLookup.loading) return "warn";
+  if (serverModeEnabled() && !liveCustomerLookup.error && liveCustomerLookup.source) return "good";
+  return "warn";
+}
+
+function renderCustomerLookupOptions() {
+  const datalist = document.getElementById("customer-options");
+  if (datalist) {
+    datalist.innerHTML = currentCustomerLookupItems()
+      .map((customer) => `<option value="${escapeHtml(customerLookupValue(customer))}"></option>`)
+      .join("");
+  }
+  const status = document.querySelector("[data-customer-lookup-status]");
+  if (status) {
+    status.textContent = customerLookupStatusText();
+    status.classList.toggle("good", customerLookupStatusClass() === "good");
+    status.classList.toggle("warn", customerLookupStatusClass() === "warn");
+  }
+}
+
+async function fetchLiveCustomers({ search = "", limit = LIVE_CUSTOMER_LOOKUP_LIMIT, offset = 0 } = {}) {
+  const params = new URLSearchParams();
+  if (search) params.set("search", search);
+  params.set("limit", String(Math.max(1, Math.min(100, Number(limit || LIVE_CUSTOMER_LOOKUP_LIMIT)))));
+  params.set("offset", String(Math.max(0, Number(offset || 0))));
+  const payload = await fetchJson(`/api/live/counterparties?${params.toString()}`);
+  const items = payloadItems(payload).map(customerFromLiveCounterparty);
+  markServerOnline(payload);
+  return { ...payload, items };
+}
+
+async function queryLiveCustomers({ search = "", limit = LIVE_CUSTOMER_LOOKUP_LIMIT, offset = 0 } = {}) {
+  const payload = await fetchLiveCustomers({ search, limit, offset });
+  liveCustomerLookup.items = payload.items;
+  liveCustomerLookup.total = Number(payload.total ?? payload.items.length);
+  liveCustomerLookup.limit = Number(payload.limit || limit || LIVE_CUSTOMER_LOOKUP_LIMIT);
+  liveCustomerLookup.offset = Number(payload.offset || offset || 0);
+  liveCustomerLookup.query = search || "";
+  liveCustomerLookup.source = payload.source || payload.sourceDetail || "crm-sql-live";
+  liveCustomerLookup.fallback = Boolean(payload.fallback);
+  liveCustomerLookup.error = "";
+  liveCustomerLookup.lastLoadedAt = nowIso();
+  return payload;
+}
+
+function queueLiveCustomerLookup(value) {
+  const query = String(value || "").trim();
+  window.clearTimeout(liveCustomerLookup.timer);
+  liveCustomerLookup.query = query;
+  if (!query) {
+    liveCustomerLookup.items = [];
+    liveCustomerLookup.total = 0;
+    liveCustomerLookup.loading = false;
+    liveCustomerLookup.error = "";
+    liveCustomerLookup.source = "";
+    renderCustomerLookupOptions();
+    return;
+  }
+  if (!serverModeEnabled()) {
+    liveCustomerLookup.items = state.customers.filter((customer) => customerMatchesQuery(customer, query)).slice(0, LIVE_CUSTOMER_LOOKUP_LIMIT);
+    liveCustomerLookup.total = liveCustomerLookup.items.length;
+    liveCustomerLookup.loading = false;
+    liveCustomerLookup.error = "сервер не налаштовано";
+    liveCustomerLookup.source = "local-demo";
+    renderCustomerLookupOptions();
+    return;
+  }
+  liveCustomerLookup.items = [];
+  liveCustomerLookup.loading = true;
+  liveCustomerLookup.error = "";
+  liveCustomerLookup.source = "";
+  const requestId = liveCustomerLookup.requestId + 1;
+  liveCustomerLookup.requestId = requestId;
+  renderCustomerLookupOptions();
+  liveCustomerLookup.timer = window.setTimeout(async () => {
+    try {
+      await queryLiveCustomers({ search: query, limit: LIVE_CUSTOMER_LOOKUP_LIMIT, offset: 0 });
+    } catch (error) {
+      if (liveCustomerLookup.requestId !== requestId) return;
+      liveCustomerLookup.items = [];
+      liveCustomerLookup.total = 0;
+      liveCustomerLookup.error = String(error?.message || error || "CRM SQL API недоступний");
+      liveCustomerLookup.source = "";
+      markServerOffline(error);
+    } finally {
+      if (liveCustomerLookup.requestId === requestId) {
+        liveCustomerLookup.loading = false;
+        renderCustomerLookupOptions();
+      }
+    }
+  }, 250);
 }
 
 function findStockedLiveLookupProduct(value) {
@@ -2355,7 +2598,7 @@ function productMatchesQuery(product, query) {
 function customerMatchesQuery(customer, query) {
   const raw = normalizeScanText(query);
   if (!raw) return true;
-  return normalizeScanText(`${customer.name} ${customer.phone} ${customer.id} ${LOYALTY_LABELS[customer.loyalty] || customer.loyalty}`).includes(raw);
+  return normalizeScanText(`${customer.name} ${customer.phone} ${customer.email} ${customer.counterpartyCode} ${customer.sqlId} ${customer.id} ${LOYALTY_LABELS[customer.loyalty] || customer.loyalty}`).includes(raw);
 }
 
 function findProductByScan(value) {
@@ -2384,9 +2627,11 @@ function findProductForSale(value) {
 function findCustomerByLookup(value) {
   const raw = normalizeScanText(value);
   if (!raw) return null;
-  return state.customers.find((customer) => normalizeScanText(customerLookupValue(customer)) === raw)
-    || state.customers.find((customer) => normalizeScanText(customer.id) === raw)
-    || state.customers.find((customer) => customerMatchesQuery(customer, value))
+  const pool = customerSearchPool();
+  return pool.find((customer) => normalizeScanText(customerLookupValue(customer)) === raw)
+    || pool.find((customer) => normalizeScanText(customer.id) === raw)
+    || pool.find((customer) => normalizeScanText(customer.counterpartyCode) === raw)
+    || pool.find((customer) => customerMatchesQuery(customer, value))
     || null;
 }
 
@@ -3080,6 +3325,7 @@ function renderCheckoutPanel(full = false) {
       </section>
     `;
   }
+  if (serverModeEnabled()) ensureLiveTableLoaded("counterparties");
   const lines = cartLines();
   const subtotal = receiptSubtotal(lines);
   const loyalDiscount = loyaltyDiscount(lines);
@@ -3096,7 +3342,7 @@ function renderCheckoutPanel(full = false) {
         <span class="pill ${openShift() ? "good" : "danger"}">${openShift() ? "каса відкрита" : "відкрийте касу"}</span>
       </div>
       <form class="form-grid checkout-form" data-action="create-receipt">
-        <label class="field wide"><span>Покупець</span><input name="customerSearch" data-customer-lookup list="customer-options" value="${escapeHtml(customerLookup)}" autocomplete="off" placeholder="ім'я або телефон з довідника"><datalist id="customer-options">${state.customers.map((item) => `<option value="${escapeHtml(customerLookupValue(item))}"></option>`).join("")}</datalist></label>
+        <label class="field wide"><span>Покупець</span><input name="customerSearch" data-customer-lookup list="customer-options" value="${escapeHtml(customerLookup)}" autocomplete="off" placeholder="ім'я, телефон, код або email з SQL"><datalist id="customer-options">${currentCustomerLookupItems().map((item) => `<option value="${escapeHtml(customerLookupValue(item))}"></option>`).join("")}</datalist><small class="lookup-status ${customerLookupStatusClass()}" data-customer-lookup-status>${escapeHtml(customerLookupStatusText())}</small></label>
         <label class="field"><span>Оплата</span><select name="paymentMethod" data-checkout-field>${["cash", "card", "bank"].map((method) => option(method, paymentLabel(method), method === state.checkout.paymentMethod)).join("")}</select></label>
         <label class="field wide"><span>Товар із залишком / штрихкод / QR</span><input name="search" data-product-lookup list="product-options" value="${escapeHtml(state.checkout.search)}" autocomplete="off" placeholder="назва, SKU, штрихкод або QR із залишком на Склад №1"><datalist id="product-options">${productLookupItems.map((product) => `<option value="${escapeHtml(productLookupValue(product))}"></option>`).join("")}</datalist><small class="lookup-status ${productLookupStatusClass()}" data-product-lookup-status>${escapeHtml(productLookupStatusText())}</small></label>
         <div class="field lookup-action"><span>Додати</span><button class="secondary" type="button" data-add-selected-product>Додати товар</button></div>
@@ -3693,18 +3939,42 @@ function renderLiveCounterpartiesTable() {
   return `
     <div class="table-wrap">
       <table>
-        <thead><tr><th>counterparty_code</th><th>Контрагент</th><th>Контакти</th><th>Податковий код</th><th>Статус</th><th>Джерело</th></tr></thead>
+        <thead><tr><th>counterparty_code</th><th>Контрагент</th><th>Контакти</th><th>Податковий код</th><th>Статус</th><th>Джерело</th><th>Дії</th></tr></thead>
         <tbody>
-          ${table.items.map((customer) => `
+          ${table.items.map((counterparty) => {
+            const customer = customerFromLiveCounterparty(counterparty);
+            return `
+              <tr>
+                <td>${escapeHtml(counterparty.counterpartyCode || counterparty.id)}<br><span class="muted">${escapeHtml(counterparty.sqlId || "-")}</span></td>
+                <td><strong>${escapeHtml(counterparty.name)}</strong><br><span class="muted">${escapeHtml(counterparty.fullName || "-")}</span></td>
+                <td>${escapeHtml(counterparty.phone || "-")}<br><span class="muted">${escapeHtml(counterparty.email || "-")}</span></td>
+                <td>${escapeHtml(counterparty.taxId || "-")}</td>
+                <td><span class="pill ${counterparty.isDeleted ? "danger" : "good"}">${counterparty.isDeleted ? "видалено в 1C" : "активний"}</span></td>
+                <td>${escapeHtml(counterparty.sourceFile || counterparty.sourceModule || "crm-sql-live")}<br><span class="muted">${escapeHtml(counterparty.importedAt || "-")}</span></td>
+                <td>${canDo("sale_create") ? `<button class="secondary" type="button" data-select-live-customer="${escapeHtml(customer.id)}">У продаж</button>` : ""}</td>
+              </tr>
+            `;
+          }).join("") || `<tr><td colspan="7" class="muted">${table.loading ? "Завантаження..." : table.error ? escapeHtml(table.error) : "Немає контрагентів на цій сторінці."}</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderLiveWarehousesTable() {
+  const table = liveTable("warehouses");
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>warehouse_code</th><th>Склад</th><th>Джерело</th></tr></thead>
+        <tbody>
+          ${table.items.map((warehouse) => `
             <tr>
-              <td>${escapeHtml(customer.counterpartyCode || customer.id)}<br><span class="muted">${escapeHtml(customer.sqlId || "-")}</span></td>
-              <td><strong>${escapeHtml(customer.name)}</strong><br><span class="muted">${escapeHtml(customer.fullName || "-")}</span></td>
-              <td>${escapeHtml(customer.phone || "-")}<br><span class="muted">${escapeHtml(customer.email || "-")}</span></td>
-              <td>${escapeHtml(customer.taxId || "-")}</td>
-              <td><span class="pill ${customer.isDeleted ? "danger" : "good"}">${customer.isDeleted ? "видалено в 1C" : "активний"}</span></td>
-              <td>${escapeHtml(customer.sourceFile || customer.sourceModule || "crm-sql-live")}<br><span class="muted">${escapeHtml(customer.importedAt || "-")}</span></td>
+              <td>${escapeHtml(warehouse.warehouseCode || warehouse.id || "-")}</td>
+              <td><strong>${escapeHtml(warehouse.warehouseName || "-")}</strong></td>
+              <td>${escapeHtml(warehouse.sourceFile || warehouse.source || "crm-sql-live")}<br><span class="muted">${escapeHtml(warehouse.importedAt || "-")}</span></td>
             </tr>
-          `).join("") || `<tr><td colspan="6" class="muted">${table.loading ? "Завантаження..." : table.error ? escapeHtml(table.error) : "Немає контрагентів на цій сторінці."}</td></tr>`}
+          `).join("") || `<tr><td colspan="3" class="muted">${table.loading ? "Завантаження..." : table.error ? escapeHtml(table.error) : "Немає складів на цій сторінці."}</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -3715,6 +3985,7 @@ function renderCatalog() {
   setTitle("Товари магазину");
   ensureLiveTableLoaded("products");
   ensureLiveTableLoaded("prices");
+  ensureLiveTableLoaded("warehouses");
   return `
     <section class="stacked-panels">
       <article class="panel">
@@ -3724,6 +3995,10 @@ function renderCatalog() {
       <article class="panel">
         ${renderLiveTableToolbar("prices")}
         ${renderLivePricesTable()}
+      </article>
+      <article class="panel">
+        ${renderLiveTableToolbar("warehouses")}
+        ${renderLiveWarehousesTable()}
       </article>
       <article class="panel">
         <div class="split">
@@ -3754,6 +4029,10 @@ function renderCustomers() {
   const canCreateCustomer = canDo("customer_create");
   return `
     <section class="stacked-panels">
+      <article class="panel">
+        ${renderLiveTableToolbar("counterparties")}
+        ${renderLiveCounterpartiesTable()}
+      </article>
       ${canCreateCustomer ? `<article class="panel">
         <div class="split">
           <div>
@@ -3776,8 +4055,8 @@ function renderCustomers() {
       <article class="panel">
         <div class="split">
           <div>
-            <p class="eyebrow">Клієнти і лояльність</p>
-            <h2>B2C.5 Клієнти</h2>
+            <p class="eyebrow">B2C local/cache</p>
+            <h2>Локальні B2C і вибрані SQL-клієнти</h2>
           </div>
           <div class="panel-actions">
             <span class="pill">${state.customers.length} карток</span>
@@ -3806,10 +4085,6 @@ function renderCustomers() {
             </tbody>
           </table>
         </div>
-      </article>
-      <article class="panel">
-        ${renderLiveTableToolbar("counterparties")}
-        ${renderLiveCounterpartiesTable()}
       </article>
     </section>
   `;
@@ -4663,15 +4938,37 @@ function selectCustomer(customerId) {
   render();
 }
 
+function selectLiveCustomer(customerId) {
+  const target = normalizeScanText(customerId);
+  const candidates = [
+    ...liveCustomerLookup.items,
+    ...liveTable("counterparties").items.map(customerFromLiveCounterparty)
+  ];
+  const found = candidates.find((customer) => (
+    normalizeScanText(customer.id) === target
+    || normalizeScanText(customer.counterpartyCode) === target
+    || normalizeScanText(customer.sqlId) === target
+  ));
+  if (!found) return alert("SQL-клієнта не знайдено на поточній сторінці. Повторіть пошук.");
+  const customer = rememberLiveCustomer(found);
+  state.checkout.customerId = customer.id;
+  state.checkout.customerSearch = customerLookupValue(customer);
+  state.currentView = "pos";
+  audit(`SQL-клієнта ${customer.name} вибрано для продажу`);
+  saveState();
+  render();
+}
+
 function selectCustomerFromLookup(value, renderAfter = true) {
   const query = String(value || "").trim();
   state.checkout.customerSearch = query;
   const customer = findCustomerByLookup(query);
   if (customer) {
-    const changed = state.checkout.customerId !== customer.id;
-    state.checkout.customerId = customer.id;
-    state.checkout.customerSearch = customerLookupValue(customer);
-    if (changed) audit(`Клієнта ${customer.name} вибрано для продажу`);
+    const selected = rememberLiveCustomer(customer);
+    const changed = state.checkout.customerId !== selected.id;
+    state.checkout.customerId = selected.id;
+    state.checkout.customerSearch = customerLookupValue(selected);
+    if (changed) audit(`Клієнта ${selected.name} вибрано для продажу`);
   }
   saveState();
   if (renderAfter) render();
@@ -5390,6 +5687,7 @@ function updateCheckoutField(target) {
   if (target.dataset.customerLookup !== undefined) {
     state.checkout.customerSearch = target.value;
     saveState();
+    queueLiveCustomerLookup(target.value);
     return;
   }
   if (target.dataset.checkoutField !== undefined) {
@@ -5541,6 +5839,8 @@ document.addEventListener("click", (event) => {
   if (toggleEmployeeButton) return toggleEmployeeStatus(toggleEmployeeButton.dataset.toggleEmployee);
   const selectCustomerButton = event.target.closest("[data-select-customer]");
   if (selectCustomerButton) return selectCustomer(selectCustomerButton.dataset.selectCustomer);
+  const selectLiveCustomerButton = event.target.closest("[data-select-live-customer]");
+  if (selectLiveCustomerButton) return selectLiveCustomer(selectLiveCustomerButton.dataset.selectLiveCustomer);
   const cancelSaleConfirmButton = event.target.closest("[data-cancel-sale-confirm]");
   if (cancelSaleConfirmButton) return cancelSalePaymentConfirm();
   const cancelReturnConfirmButton = event.target.closest("[data-cancel-return-confirm]");
