@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.08.2";
-const APP_BUILD = "20260608-b2c-live-stock-directory";
-const APP_RELEASED_AT = "2026-06-08 13:11:11 +03:00";
+const APP_VERSION = "2026.06.08.3";
+const APP_BUILD = "20260608-b2c-live-serial-stock";
+const APP_RELEASED_AT = "2026-06-08 14:44:01 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SIDEBAR_COLLAPSED_KEY = "retail-crm-b2c-sidebar-collapsed-v1";
@@ -72,7 +72,7 @@ const DEFAULT_SYSTEM_SETTINGS = {
 const LIVE_PRODUCT_LOOKUP_LIMIT = 20;
 const LIVE_CUSTOMER_LOOKUP_LIMIT = 20;
 const LIVE_STOCK_LOOKUP_LIMIT = 20;
-const LIVE_SERIAL_LOOKUP_LIMIT = 100;
+const LIVE_SERIAL_LOOKUP_LIMIT = 20;
 const LIVE_TABLE_LIMIT_OPTIONS = [20, 50, 100];
 const LIVE_TABLES = {
   products: {
@@ -558,7 +558,18 @@ const seedState = {
   selectedCashierId: "e-004",
   selectedReturnId: "",
   stockUi: {
-    serialProductId: ""
+    serialProductId: "",
+    serialRows: [],
+    serialLimit: LIVE_SERIAL_LOOKUP_LIMIT,
+    serialOffset: 0,
+    serialTotal: 0,
+    serialHasMore: false,
+    serialNextOffset: null,
+    serialLoading: false,
+    serialError: "",
+    serialSource: "",
+    serialLastLoadedAt: "",
+    serialProductCode: ""
   },
   liveTables: {
     products: { search: "", limit: 20, offset: 0, total: 0, totalExact: false, hasMore: false, nextOffset: null, items: [], loading: false, error: "", source: "", lastLoadedAt: "" },
@@ -765,6 +776,16 @@ function normalizeState(input) {
     ...clone(seedState.stockUi),
     ...(next.stockUi || {})
   };
+  next.stockUi.serialRows = Array.isArray(next.stockUi.serialRows)
+    ? next.stockUi.serialRows.map(normalizeSerialStock)
+    : [];
+  next.stockUi.serialLimit = clampLiveLimit(next.stockUi.serialLimit, LIVE_SERIAL_LOOKUP_LIMIT);
+  next.stockUi.serialOffset = Math.max(0, Number(next.stockUi.serialOffset || 0));
+  next.stockUi.serialTotal = Math.max(0, Number(next.stockUi.serialTotal || 0));
+  next.stockUi.serialHasMore = Boolean(next.stockUi.serialHasMore);
+  next.stockUi.serialNextOffset = next.stockUi.serialNextOffset === null || next.stockUi.serialNextOffset === undefined
+    ? null
+    : Math.max(0, Number(next.stockUi.serialNextOffset || 0));
   next.liveTables = normalizeLiveTables(next.liveTables);
   const inputRoleSchema = next.rolePermissionSchema || "";
   next.rolePermissions = normalizeRolePermissions(next.rolePermissions, inputRoleSchema);
@@ -1879,14 +1900,16 @@ async function queryLiveStockForProduct(product) {
   return { ...payload, items };
 }
 
-async function queryLiveSerialsForProduct(product) {
+async function queryLiveSerialsForProduct(product, options = {}) {
   const productCode = liveProductCode(product);
   if (!productCode) throw new Error("productCode товару відсутній");
+  const limit = clampLiveLimit(options.limit ?? LIVE_SERIAL_LOOKUP_LIMIT, LIVE_SERIAL_LOOKUP_LIMIT);
+  const offset = Math.max(0, Number(options.offset || 0));
   const params = new URLSearchParams({
     productCode,
     warehouseCode: SQL_MAIN_WAREHOUSE_CODE,
-    limit: String(LIVE_SERIAL_LOOKUP_LIMIT),
-    offset: "0"
+    limit: String(limit),
+    offset: String(offset)
   });
   const payload = await fetchJson(`/api/live/serial-stock?${params.toString()}`);
   const items = payloadItems(payload)
@@ -1903,18 +1926,67 @@ async function queryLiveSerialsForProduct(product) {
   return { ...payload, items };
 }
 
-function localSerialOptionsForProduct(product) {
-  if (!isWeaponProduct(product)) return [];
-  return state.serialStock
-    .filter((row) => (
-      String(row.warehouseCode) === SQL_MAIN_WAREHOUSE_CODE
-      && Number(row.quantity || 0) > 0
-      && (
-        row.productId === product.id
-        || (row.productCode && row.productCode === liveProductCode(product))
-      )
-    ))
-    .map(normalizeSerialStock);
+async function loadStockSerialRows(offset = 0) {
+  const product = productById(state.stockUi.serialProductId);
+  if (!product?.id || !isWeaponProduct(product)) return;
+  const limit = clampLiveLimit(state.stockUi.serialLimit, LIVE_SERIAL_LOOKUP_LIMIT);
+  state.stockUi.serialLoading = true;
+  state.stockUi.serialError = "";
+  state.stockUi.serialLimit = limit;
+  state.stockUi.serialOffset = Math.max(0, Number(offset || 0));
+  state.stockUi.serialProductCode = liveProductCode(product);
+  saveState({ server: false });
+  render();
+  try {
+    const payload = await queryLiveSerialsForProduct(product, {
+      limit,
+      offset: state.stockUi.serialOffset
+    });
+    const items = payload.items.slice(0, limit);
+    state.stockUi.serialRows = items;
+    state.stockUi.serialTotal = liveTableTotal(payload, items);
+    state.stockUi.serialHasMore = typeof payload.hasMore === "boolean" ? payload.hasMore : items.length >= limit;
+    state.stockUi.serialNextOffset = payload.nextOffset === null || payload.nextOffset === undefined ? null : Math.max(0, Number(payload.nextOffset || 0));
+    state.stockUi.serialSource = payload.sourceDetail || payload.source || "crm-sql-live";
+    state.stockUi.serialLastLoadedAt = payload.loadedAt || nowIso();
+    state.stockUi.serialError = "";
+    markServerOnline(payload);
+  } catch (error) {
+    state.stockUi.serialRows = [];
+    state.stockUi.serialTotal = 0;
+    state.stockUi.serialHasMore = false;
+    state.stockUi.serialNextOffset = null;
+    state.stockUi.serialSource = "";
+    state.stockUi.serialError = String(error?.message || error || "CRM SQL serial API недоступний");
+    markServerOffline(error);
+  } finally {
+    state.stockUi.serialLoading = false;
+    saveState({ server: false });
+    render();
+  }
+}
+
+function resetStockSerialRows(productId = "") {
+  state.stockUi.serialProductId = productId;
+  state.stockUi.serialRows = [];
+  state.stockUi.serialOffset = 0;
+  state.stockUi.serialTotal = 0;
+  state.stockUi.serialHasMore = false;
+  state.stockUi.serialNextOffset = null;
+  state.stockUi.serialLoading = false;
+  state.stockUi.serialError = "";
+  state.stockUi.serialSource = "";
+  state.stockUi.serialLastLoadedAt = "";
+  state.stockUi.serialProductCode = "";
+}
+
+function pageStockSerialRows(direction) {
+  const limit = clampLiveLimit(state.stockUi.serialLimit, LIVE_SERIAL_LOOKUP_LIMIT);
+  const nextOffset = direction > 0 && state.stockUi.serialNextOffset !== null && state.stockUi.serialNextOffset !== undefined
+    ? Math.max(0, Number(state.stockUi.serialNextOffset || 0))
+    : Math.max(0, Number(state.stockUi.serialOffset || 0) + Number(direction || 0) * limit);
+  if (nextOffset === state.stockUi.serialOffset && direction < 0) return;
+  return loadStockSerialRows(nextOffset);
 }
 
 function normalizeLivePayloadItems(kind, payload) {
@@ -2525,16 +2597,6 @@ function productCategoryText(product) {
 function isWeaponProduct(product) {
   const text = normalizeScanText(productCategoryText(product));
   return text.includes("збро") || text.includes("оруж") || text.includes("weapon") || text.includes("firearm");
-}
-
-function serialRowsForSelectedWeaponProduct(productId) {
-  const product = productById(productId);
-  if (!product?.id || !isWeaponProduct(product)) return [];
-  return state.serialStock.filter((row) => (
-    row.productId === product.id
-    || (product.productCode && row.productCode === product.productCode)
-    || (product.sku && row.productCode === product.sku)
-  ));
 }
 
 function productWarehouseStockFallback(product) {
@@ -3707,11 +3769,17 @@ function renderStock() {
     ? state.stockUi.serialProductId
     : "";
   const selectedSerialProduct = selectedSerialProductId ? productById(selectedSerialProductId) : null;
-  const serialRows = selectedSerialProductId ? serialRowsForSelectedWeaponProduct(selectedSerialProductId) : [];
+  const serialRows = selectedSerialProductId ? state.stockUi.serialRows : [];
+  const serialOffset = Math.max(0, Number(state.stockUi.serialOffset || 0));
+  const serialLimit = clampLiveLimit(state.stockUi.serialLimit, LIVE_SERIAL_LOOKUP_LIMIT);
+  const serialTotal = Math.max(0, Number(state.stockUi.serialTotal || 0));
+  const serialFrom = serialRows.length ? serialOffset + 1 : 0;
+  const serialTo = serialRows.length ? serialOffset + serialRows.length : 0;
+  const serialTotalText = serialTotal ? `з ${serialTotal}` : (state.stockUi.serialHasMore ? "є ще" : "");
   const serialEmptyText = !weaponProducts.length
     ? "У довіднику немає товарів категорії Зброя."
     : selectedSerialProductId
-      ? "Для вибраного товару категорії Зброя серійних залишків ще не імпортовано з SQL."
+      ? state.stockUi.serialError || "Для вибраного товару категорії Зброя live серійних залишків не знайдено."
       : "Виберіть товар із категорії Зброя, щоб підтягнути серійні номери.";
   return `
     <section class="stacked-panels">
@@ -3729,7 +3797,7 @@ function renderStock() {
       <article class="panel">
         <div class="split">
           <h2>Серійні номери</h2>
-          <span class="pill">${selectedSerialProductId ? `${serialRows.length} рядків з SQL` : "тільки Зброя"}</span>
+          <span class="pill ${state.stockUi.serialError ? "warn" : ""}">${selectedSerialProductId ? `${serialFrom}-${serialTo} ${serialTotalText}`.trim() : "тільки Зброя"}</span>
         </div>
         <div class="form-grid section-gap">
           <label class="field wide">
@@ -3741,10 +3809,18 @@ function renderStock() {
           </label>
           <div class="field">
             <span>Правило</span>
-            <small class="muted">Серійні номери не показуються без вибору товару з категорії Зброя.</small>
+            <small class="muted">Серійні номери читаються live тільки після вибору товару з категорії Зброя і тільки по ${escapeHtml(SQL_MAIN_WAREHOUSE_NAME)}.</small>
           </div>
         </div>
         ${selectedSerialProduct ? `<p class="muted">Вибрано: ${escapeHtml(selectedSerialProduct.productFullPath || selectedSerialProduct.productGroupPath || selectedSerialProduct.categoryPrimary || selectedSerialProduct.category)}</p>` : ""}
+        ${selectedSerialProduct ? `
+          <div class="toolbar">
+            <button class="secondary" type="button" data-stock-serial-refresh ${state.stockUi.serialLoading ? "disabled" : ""}>Оновити серії</button>
+            <button class="secondary" type="button" data-stock-serial-page="-1" ${state.stockUi.serialLoading || serialOffset <= 0 ? "disabled" : ""}>Назад</button>
+            <button class="secondary" type="button" data-stock-serial-page="1" ${state.stockUi.serialLoading || !state.stockUi.serialHasMore ? "disabled" : ""}>Вперед</button>
+            <span class="lookup-status ${state.stockUi.serialError ? "warn" : "good"}">${escapeHtml(state.stockUi.serialLoading ? "Завантаження live serial-stock..." : state.stockUi.serialError || `limit ${serialLimit} · склад ${SQL_MAIN_WAREHOUSE_CODE}`)}</span>
+          </div>
+        ` : ""}
         <div class="table-wrap">
           <table>
             <thead><tr><th>product_code</th><th>Товар</th><th>warehouse_code</th><th>Склад</th><th>Серійний номер</th><th>Кількість</th><th>Знак</th></tr></thead>
@@ -4565,7 +4641,7 @@ function prepareCheckoutLine(product) {
     warehouseName: SQL_MAIN_WAREHOUSE_NAME,
     warehouseStockQty: productWarehouseStockFallback(product),
     stockSource: product.retailStockQty ? "crm-sql-product-summary" : "local-fallback",
-    serialOptions: localSerialOptionsForProduct(product),
+    serialOptions: [],
     serialName: "",
     serialError: ""
   });
@@ -4613,9 +4689,8 @@ async function hydrateCheckoutLine(lineId) {
   }
   if (isWeaponProduct(product)) {
     try {
-      const serialPayload = serverModeEnabled()
-        ? await queryLiveSerialsForProduct(product)
-        : { items: localSerialOptionsForProduct(product), source: "local-fallback" };
+      if (!serverModeEnabled()) throw new Error("live serial API доступний тільки у server mode");
+      const serialPayload = await queryLiveSerialsForProduct(product);
       const latestLine = checkoutLineById(lineId);
       if (latestLine) {
         latestLine.serialOptions = serialPayload.items;
@@ -4630,12 +4705,11 @@ async function hydrateCheckoutLine(lineId) {
       markServerOffline(error);
       const latestLine = checkoutLineById(lineId);
       if (latestLine) {
-        const fallback = localSerialOptionsForProduct(product);
-        latestLine.serialOptions = fallback;
+        latestLine.serialOptions = [];
         latestLine.serialLoading = false;
-        latestLine.serialError = fallback.length
-          ? "live serial API недоступний, показано локальний fallback"
-          : String(error?.message || error || "serial stock unavailable");
+        latestLine.serialName = "";
+        latestLine.serialNumber = "";
+        latestLine.serialError = String(error?.message || error || "live serial stock unavailable");
       }
     }
   }
@@ -5892,6 +5966,10 @@ document.addEventListener("click", (event) => {
   if (liveRefreshButton) return refreshLiveTable(liveRefreshButton.dataset.liveRefresh);
   const livePageButton = event.target.closest("[data-live-table-page]");
   if (livePageButton) return pageLiveTable(livePageButton.dataset.liveTablePage, Number(livePageButton.dataset.liveDirection || 0));
+  const stockSerialRefreshButton = event.target.closest("[data-stock-serial-refresh]");
+  if (stockSerialRefreshButton) return loadStockSerialRows(0);
+  const stockSerialPageButton = event.target.closest("[data-stock-serial-page]");
+  if (stockSerialPageButton) return pageStockSerialRows(Number(stockSerialPageButton.dataset.stockSerialPage || 0));
   if (event.target.id === "reset-local-state") {
     state = clone(seedState);
     audit("Скинуто локальний стан B2C. Товари, клієнти, залишки й чеки очищені до нового SQL-імпорту.", "manager");
@@ -5934,9 +6012,11 @@ document.addEventListener("change", (event) => {
   if (event.target.dataset.checkoutScan !== undefined && event.target.value.trim()) scanCheckoutProduct(event.target.value);
   if (event.target.dataset.stockSerialProduct !== undefined) {
     const product = productById(event.target.value);
-    state.stockUi.serialProductId = product?.id && isWeaponProduct(product) ? product.id : "";
+    const productId = product?.id && isWeaponProduct(product) ? product.id : "";
+    resetStockSerialRows(productId);
     saveState();
     render();
+    if (productId) loadStockSerialRows(0);
   }
   if (event.target.dataset.inventoryActual !== undefined) {
     setInventoryActual(event.target.dataset.inventoryActual, event.target.value);

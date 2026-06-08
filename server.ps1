@@ -7,9 +7,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$AppVersion = "2026.06.08.2"
-$AppBuild = "20260608-b2c-live-stock-directory"
-$AppReleasedAt = "2026-06-08 13:11:11 +03:00"
+$AppVersion = "2026.06.08.3"
+$AppBuild = "20260608-b2c-live-serial-stock"
+$AppReleasedAt = "2026-06-08 14:44:01 +03:00"
 $RootDir = $PSScriptRoot
 $ResolvedDataDir = if ([System.IO.Path]::IsPathRooted($DataDir)) { $DataDir } else { Join-Path $RootDir $DataDir }
 $StatePath = Join-Path $ResolvedDataDir "retail-crm-state.json"
