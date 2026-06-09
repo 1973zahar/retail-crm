@@ -1375,9 +1375,16 @@ try {
         Send-Static $client $request
       }
     } catch {
-      Send-Json $client 500 @{ error = $_.Exception.Message }
+      try {
+        Send-Json $client 500 @{ error = $_.Exception.Message }
+      } catch {
+        Write-Host "Request failed before response could be sent: $($_.Exception.Message)"
+      }
     } finally {
-      $client.Close()
+      try {
+        $client.Close()
+      } catch {
+      }
     }
   }
 } finally {
