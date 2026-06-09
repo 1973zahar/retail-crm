@@ -25,17 +25,21 @@ Write-Host "Public URL: http://$PublicHost`:$Port/index.html"
 Write-Host "Data dir: $DataDir"
 
 $CanUseNode = $false
-try {
-  $NodeVersionOutput = & $NodePath --version 2>&1
-  if ($LASTEXITCODE -eq 0) {
-    $CanUseNode = $true
-    Write-Host "Node runtime: $NodeVersionOutput"
-  } else {
-    Write-Host "Node runtime is not usable on this server:"
-    Write-Host $NodeVersionOutput
+if ($NodePath -in @("server-powershell", "powershell", "disabled")) {
+  Write-Host "Node runtime disabled by NodePath=$NodePath; falling back to PowerShell TCP server."
+} else {
+  try {
+    $NodeVersionOutput = & $NodePath --version 2>&1
+    if ($LASTEXITCODE -eq 0) {
+      $CanUseNode = $true
+      Write-Host "Node runtime: $NodeVersionOutput"
+    } else {
+      Write-Host "Node runtime is not usable on this server:"
+      Write-Host $NodeVersionOutput
+    }
+  } catch {
+    Write-Host "Node runtime is not available: $($_.Exception.Message)"
   }
-} catch {
-  Write-Host "Node runtime is not available: $($_.Exception.Message)"
 }
 
 if ($CanUseNode) {

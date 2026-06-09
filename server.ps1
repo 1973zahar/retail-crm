@@ -327,6 +327,7 @@ function Get-NodeFetchExecutable {
   $candidates = @(
     $env:RETAIL_B2C_NODE_EXE,
     $env:NODE_EXE,
+    (Join-Path $RootDir ".runtime\node\bin\node.exe"),
     (Join-Path $RootDir "node.exe"),
     "C:\Program Files\nodejs\node.exe",
     "C:\Users\User\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe",
