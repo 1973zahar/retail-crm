@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.09.9";
-const APP_BUILD = "20260609-b2c-merged-sales-panel";
-const APP_RELEASED_AT = "2026-06-09 20:53:31 +03:00";
+const APP_VERSION = "2026.06.09.10";
+const APP_BUILD = "20260609-b2c-customer-select-sticky";
+const APP_RELEASED_AT = "2026-06-09 21:14:27 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SESSION_TOKEN_KEY = "retail-crm-b2c-session-token-v1";
@@ -3343,10 +3343,19 @@ function findCustomerByLookup(value) {
   const raw = normalizeScanText(value);
   if (!raw) return null;
   const pool = customerSearchPool();
+  return findExactCustomerByLookup(value)
+    || pool.find((customer) => customerMatchesQuery(customer, value))
+    || null;
+}
+
+function findExactCustomerByLookup(value) {
+  const raw = normalizeScanText(value);
+  if (!raw) return null;
+  const pool = customerSearchPool();
   return pool.find((customer) => normalizeScanText(customerLookupValue(customer)) === raw)
     || pool.find((customer) => normalizeScanText(customer.id) === raw)
     || pool.find((customer) => normalizeScanText(customer.counterpartyCode) === raw)
-    || pool.find((customer) => customerMatchesQuery(customer, value))
+    || pool.find((customer) => normalizeScanText(customer.sqlId) === raw)
     || null;
 }
 
@@ -4049,9 +4058,7 @@ function renderCheckoutPanel(full = false) {
   const loyalDiscount = loyaltyDiscount(lines);
   const total = checkoutTotal(lines);
   const customer = customerById(state.checkout.customerId);
-  const customerLookup = state.checkout.customerSearch && findCustomerByLookup(state.checkout.customerSearch)?.id === customer.id
-    ? state.checkout.customerSearch
-    : customerLookupValue(customer);
+  const customerLookup = state.checkout.customerSearch || customerLookupValue(customer);
   const productLookupItems = currentProductLookupItems();
   const selectedLookupProduct = findStockedLiveLookupProduct(state.checkout.search);
   const priceSelectionEnabled = canDo("price_select");
@@ -5878,7 +5885,7 @@ function selectLiveCustomer(customerId) {
 function selectCustomerFromLookup(value, renderAfter = true) {
   const query = String(value || "").trim();
   state.checkout.customerSearch = query;
-  const customer = findCustomerByLookup(query);
+  const customer = findExactCustomerByLookup(query) || findCustomerByLookup(query);
   if (customer) {
     const selected = rememberLiveCustomer(customer);
     const changed = state.checkout.customerId !== selected.id;
@@ -6613,6 +6620,21 @@ function updateCheckoutField(target) {
     return;
   }
   if (target.dataset.customerLookup !== undefined) {
+    const exactCustomer = findExactCustomerByLookup(target.value);
+    if (exactCustomer) {
+      const selected = rememberLiveCustomer(exactCustomer);
+      const changed = state.checkout.customerId !== selected.id;
+      state.checkout.customerId = selected.id;
+      state.checkout.customerSearch = customerLookupValue(selected);
+      window.clearTimeout(liveCustomerLookup.timer);
+      liveCustomerLookup.query = state.checkout.customerSearch;
+      liveCustomerLookup.loading = false;
+      liveCustomerLookup.error = "";
+      if (changed) audit(`Клієнта ${selected.name} вибрано для продажу`);
+      saveState();
+      render();
+      return;
+    }
     state.checkout.customerSearch = target.value;
     saveState();
     queueLiveCustomerLookup(target.value);

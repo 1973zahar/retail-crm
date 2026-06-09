@@ -27,9 +27,9 @@
     "dataDir": "data"
   },
   "currentApp": {
-    "build": "20260609-b2c-merged-sales-panel",
-    "version": "2026.06.09.9",
-    "releasedAt": "2026-06-09 20:53:31 +03:00",
+    "build": "20260609-b2c-customer-select-sticky",
+    "version": "2026.06.09.10",
+    "releasedAt": "2026-06-09 21:14:27 +03:00",
     "contractVersion": "2026.06.07-retail-live-api-1"
   },
   "sourceOfTruth": {
