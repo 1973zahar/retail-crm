@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.09.5";
-const APP_BUILD = "20260609-b2c-price-selector";
-const APP_RELEASED_AT = "2026-06-09 18:51:43 +03:00";
+const APP_VERSION = "2026.06.09.6";
+const APP_BUILD = "20260609-b2c-stock-lookup-all";
+const APP_RELEASED_AT = "2026-06-09 19:48:04 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SESSION_TOKEN_KEY = "retail-crm-b2c-session-token-v1";
@@ -71,7 +71,7 @@ const DEFAULT_SYSTEM_SETTINGS = {
   autoRefreshSeconds: 15,
   lastSavedAt: ""
 };
-const LIVE_PRODUCT_LOOKUP_LIMIT = 20;
+const LIVE_PRODUCT_LOOKUP_LIMIT = 100;
 const LIVE_PRODUCT_LOOKUP_CACHE_LIMIT = 1000;
 const LIVE_CUSTOMER_LOOKUP_LIMIT = 20;
 const LIVE_STOCK_LOOKUP_LIMIT = 20;
@@ -1893,22 +1893,32 @@ function cachedLiveLookupProducts() {
   return Array.from(new Set(liveProductLookupCache.values())).filter(productHasMainWarehouseStock);
 }
 
-function findCachedLiveLookupProduct(value) {
+function findExactCachedLiveLookupProduct(value) {
   const raw = normalizeScanText(value);
   if (!raw) return null;
   const direct = liveProductLookupCache.get(raw);
   if (direct && productHasMainWarehouseStock(direct)) return direct;
   return cachedLiveLookupProducts().find((product) => (
     normalizeScanText(productLookupValue(product)) === raw
-    || productMatchesQuery(product, value)
-    || productScanTargets(product).some((target) => raw.includes(target))
+    || productScanTargets(product).some((target) => target === raw)
   )) || null;
+}
+
+function findCachedLiveLookupProduct(value) {
+  const raw = normalizeScanText(value);
+  if (!raw) return null;
+  return findExactCachedLiveLookupProduct(value)
+    || cachedLiveLookupProducts().find((product) => (
+      productMatchesQuery(product, value)
+      || productScanTargets(product).some((target) => raw.includes(target))
+    ))
+    || null;
 }
 
 function liveProductLookupSearchTerm(value) {
   const raw = String(value || "").trim();
   if (!raw) return "";
-  const cached = findCachedLiveLookupProduct(raw);
+  const cached = findExactCachedLiveLookupProduct(raw);
   if (cached) return liveProductCode(cached) || cached.productCode || cached.sku || raw;
   const numericCodes = normalizeScanText(raw).match(/\d{5,}/g) || [];
   const longestNumericCode = numericCodes.sort((left, right) => right.length - left.length)[0];
@@ -2602,7 +2612,7 @@ function queueLiveProductLookup(value) {
     renderProductLookupOptions();
     return;
   }
-  const cached = findCachedLiveLookupProduct(query);
+  const cached = findExactCachedLiveLookupProduct(query);
   if (cached) {
     liveProductLookup.items = [cached];
     liveProductLookup.total = 1;
