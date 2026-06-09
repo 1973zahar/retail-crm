@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.09.6";
-const APP_BUILD = "20260609-b2c-stock-lookup-all";
-const APP_RELEASED_AT = "2026-06-09 19:48:04 +03:00";
+const APP_VERSION = "2026.06.09.7";
+const APP_BUILD = "20260609-b2c-fast-customer-search";
+const APP_RELEASED_AT = "2026-06-09 20:19:03 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SESSION_TOKEN_KEY = "retail-crm-b2c-session-token-v1";

@@ -11,9 +11,9 @@ try {
 } catch {
 }
 
-$AppVersion = "2026.06.09.6"
-$AppBuild = "20260609-b2c-stock-lookup-all"
-$AppReleasedAt = "2026-06-09 19:48:04 +03:00"
+$AppVersion = "2026.06.09.7"
+$AppBuild = "20260609-b2c-fast-customer-search"
+$AppReleasedAt = "2026-06-09 20:19:03 +03:00"
 $RootDir = $PSScriptRoot
 $ResolvedDataDir = if ([System.IO.Path]::IsPathRooted($DataDir)) { $DataDir } else { Join-Path $RootDir $DataDir }
 $StatePath = Join-Path $ResolvedDataDir "retail-crm-state.json"
@@ -280,6 +280,10 @@ function Invoke-CrmSqlApi([string]$Path, $Params) {
 function Get-ObjectPropertyValue($Object, [string[]]$Names, $Default = $null) {
   if (-not $Object) { return $Default }
   foreach ($name in $Names) {
+    if ($Object -is [System.Collections.IDictionary] -and $Object.Contains($name)) {
+      $value = $Object[$name]
+      if ($null -ne $value -and [string]$value -ne "") { return $value }
+    }
     $property = $Object.PSObject.Properties[$name]
     if ($property -and $null -ne $property.Value -and [string]$property.Value -ne "") {
       return $property.Value
@@ -807,6 +811,18 @@ function ConvertTo-LiveCounterparty($Row) {
   }
 }
 
+function Select-UniqueLiveCounterparties($Items) {
+  $seen = @{}
+  $unique = @()
+  foreach ($item in @($Items)) {
+    $key = (Get-TextValue $item @("counterpartyCode", "id", "sqlId", "name")).ToLowerInvariant()
+    if (-not $key -or $seen.ContainsKey($key)) { continue }
+    $seen[$key] = $true
+    $unique += $item
+  }
+  return $unique
+}
+
 function ConvertTo-LiveWarehouse($Row) {
   $warehouseCode = Get-TextValue $Row @("warehouseCode", "warehouse_code", "code", "id")
   return @{
@@ -896,10 +912,18 @@ function New-LiveProductPricesResponse($Params) {
 
 function New-LiveCounterpartiesResponse($Params) {
   $query = Get-LiveQueryParams $Params 20 100
-  $payload = Invoke-CrmSqlApi "/one-c-mirror/counterparties" $query.params
+  $search = Get-QueryValue $Params "search"
+  $path = if ($search) { "/one-c-mirror/counterparty-balances" } else { "/one-c-mirror/counterparties" }
+  $payload = Invoke-CrmSqlApi $path $query.params
   $items = @()
   foreach ($row in (Get-PayloadItems $payload)) { $items += ConvertTo-LiveCounterparty $row }
-  return New-CrmSqlEnvelope "/one-c-mirror/counterparties" $query $items $payload
+  $items = @(Select-UniqueLiveCounterparties $items)
+  if ($search) {
+    $payload | Add-Member -NotePropertyName total -NotePropertyValue @($items).Count -Force
+    $payload | Add-Member -NotePropertyName hasMore -NotePropertyValue $false -Force
+    $payload | Add-Member -NotePropertyName nextOffset -NotePropertyValue $null -Force
+  }
+  return New-CrmSqlEnvelope $path $query $items $payload
 }
 
 function New-LiveWarehousesResponse($Params) {

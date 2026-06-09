@@ -3,9 +3,9 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const APP_VERSION = "2026.06.09.6";
-const APP_BUILD = "20260609-b2c-stock-lookup-all";
-const APP_RELEASED_AT = "2026-06-09 19:48:04 +03:00";
+const APP_VERSION = "2026.06.09.7";
+const APP_BUILD = "20260609-b2c-fast-customer-search";
+const APP_RELEASED_AT = "2026-06-09 20:19:03 +03:00";
 const ROOT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const CRM_SQL_API_BASE_URL = String(process.env.CRM_SQL_API_BASE_URL || "http://192.168.0.166:3000").replace(/\/+$/, "");
 const CRM_SQL_API_TIMEOUT_MS = Math.max(1000, Number(process.env.CRM_SQL_API_TIMEOUT_MS || 30000));
@@ -891,6 +891,16 @@ function normalizeLiveCounterparty(row) {
   };
 }
 
+function uniqueLiveCounterparties(items) {
+  const seen = new Set();
+  return items.filter((item) => {
+    const key = textValue(item.counterpartyCode, item.id, item.sqlId, item.name).toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function normalizeLiveWarehouse(row) {
   const warehouseCode = textValue(row.warehouseCode, row.warehouse_code, row.code, row.id);
   return {
@@ -982,10 +992,14 @@ async function listLiveProductPrices(url) {
 
 async function listLiveCounterparties(url) {
   const query = liveQuery(url, 20, 100);
-  const pathName = "/one-c-mirror/counterparties";
+  const hasSearch = Boolean(String(query.search || "").trim());
+  const pathName = hasSearch ? "/one-c-mirror/counterparty-balances" : "/one-c-mirror/counterparties";
   const { payload } = await fetchCrmSql(pathName, query.params);
-  const items = payloadItems(payload).map(normalizeLiveCounterparty);
-  return sqlEnvelope(pathName, url, query, items, payload);
+  const items = uniqueLiveCounterparties(payloadItems(payload).map(normalizeLiveCounterparty));
+  const envelopePayload = hasSearch
+    ? { ...payload, total: items.length, hasMore: false, nextOffset: null }
+    : payload;
+  return sqlEnvelope(pathName, url, query, items, envelopePayload);
 }
 
 async function listLiveWarehouses(url) {
