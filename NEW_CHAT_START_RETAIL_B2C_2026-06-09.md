@@ -40,10 +40,10 @@ Window map:
 - app version: 2026.06.09.1
 - releasedAt: 2026-06-09 14:37:31 +03:00
 
-Поточна MESER health версія може відставати до deploy:
-- build: 20260608-b2c-lan-only-launcher
-- app version: 2026.06.08.5
-- releasedAt: 2026-06-08 20:40:22 +03:00
+Поточна MESER health версія:
+- build: 20260609-b2c-single-employee-session
+- app version: 2026.06.09.1
+- releasedAt: 2026-06-09 14:37:31 +03:00
 
 Поточна основна MESER адреса:
 http://192.168.0.5:8790/index.html
@@ -54,8 +54,8 @@ http://192.168.0.5:8790/api/health
 Остання підтверджена MESER health відповідь:
 - ok: True
 - mode: server-powershell
-- build: 20260608-b2c-lan-only-launcher
-- appVersion: 2026.06.08.5
+- build: 20260609-b2c-single-employee-session
+- appVersion: 2026.06.09.1
 - crmSqlApiBaseUrl: http://192.168.0.166:3000
 - publicBaseUrl: http://192.168.0.5:8790
 - dataDir: D:\Codex\CRM\retail-crm\data
@@ -93,9 +93,9 @@ Invoke-WebRequest -UseBasicParsing -Uri 'http://192.168.0.5:8790/index.html' -Ti
 - Current local build: `20260609-b2c-single-employee-session`
 - Current local app version: `2026.06.09.1`
 - Current local version timestamp: `2026-06-09 14:37:31 +03:00`
-- Current MESER health build: `20260608-b2c-lan-only-launcher`
-- Current MESER health app version: `2026.06.08.5`
-- Current MESER health timestamp: `2026-06-08 20:40:22 +03:00`
+- Current MESER health build: `20260609-b2c-single-employee-session`
+- Current MESER health app version: `2026.06.09.1`
+- Current MESER health timestamp: `2026-06-09 14:37:31 +03:00`
 - SQL API base: `http://192.168.0.166:3000`
 
 Local LAN launcher may print an operator URL like:
@@ -250,7 +250,7 @@ MESER permanent task:
 Retail B2C CRM
 ```
 
-Normal remote credential flow from Window 3:
+Normal remote credential flow from local:
 
 ```powershell
 $cred = Import-Clixml "$env:USERPROFILE\.ssh\meser-fresh-zahar.credential.xml"
@@ -266,7 +266,7 @@ $cred | Export-Clixml "$env:USERPROFILE\.ssh\meser-fresh-zahar.credential.xml"
 
 Do not ask for or log the raw password.
 
-Deploy current local Retail B2C to MESER from Window 3:
+Deploy current local Retail B2C to MESER from local:
 
 ```powershell
 cd D:\Codex\CRM\retail-crm
@@ -310,7 +310,7 @@ Stopping PID 6336 and rerunning the scheduled task loaded build 20260608-b2c-lan
 
 ## Verification Commands
 
-Window 3 - local:
+local:
 
 ```powershell
 cd D:\Codex\CRM\retail-crm
@@ -325,7 +325,7 @@ if ($r.Content -match 'app\.js\?v=([^"'']+)') { $matches[1] } else { 'no-build' 
 Expected current MESER build:
 
 ```text
-20260608-b2c-lan-only-launcher
+20260609-b2c-single-employee-session
 ```
 
 Expected current health:
@@ -333,13 +333,13 @@ Expected current health:
 ```text
 ok: True
 mode: server-powershell
-appVersion: 2026.06.08.5
-build: 20260608-b2c-lan-only-launcher
+appVersion: 2026.06.09.1
+build: 20260609-b2c-single-employee-session
 crmSqlApiBaseUrl: http://192.168.0.166:3000
 publicBaseUrl: http://192.168.0.5:8790
 ```
 
-Window 1 - Ubuntu SQL API serial checks:
+Ubuntu SQL API serial checks:
 
 ```bash
 curl -sS -i 'http://127.0.0.1:3000/one-c-mirror/serial-stock?limit=1' | head -40
