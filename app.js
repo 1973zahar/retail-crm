@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.10.1";
-const APP_BUILD = "20260610-b2c-live-qty-totals";
-const APP_RELEASED_AT = "2026-06-10 00:04:20 +03:00";
+const APP_VERSION = "2026.06.10.2";
+const APP_BUILD = "20260610-b2c-price-qty-discount-live";
+const APP_RELEASED_AT = "2026-06-10 00:29:40 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SESSION_TOKEN_KEY = "retail-crm-b2c-session-token-v1";
@@ -1268,6 +1268,15 @@ function productAttachedPriceOptions(product, liveRows = []) {
   return Array.from(options.values()).sort((left, right) => priceRowRank(left) - priceRowRank(right));
 }
 
+function normalizePriceOptions(value, source = "attached-price") {
+  const rows = Array.isArray(value) ? value : (value ? [value] : []);
+  const options = new Map();
+  rows.flatMap((row) => priceOptionRowsFromSource(row, row?.source || source)).filter(Boolean).forEach((option) => {
+    if (!options.has(option.id)) options.set(option.id, option);
+  });
+  return Array.from(options.values()).sort((left, right) => priceRowRank(left) - priceRowRank(right));
+}
+
 function productCurrencyTokens(product) {
   const values = [
     product?.priceCurrencies,
@@ -1508,7 +1517,7 @@ function normalizeSerialStock(row) {
 
 function normalizeCheckoutLine(line) {
   const serialOptions = Array.isArray(line.serialOptions) ? line.serialOptions.map(normalizeSerialStock) : [];
-  const priceOptions = Array.isArray(line.priceOptions) ? line.priceOptions.map((option) => normalizePriceOption(option, option.source || "attached-price")).filter(Boolean) : [];
+  const priceOptions = normalizePriceOptions(line.priceOptions, "attached-price");
   return {
     lineId: line.lineId || `cart-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     productId: line.productId || "",
@@ -6901,6 +6910,24 @@ function updateCartTotalsInPlace() {
   if (totalTarget) totalTarget.textContent = formatMoney(total);
 }
 
+function syncCartInputValue(target) {
+  if (target.dataset.cartQty !== undefined) {
+    const line = state.checkout.lines[Number(target.dataset.cartQty)];
+    if (line) target.value = String(Math.max(1, Number(line.qty || 1)));
+  }
+  if (target.dataset.cartDiscount !== undefined) {
+    const line = state.checkout.lines[Number(target.dataset.cartDiscount)];
+    if (line) target.value = String(Math.max(0, Number(line.discount || 0)));
+  }
+}
+
+function updateCartFieldAndTotals(target, options = {}) {
+  const changed = updateCartField(target, { ...options, renderAfter: false });
+  if (options.commitEmpty !== false) syncCartInputValue(target);
+  updateCartTotalsInPlace();
+  return changed;
+}
+
 function commitCartInlineEdits() {
   let changed = false;
   document.querySelectorAll("[data-cart-qty], [data-cart-discount]").forEach((target) => {
@@ -7133,9 +7160,7 @@ document.addEventListener("click", (event) => {
 
 document.addEventListener("input", (event) => {
   if (event.target.dataset.cartQty !== undefined || event.target.dataset.cartDiscount !== undefined) {
-    if (updateCartField(event.target, { commitEmpty: false, saveAfter: false, renderAfter: false })) {
-      updateCartTotalsInPlace();
-    }
+    updateCartFieldAndTotals(event.target, { commitEmpty: false, saveAfter: false });
     return;
   }
   if (event.target.dataset.productLookup !== undefined || event.target.dataset.customerLookup !== undefined) {
@@ -7163,7 +7188,7 @@ document.addEventListener("change", (event) => {
   if (event.target.dataset.saleConfirmPayment !== undefined) updateSaleConfirmPayment(event.target.value);
   if (event.target.dataset.returnConfirmRefund !== undefined) updateReturnConfirmRefund(event.target.value);
   if (event.target.dataset.cartSerial !== undefined) updateCartSerial(Number(event.target.dataset.cartSerial), event.target.value);
-  if (event.target.dataset.cartQty !== undefined || event.target.dataset.cartDiscount !== undefined) updateCartField(event.target);
+  if (event.target.dataset.cartQty !== undefined || event.target.dataset.cartDiscount !== undefined) updateCartFieldAndTotals(event.target, { commitEmpty: true, saveAfter: true });
   if (event.target.dataset.cartPriceOption !== undefined) updateCartPriceOption(event.target.dataset.cartPriceOption, event.target.value);
   if (event.target.dataset.checkoutField !== undefined) updateCheckoutField(event.target);
   if (event.target.dataset.customerLookup !== undefined) selectCustomerFromLookup(event.target.value);
@@ -7196,7 +7221,7 @@ document.addEventListener("keydown", (event) => {
   }
   if (event.key === "Enter" && (event.target.dataset.cartQty !== undefined || event.target.dataset.cartDiscount !== undefined)) {
     event.preventDefault();
-    updateCartField(event.target);
+    updateCartFieldAndTotals(event.target, { commitEmpty: true, saveAfter: true });
     event.target.blur();
     return;
   }
