@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.09.12";
-const APP_BUILD = "20260609-b2c-price-option-split";
-const APP_RELEASED_AT = "2026-06-09 22:48:44 +03:00";
+const APP_VERSION = "2026.06.09.13";
+const APP_BUILD = "20260609-b2c-cart-line-edit-apply";
+const APP_RELEASED_AT = "2026-06-09 23:03:32 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SESSION_TOKEN_KEY = "retail-crm-b2c-session-token-v1";
@@ -6809,21 +6809,51 @@ function updateCheckoutField(target) {
   }
 }
 
-function updateCartField(target) {
+function updateCartField(target, options = {}) {
+  const commitEmpty = options.commitEmpty !== false;
+  const saveAfter = options.saveAfter !== false;
+  const renderAfter = options.renderAfter !== false;
+  let changed = false;
   if (target.dataset.cartQty !== undefined) {
     const index = Number(target.dataset.cartQty);
     const line = state.checkout.lines[index];
     if (!line) return;
     const product = productById(line?.productId);
-    line.qty = isWeaponProduct(product) ? 1 : Math.max(1, Number(target.value || 1));
+    const rawValue = String(target.value ?? "").trim();
+    if (!rawValue && !commitEmpty) return false;
+    const parsedQty = Number(rawValue || 1);
+    if (!Number.isFinite(parsedQty)) return false;
+    const nextQty = isWeaponProduct(product) ? 1 : Math.max(1, parsedQty);
+    if (Number(line.qty || 0) !== nextQty) {
+      line.qty = nextQty;
+      changed = true;
+    }
   }
   if (target.dataset.cartDiscount !== undefined) {
     const index = Number(target.dataset.cartDiscount);
     if (!state.checkout.lines[index]) return;
-    state.checkout.lines[index].discount = Math.max(0, Number(target.value || 0));
+    const rawValue = String(target.value ?? "").trim();
+    if (!rawValue && !commitEmpty) return false;
+    const parsedDiscount = Number(rawValue || 0);
+    if (!Number.isFinite(parsedDiscount)) return false;
+    const nextDiscount = Math.max(0, parsedDiscount);
+    if (Number(state.checkout.lines[index].discount || 0) !== nextDiscount) {
+      state.checkout.lines[index].discount = nextDiscount;
+      changed = true;
+    }
   }
-  saveState();
-  render();
+  if (changed && saveAfter) saveState();
+  if (changed && renderAfter) render();
+  return changed;
+}
+
+function commitCartInlineEdits() {
+  let changed = false;
+  document.querySelectorAll("[data-cart-qty], [data-cart-discount]").forEach((target) => {
+    changed = updateCartField(target, { commitEmpty: true, saveAfter: false, renderAfter: false }) || changed;
+  });
+  if (changed) saveState();
+  return changed;
 }
 
 function updateCartSerial(index, serialName) {
@@ -6843,6 +6873,7 @@ async function updateCartPriceOption(index, optionId) {
   if (!canDo("price_select")) return alert("Немає дозволу вибирати тип ціни.");
   const line = state.checkout.lines[index];
   if (!line) return;
+  if (line.priceOptionId === optionId && Number(line.price || 0) > 0) return;
   const normalized = normalizeCheckoutLine(line);
   const selected = normalized.priceOptions.find((item) => item.id === optionId);
   if (!selected) {
@@ -7033,7 +7064,12 @@ document.addEventListener("click", (event) => {
 
 document.addEventListener("input", (event) => {
   if (event.target.dataset.cartQty !== undefined || event.target.dataset.cartDiscount !== undefined) {
-    updateCartField(event.target);
+    updateCartField(event.target, { commitEmpty: false, saveAfter: false, renderAfter: false });
+    return;
+  }
+  if (event.target.dataset.cartPriceOption !== undefined) {
+    updateCartPriceOption(Number(event.target.dataset.cartPriceOption), event.target.value);
+    return;
   }
   if (event.target.dataset.productLookup !== undefined || event.target.dataset.customerLookup !== undefined) {
     updateCheckoutField(event.target);
@@ -7060,6 +7096,7 @@ document.addEventListener("change", (event) => {
   if (event.target.dataset.saleConfirmPayment !== undefined) updateSaleConfirmPayment(event.target.value);
   if (event.target.dataset.returnConfirmRefund !== undefined) updateReturnConfirmRefund(event.target.value);
   if (event.target.dataset.cartSerial !== undefined) updateCartSerial(Number(event.target.dataset.cartSerial), event.target.value);
+  if (event.target.dataset.cartQty !== undefined || event.target.dataset.cartDiscount !== undefined) updateCartField(event.target);
   if (event.target.dataset.cartPriceOption !== undefined) updateCartPriceOption(Number(event.target.dataset.cartPriceOption), event.target.value);
   if (event.target.dataset.checkoutField !== undefined) updateCheckoutField(event.target);
   if (event.target.dataset.customerLookup !== undefined) selectCustomerFromLookup(event.target.value);
@@ -7090,6 +7127,12 @@ document.addEventListener("keydown", (event) => {
     openDrilldown(event.target.dataset.drilldown);
     return;
   }
+  if (event.key === "Enter" && (event.target.dataset.cartQty !== undefined || event.target.dataset.cartDiscount !== undefined)) {
+    event.preventDefault();
+    updateCartField(event.target);
+    event.target.blur();
+    return;
+  }
   if (event.key !== "Enter") return;
   if (event.target.dataset.checkoutScan !== undefined) {
     event.preventDefault();
@@ -7118,7 +7161,10 @@ document.addEventListener("submit", (event) => {
   if (!form) return;
   event.preventDefault();
   if (form.dataset.action === "employee-login") loginEmployee(form);
-  if (form.dataset.action === "create-receipt") createReceipt(form);
+  if (form.dataset.action === "create-receipt") {
+    commitCartInlineEdits();
+    createReceipt(form);
+  }
   if (form.dataset.action === "confirm-sale-payment") confirmSalePayment(form);
   if (form.dataset.action === "confirm-return-refund") confirmReturnRefund(form);
   if (form.dataset.action === "save-document-edit") saveDocumentEdit(form);

@@ -923,6 +923,8 @@ th {
 }
 
 .mini-input {
+  width: 84px;
+  min-width: 72px;
   max-width: 96px;
   padding: 7px 8px;
 }
