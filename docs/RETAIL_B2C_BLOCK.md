@@ -10,9 +10,9 @@ Repo: D:\Codex\CRM\retail-crm
 Stable LAN runtime: http://<LAN-IP>:18810/index.html
 Legacy/manual local runtime: internal diagnostics only, not the working URL
 MESER runtime: http://192.168.0.5:8790/index.html
-Current build: 20260609-b2c-add-product-price-roles
-App version: 2026.06.09.11
-Released at: 2026-06-09 22:14:23 +03:00
+Current build: 20260609-b2c-price-option-split
+App version: 2026.06.09.12
+Released at: 2026-06-09 22:48:44 +03:00
 Contract version: 2026.06.07-retail-live-api-1
 ```
 
@@ -33,7 +33,7 @@ The block owns retail workflows, not master data. Product, price, stock, serial 
 
 `Панель` and `Продаж` are one Retail B2C working screen. The separate dashboard/sidebar block is removed; old `dashboard`, `checkout`, `receipts` and `cash` view ids resolve to `pos`. The `Продаж` screen is the first/default view and contains the shift/cashier/sales/revenue cards, checkout, receipt list and cash shift controls.
 
-Retail sale prices are currency-aware. B2C must not treat SQL numeric currency codes as UAH by default: `980=UAH`, `978=EUR`, `840=USD`. When a selected sale price has one foreign currency, the backend downloads official NBU exchange rates through `/api/live/exchange-rates` and the POS stores the sale line price in UAH together with source currency, source price, exchange rate and exchange-rate date. Product add is not blocked solely because the initial price/currency choice is ambiguous, missing, or waiting for a rate: the product is inserted into the checkout line with a warning and the attached price options. Employees whose role has the `price_select` action can choose the concrete attached price from that checkout row; other roles cannot change the line price selector.
+Retail sale prices are currency-aware. B2C must not treat SQL numeric currency codes as UAH by default: `980=UAH`, `978=EUR`, `840=USD`. When a selected sale price has one foreign currency, the backend downloads official NBU exchange rates through `/api/live/exchange-rates` and the POS stores the sale line price in UAH together with source currency, source price, exchange rate and exchange-rate date. Product add is not blocked solely because the initial price/currency choice is ambiguous, missing, or waiting for a rate: the product is inserted into the checkout line with a warning and the attached price options. Employees whose role has the `price_select` action can choose the concrete attached price from that checkout row; other roles cannot change the line price selector. If SQL currently returns an aggregated product summary such as one `priceTypes` comma-list and mixed `priceCurrencies`, the POS splits that summary into separate attached-price options instead of rendering one unusable long option.
 
 Retail sale product selection reads Warehouse 1 stock through bounded live endpoints. The POS product autocomplete uses `/api/live/stock-balances?warehouseCode=2&search=&limit=&offset=` and shows only products with a positive `Склад №1` balance; in server mode it must not fall back to the local/demo full product list when live stock search returns zero rows. After a product is selected, the sale line reloads product-scoped stock by `productCode` and `warehouseCode`. Serial numbers are fetched only after a concrete weapon product is selected through `/api/live/serial-stock?productCode=&warehouseCode=2&limit=20&offset=`; `productCode` is required, and weapon rows require one available live serial number before a sale can be posted.
 

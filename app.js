@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.09.11";
-const APP_BUILD = "20260609-b2c-add-product-price-roles";
-const APP_RELEASED_AT = "2026-06-09 22:14:23 +03:00";
+const APP_VERSION = "2026.06.09.12";
+const APP_BUILD = "20260609-b2c-price-option-split";
+const APP_RELEASED_AT = "2026-06-09 22:48:44 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SESSION_TOKEN_KEY = "retail-crm-b2c-session-token-v1";
@@ -1205,6 +1205,39 @@ function normalizePriceOption(row, source = "attached-price") {
   return option;
 }
 
+function priceTypeCurrencyHint(value) {
+  const text = normalizePriceTypeText(value);
+  if (!text) return "";
+  if (text.includes("usd") || text.includes("дол")) return "USD";
+  if (text.includes("eur") || text.includes("євро") || text.includes("евро")) return "EUR";
+  if (text.includes("uah") || text.includes("грн") || text.includes("грив")) return "UAH";
+  return "";
+}
+
+function priceOptionRowsFromSource(row, source = "attached-price") {
+  const labels = splitOptionLabels(row?.priceType || row?.priceTypeName || row?.price_type_name);
+  const priceTypes = labels.length ? labels : [normalizePriceTypeLabel(row?.priceType || row?.priceTypeName || row?.price_type_name || "Ціна")];
+  const currencies = currencyTokens(row?.currencyRaw || row?.currency);
+  const checkoutCurrency = normalizeCurrencyCode(state.checkout?.priceCurrency || DEFAULT_CHECKOUT_PRICE_CURRENCY);
+  const fallbackCurrency = currencies.includes(checkoutCurrency)
+    ? checkoutCurrency
+    : (currencies.includes(BASE_CURRENCY) ? BASE_CURRENCY : (currencies[0] || checkoutCurrency || BASE_CURRENCY));
+  return priceTypes.flatMap((priceType) => {
+    const hintedCurrency = priceTypeCurrencyHint(priceType);
+    const currencyChoices = hintedCurrency
+      ? [hintedCurrency]
+      : (currencies.length > 1 && priceTypes.length === 1
+        ? currencies
+        : [fallbackCurrency]);
+    return currencyChoices.map((currency) => normalizePriceOption({
+      ...row,
+      priceType,
+      currency,
+      currencyRaw: currency
+    }, source)).filter(Boolean);
+  });
+}
+
 function priceOptionLabel(option) {
   return [
     option.priceType || "Ціна",
@@ -1215,7 +1248,7 @@ function priceOptionLabel(option) {
 function productAttachedPriceOptions(product, liveRows = []) {
   const options = new Map();
   const addRows = (rows, source) => {
-    rows.map((row) => normalizePriceOption(row, source)).filter(Boolean).forEach((option) => {
+    rows.flatMap((row) => priceOptionRowsFromSource(row, source)).filter(Boolean).forEach((option) => {
       if (!options.has(option.id)) options.set(option.id, option);
     });
   };
