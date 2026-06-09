@@ -6,16 +6,24 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+try {
+  [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+} catch {
+}
 
-$AppVersion = "2026.06.09.3"
-$AppBuild = "20260609-b2c-stock-select-fix"
-$AppReleasedAt = "2026-06-09 17:03:10 +03:00"
+$AppVersion = "2026.06.09.4"
+$AppBuild = "20260609-b2c-currency-rates"
+$AppReleasedAt = "2026-06-09 17:32:53 +03:00"
 $RootDir = $PSScriptRoot
 $ResolvedDataDir = if ([System.IO.Path]::IsPathRooted($DataDir)) { $DataDir } else { Join-Path $RootDir $DataDir }
 $StatePath = Join-Path $ResolvedDataDir "retail-crm-state.json"
 $SettingsPath = Join-Path $ResolvedDataDir "retail-crm-settings.json"
 $PublicBaseUrl = "http://$PublicHost`:$Port"
 $CrmSqlApiBaseUrl = if ($env:CRM_SQL_API_BASE_URL) { $env:CRM_SQL_API_BASE_URL.TrimEnd("/") } else { "http://192.168.0.166:3000" }
+$NbuExchangeRatesUrl = "https://bank.gov.ua/NBUStatService/v1/statdirectory/exchangenew?json"
+$NbuExchangeRatesCacheTtlSeconds = 21600
+$script:ExchangeRatesCacheFetchedAt = [datetime]::MinValue
+$script:ExchangeRatesCachePayload = $null
 $Utf8 = [System.Text.Encoding]::UTF8
 $Ascii = [System.Text.Encoding]::ASCII
 
@@ -298,6 +306,131 @@ function Get-NumberValue($Object, [string[]]$Names, [double]$Default = 0) {
   if ([double]::TryParse($text.Replace(",", "."), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$number)) { return $number }
   if ([double]::TryParse($text, [ref]$number)) { return $number }
   return $Default
+}
+
+function ConvertTo-NbuExchangeRate($Row) {
+  $numericCode = Get-TextValue $Row @("r030", "numericCode", "numeric_code")
+  $currency = (Get-TextValue $Row @("cc", "currency")).ToUpperInvariant()
+  $rate = Get-NumberValue $Row @("rate")
+  if (-not $numericCode -or -not $currency -or $rate -le 0) { return $null }
+  return @{
+    currency = $currency
+    numericCode = $numericCode
+    rate = $rate
+    name = Get-TextValue $Row @("txt", "name")
+    exchangedate = Get-TextValue $Row @("exchangedate", "exchangeDate", "exchange_date")
+    source = "nbu"
+  }
+}
+
+function Get-NodeFetchExecutable {
+  $candidates = @(
+    $env:RETAIL_B2C_NODE_EXE,
+    $env:NODE_EXE,
+    (Join-Path $RootDir "node.exe"),
+    "C:\Program Files\nodejs\node.exe",
+    "C:\Users\User\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe",
+    "node"
+  ) | Where-Object { $_ }
+  foreach ($candidate in $candidates) {
+    if ($candidate -eq "node") {
+      $command = Get-Command node -ErrorAction SilentlyContinue
+      if ($command) { return $command.Source }
+      continue
+    }
+    if (Test-Path $candidate) { return $candidate }
+  }
+  return $null
+}
+
+function Invoke-NbuExchangeRatesRaw {
+  try {
+    $client = New-Object System.Net.WebClient
+    $client.Encoding = $Utf8
+    return $client.DownloadString($NbuExchangeRatesUrl)
+  } catch {
+    $webClientError = $_.Exception.Message
+    $nodeExe = Get-NodeFetchExecutable
+    if (-not $nodeExe) {
+      throw $webClientError
+    }
+    $script = "fetch(process.argv[1]).then(async r=>{const t=await r.text(); if(!r.ok){throw new Error(t || ('HTTP '+r.status));} process.stdout.write(t);}).catch(e=>{process.stderr.write(e && e.message ? e.message : String(e)); process.exit(1);});"
+    $raw = & $nodeExe -e $script $NbuExchangeRatesUrl 2>&1
+    if ($LASTEXITCODE -ne 0) {
+      throw "$webClientError; Node fetch fallback failed: $raw"
+    }
+    return ($raw -join "`n")
+  }
+}
+
+function Get-NbuExchangeRates([bool]$Force = $false) {
+  $now = Get-Date
+  if (-not $Force -and $script:ExchangeRatesCachePayload -and (($now - $script:ExchangeRatesCacheFetchedAt).TotalSeconds -lt $NbuExchangeRatesCacheTtlSeconds)) {
+    return $script:ExchangeRatesCachePayload
+  }
+  $raw = Invoke-NbuExchangeRatesRaw
+  $rows = if ($raw) { @($raw | ConvertFrom-Json) } else { @() }
+  $rates = @()
+  foreach ($row in $rows) {
+    $rate = ConvertTo-NbuExchangeRate $row
+    if ($rate) { $rates += $rate }
+  }
+  if (@($rates).Count -eq 0) {
+    throw "NBU API returned empty exchange-rate payload"
+  }
+  $exchangeDate = if ($rates[0].exchangedate) { $rates[0].exchangedate } else { (Get-Date).ToString("dd.MM.yyyy") }
+  $items = @(@{
+    currency = "UAH"
+    numericCode = "980"
+    rate = 1
+    name = "Ukrainian hryvnia"
+    exchangedate = $exchangeDate
+    source = "base-uah"
+  }) + $rates
+  $payload = @{
+    data = $items
+    items = $items
+    total = @($items).Count
+    limit = @($items).Count
+    offset = 0
+    hasMore = $false
+    nextOffset = $null
+    totalExact = $true
+    source = "nbu"
+    sourceDetail = $NbuExchangeRatesUrl
+    bounded = $true
+    fallback = $false
+    productionReady = $true
+    loadedAt = (Get-Date).ToUniversalTime().ToString("o")
+    cacheTtlMs = $NbuExchangeRatesCacheTtlSeconds * 1000
+  }
+  $script:ExchangeRatesCacheFetchedAt = $now
+  $script:ExchangeRatesCachePayload = $payload
+  return $payload
+}
+
+function New-LiveExchangeRatesResponse($Params) {
+  $forceValue = (Get-QueryValue $Params "force").ToLowerInvariant()
+  $force = $forceValue -eq "1" -or $forceValue -eq "true" -or $forceValue -eq "yes"
+  $currency = (Get-QueryValue $Params "currency").ToUpperInvariant()
+  if (-not $currency) { $currency = (Get-QueryValue $Params "valcode").ToUpperInvariant() }
+  $search = (Get-QueryValue $Params "search").ToUpperInvariant()
+  $payload = Get-NbuExchangeRates $force
+  $items = @()
+  foreach ($item in @($payload.items)) {
+    if ($currency -and [string]$item.currency -ne $currency -and [string]$item.numericCode -ne $currency) { continue }
+    if ($search) {
+      $haystack = "$($item.currency) $($item.numericCode) $($item.name)".ToUpperInvariant()
+      if (-not $haystack.Contains($search)) { continue }
+    }
+    $items += $item
+  }
+  $payload.data = $items
+  $payload.items = $items
+  $payload.total = @($items).Count
+  $payload.limit = @($items).Count
+  $payload.query = @{ currency = $currency; search = $search }
+  return $payload
 }
 
 function Get-PayloadItems($Payload) {
@@ -982,6 +1115,20 @@ function Handle-Api($Client, $Request) {
       Send-Json $Client 200 (New-LiveProductPricesResponse (Get-QueryParams $Request.RawPath))
     } catch {
       Send-Json $Client 502 @{ error = $_.Exception.Message; source = "crm-sql-live"; bounded = $true }
+    }
+    return
+  }
+
+  if ($method -eq "GET" -and $path -eq "/api/live/exchange-rates") {
+    try {
+      Send-Json $Client 200 (New-LiveExchangeRatesResponse (Get-QueryParams $Request.RawPath))
+    } catch {
+      Send-Json $Client 502 @{
+        error = $_.Exception.Message
+        code = "NBU_EXCHANGE_RATES_UNAVAILABLE"
+        source = "nbu"
+        bounded = $true
+      }
     }
     return
   }

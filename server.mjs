@@ -3,12 +3,15 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const APP_VERSION = "2026.06.09.3";
-const APP_BUILD = "20260609-b2c-stock-select-fix";
-const APP_RELEASED_AT = "2026-06-09 17:03:10 +03:00";
+const APP_VERSION = "2026.06.09.4";
+const APP_BUILD = "20260609-b2c-currency-rates";
+const APP_RELEASED_AT = "2026-06-09 17:32:53 +03:00";
 const ROOT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const CRM_SQL_API_BASE_URL = String(process.env.CRM_SQL_API_BASE_URL || "http://192.168.0.166:3000").replace(/\/+$/, "");
 const CRM_SQL_API_TIMEOUT_MS = Math.max(1000, Number(process.env.CRM_SQL_API_TIMEOUT_MS || 30000));
+const NBU_EXCHANGE_RATES_URL = "https://bank.gov.ua/NBUStatService/v1/statdirectory/exchangenew?json";
+const NBU_EXCHANGE_RATES_TIMEOUT_MS = Math.max(1000, Number(process.env.NBU_EXCHANGE_RATES_TIMEOUT_MS || 15000));
+const NBU_EXCHANGE_RATES_CACHE_TTL_MS = Math.max(60000, Number(process.env.NBU_EXCHANGE_RATES_CACHE_TTL_MS || 21600000));
 
 const DEFAULT_CONFIG = {
   host: "0.0.0.0",
@@ -54,6 +57,7 @@ const config = normalizeConfig({ ...DEFAULT_CONFIG, ...fileConfig, ...cli });
 const dataDir = path.resolve(ROOT_DIR, config.dataDir);
 const statePath = path.join(dataDir, config.stateFile);
 const settingsPath = path.join(dataDir, config.settingsFile);
+let exchangeRatesCache = { fetchedAt: 0, payload: null };
 
 await fs.mkdir(dataDir, { recursive: true });
 
@@ -162,6 +166,20 @@ async function handleApi(request, response, url) {
 
   if (request.method === "GET" && url.pathname === "/api/live/product-prices") {
     sendJson(response, 200, await listLiveProductPrices(url));
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/live/exchange-rates") {
+    try {
+      sendJson(response, 200, await listLiveExchangeRates(url));
+    } catch (error) {
+      sendJson(response, 502, {
+        error: error.message || "NBU exchange rates unavailable",
+        code: "NBU_EXCHANGE_RATES_UNAVAILABLE",
+        source: "nbu",
+        bounded: true
+      });
+    }
     return;
   }
 
@@ -620,6 +638,86 @@ async function fetchCrmSql(pathName, params) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+function normalizeNbuExchangeRate(row) {
+  const numericCode = textValue(row.r030, row.numericCode, row.numeric_code);
+  const currency = textValue(row.cc, row.currency).toUpperCase();
+  const rate = numberValue(row.rate);
+  if (!numericCode || !currency || !rate) return null;
+  return {
+    currency,
+    numericCode,
+    rate,
+    name: textValue(row.txt, row.name),
+    exchangedate: textValue(row.exchangedate, row.exchangeDate, row.exchange_date),
+    source: "nbu"
+  };
+}
+
+async function fetchNbuExchangeRates(force = false) {
+  const now = Date.now();
+  if (!force && exchangeRatesCache.payload && now - exchangeRatesCache.fetchedAt < NBU_EXCHANGE_RATES_CACHE_TTL_MS) {
+    return exchangeRatesCache.payload;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), NBU_EXCHANGE_RATES_TIMEOUT_MS);
+  try {
+    const response = await fetch(NBU_EXCHANGE_RATES_URL, { signal: controller.signal });
+    const rows = await response.json().catch(() => []);
+    if (!response.ok) throw new Error(`NBU API ${response.status}`);
+    if (!Array.isArray(rows)) throw new Error("NBU API returned invalid exchange-rate payload");
+    const rates = rows.map(normalizeNbuExchangeRate).filter(Boolean);
+    const exchangedate = rates[0]?.exchangedate || new Date().toLocaleDateString("uk-UA");
+    const items = [
+      { currency: "UAH", numericCode: "980", rate: 1, name: "Українська гривня", exchangedate, source: "base-uah" },
+      ...rates
+    ];
+    const payload = {
+      data: items,
+      items,
+      total: items.length,
+      limit: items.length,
+      offset: 0,
+      hasMore: false,
+      nextOffset: null,
+      totalExact: true,
+      source: "nbu",
+      sourceDetail: NBU_EXCHANGE_RATES_URL,
+      bounded: true,
+      fallback: false,
+      productionReady: true,
+      loadedAt: new Date().toISOString(),
+      cacheTtlMs: NBU_EXCHANGE_RATES_CACHE_TTL_MS
+    };
+    exchangeRatesCache = { fetchedAt: now, payload };
+    return payload;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function listLiveExchangeRates(url) {
+  const force = ["1", "true", "yes"].includes(String(url.searchParams.get("force") || "").toLowerCase());
+  const currency = String(url.searchParams.get("currency") || url.searchParams.get("valcode") || "").trim().toUpperCase();
+  const search = String(url.searchParams.get("search") || "").trim().toUpperCase();
+  const payload = await fetchNbuExchangeRates(force);
+  const items = payload.items.filter((item) => {
+    if (currency && item.currency !== currency && item.numericCode !== currency) return false;
+    if (search) {
+      const haystack = `${item.currency} ${item.numericCode} ${item.name}`.toUpperCase();
+      if (!haystack.includes(search)) return false;
+    }
+    return true;
+  });
+  return {
+    ...payload,
+    data: items,
+    items,
+    total: items.length,
+    limit: items.length,
+    query: { currency, search }
+  };
 }
 
 function liveQuery(url, defaultLimit = 20, maxLimit = 100, filterNames = []) {

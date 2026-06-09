@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.09.3";
-const APP_BUILD = "20260609-b2c-stock-select-fix";
-const APP_RELEASED_AT = "2026-06-09 17:03:10 +03:00";
+const APP_VERSION = "2026.06.09.4";
+const APP_BUILD = "20260609-b2c-currency-rates";
+const APP_RELEASED_AT = "2026-06-09 17:32:53 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SESSION_TOKEN_KEY = "retail-crm-b2c-session-token-v1";
@@ -77,6 +77,17 @@ const LIVE_CUSTOMER_LOOKUP_LIMIT = 20;
 const LIVE_STOCK_LOOKUP_LIMIT = 20;
 const LIVE_SERIAL_LOOKUP_LIMIT = 20;
 const LIVE_TABLE_LIMIT_OPTIONS = [20, 50, 100];
+const BASE_CURRENCY = "UAH";
+const CURRENCY_NUMERIC_CODES = {
+  "980": "UAH",
+  "978": "EUR",
+  "840": "USD"
+};
+const CURRENCY_LABELS = {
+  UAH: "UAH",
+  EUR: "EUR",
+  USD: "USD"
+};
 const LIVE_TABLES = {
   products: {
     endpoint: "/api/live/products",
@@ -131,6 +142,13 @@ const serverSync = {
 const liveProductCache = new Map();
 const liveProductLookupCache = new Map();
 const liveTableLoadQueue = new Set();
+const exchangeRateLookup = {
+  items: [],
+  byCurrency: new Map(),
+  loadedAt: "",
+  loading: null,
+  error: ""
+};
 const liveProductLookup = {
   query: "",
   barcode: "",
@@ -1069,6 +1087,90 @@ function numberField(source, fields, fallback = 0) {
   return fallback;
 }
 
+function currencyTokens(value) {
+  if (Array.isArray(value)) {
+    return Array.from(new Set(value.flatMap(currencyTokens)));
+  }
+  const raw = String(value || "").trim().toUpperCase();
+  if (!raw) return [];
+  const normalizedText = raw
+    .replaceAll("ГРН", "UAH")
+    .replaceAll("ГРИВНЯ", "UAH")
+    .replaceAll("ЄВРО", "EUR")
+    .replaceAll("ЕВРО", "EUR")
+    .replaceAll("ДОЛАР", "USD");
+  const tokens = normalizedText.split(/[^A-ZА-ЯІЇЄҐ0-9]+/iu)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => CURRENCY_NUMERIC_CODES[part] || part)
+    .filter((part) => /^[A-Z]{3}$/.test(part));
+  return Array.from(new Set(tokens));
+}
+
+function normalizeCurrencyCode(value, fallback = BASE_CURRENCY) {
+  const tokens = currencyTokens(value);
+  if (tokens.length === 1) return tokens[0];
+  const raw = String(value || "").trim().toUpperCase();
+  if (raw && CURRENCY_NUMERIC_CODES[raw]) return CURRENCY_NUMERIC_CODES[raw];
+  if (raw && /^[A-Z]{3}$/.test(raw)) return raw;
+  return fallback;
+}
+
+function displayCurrencyList(value, fallback = BASE_CURRENCY) {
+  const tokens = currencyTokens(value);
+  if (tokens.length) return tokens.map((token) => CURRENCY_LABELS[token] || token).join(", ");
+  const normalized = normalizeCurrencyCode(value, fallback);
+  return CURRENCY_LABELS[normalized] || normalized;
+}
+
+function normalizeProductPriceRows(value) {
+  const rows = Array.isArray(value) ? value : (value && typeof value === "object" ? [value] : []);
+  return rows.map((price) => {
+    const currencyRaw = price.currencyRaw || price.currency || price.priceCurrency || price.currencyCode || price.currency_code || BASE_CURRENCY;
+    return {
+      priceType: price.priceType || price.priceTypeName || price.price_type_name || "",
+      currency: normalizeCurrencyCode(currencyRaw),
+      currencyRaw,
+      price: Number(price.price ?? price.amount ?? 0)
+    };
+  }).filter((price) => Number.isFinite(price.price));
+}
+
+function productCurrencyTokens(product) {
+  const values = [
+    product?.priceCurrencies,
+    product?.priceCurrency,
+    product?.currency,
+    ...(Array.isArray(product?.prices) ? product.prices.flatMap((price) => [price.currencyRaw, price.currency]) : [])
+  ];
+  return currencyTokens(values);
+}
+
+function priceRowRank(row) {
+  const text = normalizeScanText(row.priceType || "");
+  if (text.includes("роздр") || text.includes("retail")) return 0;
+  if (text.includes("опт") || text.includes("wholesale")) return 2;
+  if (text.includes("закуп") || text.includes("purchase")) return 3;
+  return 1;
+}
+
+function productPriceDisplay(product) {
+  const amount = Number(product?.price || 0);
+  if (amount <= 0) return "ціна після вибору";
+  const currencies = productCurrencyTokens(product);
+  if (currencies.length === 1) return formatMoney(amount, currencies[0]);
+  if (currencies.length > 1) return `${amount} ${currencies.map((item) => CURRENCY_LABELS[item] || item).join(", ")}`;
+  return formatMoney(amount, BASE_CURRENCY);
+}
+
+function productPriceSummaryDisplay(product) {
+  const summary = String(product?.priceSummary || "").trim();
+  const currencies = productCurrencyTokens(product);
+  if (!summary) return productPriceDisplay(product);
+  if (currencies.length > 1) return `${Number(product.price || 0)} ${currencies.map((item) => CURRENCY_LABELS[item] || item).join(", ")}`;
+  return summary.replace(/\b980\b/g, "UAH").replace(/\b978\b/g, "EUR").replace(/\b840\b/g, "USD");
+}
+
 function normalizeLivePrice(row) {
   const source = row || {};
   return {
@@ -1077,7 +1179,7 @@ function normalizeLivePrice(row) {
     productName: textField(source, ["productName", "product_name", "name"]),
     priceTypeCode: textField(source, ["priceTypeCode", "price_type_code"]),
     priceTypeName: textField(source, ["priceTypeName", "price_type_name", "priceType", "price_type"]),
-    currency: textField(source, ["currency"], "UAH"),
+    currency: normalizeCurrencyCode(textField(source, ["currency"], BASE_CURRENCY)),
     amount: numberField(source, ["amount", "price"]),
     price: numberField(source, ["price", "amount"]),
     snapshotAt: textField(source, ["snapshotAt", "snapshot_at", "importedAt", "imported_at"]),
@@ -1129,6 +1231,7 @@ function navIcon(id) {
 }
 
 function normalizeProduct(product) {
+  const prices = normalizeProductPriceRows(product.prices);
   return {
     id: product.id || `p-${Date.now()}`,
     sqlId: product.sqlId || product.id || "",
@@ -1152,14 +1255,11 @@ function normalizeProduct(product) {
     productSeries: product.productSeries || "",
     productGroup: product.productGroup || product.category || "",
     characteristics: Array.isArray(product.characteristics) ? product.characteristics : [],
-    prices: Array.isArray(product.prices) ? product.prices.map((price) => ({
-      priceType: price.priceType || "",
-      currency: price.currency || "UAH",
-      price: Number(price.price || 0)
-    })) : [],
+    prices,
     priceCurrencies: product.priceCurrencies || "",
     priceTypes: product.priceTypes || "",
     priceSummary: product.priceSummary || "",
+    priceCurrency: normalizeCurrencyCode(product.priceCurrency || product.currency || product.priceCurrencies || prices[0]?.currency || BASE_CURRENCY),
     price: Number(product.price || 0),
     cost: Number(product.cost || 0),
     minStock: Number(product.minStock || 0),
@@ -1234,6 +1334,13 @@ function normalizeCheckoutLine(line) {
     productId: line.productId || "",
     qty: Math.max(1, Number(line.qty || 1)),
     price: Number(line.price || 0),
+    priceCurrency: normalizeCurrencyCode(line.priceCurrency || BASE_CURRENCY),
+    sourcePrice: Number(line.sourcePrice ?? line.price ?? 0),
+    sourceCurrency: normalizeCurrencyCode(line.sourceCurrency || line.priceCurrency || BASE_CURRENCY),
+    exchangeRate: Number(line.exchangeRate || 1),
+    exchangeRateDate: line.exchangeRateDate || "",
+    priceSource: line.priceSource || "",
+    priceWarning: line.priceWarning || "",
     discount: Math.max(0, Number(line.discount || 0)),
     warehouseCode: line.warehouseCode || SQL_MAIN_WAREHOUSE_CODE,
     warehouseName: line.warehouseName || SQL_MAIN_WAREHOUSE_NAME,
@@ -1583,6 +1690,67 @@ async function fetchJson(path, options = {}) {
     throw new Error(payload.error || `${response.status} ${response.statusText}`);
   }
   return payload;
+}
+
+function normalizeExchangeRate(row) {
+  const currency = normalizeCurrencyCode(row.currency || row.cc || row.valcode || row.numericCode || row.numeric_code || BASE_CURRENCY);
+  const numericCode = String(row.numericCode || row.numeric_code || row.r030 || "").trim();
+  const rate = Number(row.rate || 0);
+  if (!currency || !Number.isFinite(rate) || rate <= 0) return null;
+  return {
+    currency,
+    numericCode,
+    rate,
+    name: row.name || row.txt || "",
+    exchangedate: row.exchangedate || row.exchangeDate || row.exchange_date || "",
+    source: row.source || "nbu"
+  };
+}
+
+async function fetchExchangeRates(force = false) {
+  if (exchangeRateLookup.loading && !force) return exchangeRateLookup.loading;
+  if (!force && exchangeRateLookup.byCurrency.size) return exchangeRateLookup.items;
+  const params = new URLSearchParams();
+  if (force) params.set("force", "1");
+  const path = `/api/live/exchange-rates${params.toString() ? `?${params.toString()}` : ""}`;
+  exchangeRateLookup.loading = fetchJson(path)
+    .then((payload) => {
+      const rows = payloadItems(payload).map(normalizeExchangeRate).filter(Boolean);
+      const items = rows.some((row) => row.currency === BASE_CURRENCY)
+        ? rows
+        : [{ currency: BASE_CURRENCY, numericCode: "980", rate: 1, name: "Українська гривня", exchangedate: "", source: "base-uah" }, ...rows];
+      exchangeRateLookup.items = items;
+      exchangeRateLookup.byCurrency = new Map();
+      items.forEach((row) => {
+        exchangeRateLookup.byCurrency.set(row.currency, row);
+        if (row.numericCode) exchangeRateLookup.byCurrency.set(row.numericCode, row);
+      });
+      exchangeRateLookup.loadedAt = payload.loadedAt || nowIso();
+      exchangeRateLookup.error = "";
+      markServerOnline(payload);
+      return items;
+    })
+    .catch((error) => {
+      exchangeRateLookup.error = String(error?.message || error || "курси валют недоступні");
+      markServerOffline(error);
+      throw error;
+    })
+    .finally(() => {
+      exchangeRateLookup.loading = null;
+    });
+  return exchangeRateLookup.loading;
+}
+
+function exchangeRateForCurrency(currency) {
+  const normalized = normalizeCurrencyCode(currency);
+  if (normalized === BASE_CURRENCY) {
+    return { currency: BASE_CURRENCY, numericCode: "980", rate: 1, exchangedate: "", source: "base-uah" };
+  }
+  return exchangeRateLookup.byCurrency.get(normalized) || null;
+}
+
+function roundCurrencyAmount(value) {
+  return Math.round(Number(value || 0) * 100) / 100;
 }
 
 function liveProductLookupKeys(product) {
@@ -2717,7 +2885,7 @@ function productLookupValue(product) {
   const scanCode = product.barcode || product.qr || product.productCode || product.sqlId || product.sku;
   const retailQty = product.retailStockQty ?? stockQty(product.id);
   const totalQty = product.stockTotalQty ?? stockTotalQty(product.id);
-  const priceText = Number(product.price || 0) > 0 ? formatMoney(product.price) : "ціна після вибору";
+  const priceText = productPriceDisplay(product);
   return `${product.productCode || product.sku} · ${product.name} · ${scanCode} · ${priceText} · ${SQL_MAIN_WAREHOUSE_NAME} ${retailQty} · всього ${totalQty}`;
 }
 
@@ -3049,8 +3217,19 @@ function findCustomerByLookup(value) {
     || null;
 }
 
-function formatMoney(value) {
-  return new Intl.NumberFormat("uk-UA", { style: "currency", currency: "UAH", maximumFractionDigits: 0 }).format(Number(value || 0));
+function formatMoney(value, currency = BASE_CURRENCY) {
+  const amount = Number(value || 0);
+  const normalizedCurrency = normalizeCurrencyCode(currency, BASE_CURRENCY);
+  const maximumFractionDigits = Math.abs(amount % 1) > 0 ? 2 : 0;
+  try {
+    return new Intl.NumberFormat("uk-UA", {
+      style: "currency",
+      currency: normalizedCurrency,
+      maximumFractionDigits
+    }).format(amount);
+  } catch {
+    return `${new Intl.NumberFormat("uk-UA", { maximumFractionDigits }).format(amount)} ${displayCurrencyList(normalizedCurrency)}`;
+  }
 }
 
 function formatDateTime(value) {
@@ -3144,6 +3323,13 @@ function cartLines() {
       lineId: normalized.lineId,
       qty: isWeaponProduct(product) ? 1 : Math.max(1, Number(normalized.qty || 1)),
       price: Number(normalized.price || product.price || 0),
+      priceCurrency: normalized.priceCurrency || BASE_CURRENCY,
+      sourcePrice: Number(normalized.sourcePrice ?? normalized.price ?? product.price ?? 0),
+      sourceCurrency: normalized.sourceCurrency || normalized.priceCurrency || BASE_CURRENCY,
+      exchangeRate: Number(normalized.exchangeRate || 1),
+      exchangeRateDate: normalized.exchangeRateDate || "",
+      priceSource: normalized.priceSource || "",
+      priceWarning: normalized.priceWarning || "",
       discount: Math.max(0, Number(normalized.discount || 0)),
       warehouseCode: normalized.warehouseCode || SQL_MAIN_WAREHOUSE_CODE,
       warehouseName: normalized.warehouseName || SQL_MAIN_WAREHOUSE_NAME,
@@ -3159,6 +3345,17 @@ function cartLines() {
       serialError: normalized.serialError
     };
   }).filter(Boolean);
+}
+
+function checkoutLinePriceHtml(line) {
+  const price = formatMoney(line.price, line.priceCurrency || BASE_CURRENCY);
+  if (!line.sourceCurrency || line.sourceCurrency === BASE_CURRENCY) return price;
+  const details = [
+    formatMoney(line.sourcePrice, line.sourceCurrency),
+    line.exchangeRate ? `курс ${line.exchangeRate}` : "",
+    line.exchangeRateDate || ""
+  ].filter(Boolean).join(" · ");
+  return `${price}<br><span class="muted">${escapeHtml(details)}</span>`;
 }
 
 function nextId(prefix, collection) {
@@ -3790,7 +3987,7 @@ function renderCheckoutPanel(full = false) {
                     <td>${escapeHtml(product.name)}<br><span class="muted">${escapeHtml(product.productCode || product.sku)}${weapon ? " · зброя" : ""}</span></td>
                     <td><span class="pill ${stockClass}">${escapeHtml(checkoutLineStockHint(line, product))}</span></td>
                     <td>${serialControl}</td>
-                    <td>${formatMoney(line.price)}</td>
+                    <td>${checkoutLinePriceHtml(line)}</td>
                     <td><input class="mini-input" data-cart-qty="${index}" type="number" min="1" ${weapon ? 'max="1"' : ""} value="${line.qty}"></td>
                     <td><input class="mini-input" data-cart-discount="${index}" type="number" min="0" value="${line.discount}"></td>
                     <td><strong>${formatMoney(lineTotal(line))}</strong></td>
@@ -4231,8 +4428,8 @@ function renderStock() {
           <span class="pill ${resortTotals.netAmount < 0 ? "danger" : resortTotals.netAmount > 0 ? "warn" : "good"}">${formatMoney(resortTotals.netAmount)}</span>
         </div>
         <form class="form-grid" data-action="create-inventory-resort">
-          <label class="field"><span>Мінус товар</span><select name="fromProductId">${state.products.map((product, index) => option(product.id, `${product.sku} · ${product.name} · ${formatMoney(product.price)}`, index === 0)).join("")}</select></label>
-          <label class="field"><span>Плюс товар</span><select name="toProductId">${state.products.map((product, index) => option(product.id, `${product.sku} · ${product.name} · ${formatMoney(product.price)}`, index === 1)).join("")}</select></label>
+          <label class="field"><span>Мінус товар</span><select name="fromProductId">${state.products.map((product, index) => option(product.id, `${product.sku} · ${product.name} · ${formatMoney(product.price, product.priceCurrency || BASE_CURRENCY)}`, index === 0)).join("")}</select></label>
+          <label class="field"><span>Плюс товар</span><select name="toProductId">${state.products.map((product, index) => option(product.id, `${product.sku} · ${product.name} · ${formatMoney(product.price, product.priceCurrency || BASE_CURRENCY)}`, index === 1)).join("")}</select></label>
           <label class="field"><span>Кількість</span><input name="qty" type="number" min="1" value="1" required></label>
           <label class="field wide"><span>Коментар</span><input name="note" placeholder="причина пересорту"></label>
           <div class="toolbar full">
@@ -4319,7 +4516,7 @@ function renderLiveProductsTable() {
               <td>${escapeHtml(product.productCode || product.sku || product.id)}<br><span class="muted">${escapeHtml(product.sqlId || "-")}</span></td>
               <td><strong>${escapeHtml(product.name)}</strong><br><span class="muted">${escapeHtml(product.barcode || product.qr || "-")} · ${escapeHtml(product.sku || "-")}</span></td>
               <td>${escapeHtml(product.productGroupPath || product.category)}<br><span class="muted">${escapeHtml(product.productFullPath || product.categorySecondary || "-")}</span></td>
-              <td>${escapeHtml(product.priceSummary || formatMoney(product.price))}<br><span class="muted">${escapeHtml(product.priceTypes || "-")} · ${escapeHtml(product.priceCurrencies || "UAH")}</span></td>
+              <td>${escapeHtml(productPriceSummaryDisplay(product))}<br><span class="muted">${escapeHtml(product.priceTypes || "-")} · ${escapeHtml(displayCurrencyList(product.priceCurrencies || product.priceCurrency || BASE_CURRENCY))}</span></td>
               <td><strong>${Number(product.retailStockQty || stockQty(product.id) || 0)}</strong><br><span class="muted">усього ${Number(product.stockTotalQty || 0)} · інші ${Number(product.stockWholesaleQty || 0)}</span></td>
               <td>${escapeHtml(product.source || "crm-sql-live")}<br><span class="muted">${escapeHtml(product.importer || product.supplyChannel || "-")}</span></td>
               <td>${canDo("sale_create") ? `<button class="secondary" type="button" data-add-cart="${escapeHtml(product.id)}">У продаж</button>` : ""}</td>
@@ -4343,7 +4540,7 @@ function renderLivePricesTable() {
               <td>${escapeHtml(price.productCode || "-")}</td>
               <td><strong>${escapeHtml(price.productName || "-")}</strong></td>
               <td>${escapeHtml(price.priceTypeName || "-")}<br><span class="muted">${escapeHtml(price.priceTypeCode || "-")}</span></td>
-              <td><strong>${Number(price.amount || price.price || 0)}</strong> ${escapeHtml(price.currency || "UAH")}</td>
+              <td><strong>${formatMoney(price.amount || price.price || 0, price.currency || BASE_CURRENCY)}</strong></td>
               <td>${escapeHtml(price.snapshotAt || price.importedAt || "-")}</td>
               <td>${escapeHtml(price.sourceFile || price.source || "crm-sql-live")}</td>
             </tr>
@@ -4968,13 +5165,99 @@ function checkoutLineById(lineId) {
   return state.checkout.lines.find((line) => line.lineId === lineId);
 }
 
-function prepareCheckoutLine(product) {
+async function resolveProductPriceForSale(product) {
+  const directPrice = Number(product.price || 0);
+  const rows = normalizeProductPriceRows(product.prices)
+    .filter((row) => Number(row.price || 0) > 0)
+    .sort((left, right) => priceRowRank(left) - priceRowRank(right));
+  const candidates = rows.length
+    ? rows
+    : [{ price: directPrice, currency: normalizeCurrencyCode(product.priceCurrency || product.currency || product.priceCurrencies || BASE_CURRENCY), currencyRaw: product.priceCurrencies || product.priceCurrency || product.currency || BASE_CURRENCY, priceType: "" }];
+  const resolved = candidates.map((row) => ({
+    ...row,
+    currencies: currencyTokens(row.currencyRaw || row.currency),
+    price: Number(row.price || 0)
+  })).filter((row) => row.price > 0);
+  if (!resolved.length) {
+    return {
+      ok: true,
+      price: 0,
+      priceCurrency: BASE_CURRENCY,
+      sourcePrice: 0,
+      sourceCurrency: BASE_CURRENCY,
+      exchangeRate: 1,
+      exchangeRateDate: "",
+      priceSource: "missing-price",
+      priceWarning: "ціна після вибору"
+    };
+  }
+  const singleCurrencyRows = resolved.filter((row) => row.currencies.length === 1);
+  const bestRank = singleCurrencyRows.length ? Math.min(...singleCurrencyRows.map(priceRowRank)) : Number.POSITIVE_INFINITY;
+  const bestRows = singleCurrencyRows.filter((row) => priceRowRank(row) === bestRank);
+  const source = bestRows.find((row) => row.currencies[0] === BASE_CURRENCY) || (bestRows.length === 1 ? bestRows[0] : null);
+  if (!source) {
+    const currencies = productCurrencyTokens(product);
+    return {
+      ok: false,
+      error: `У товарі "${product.name}" ціна має кілька валют (${currencies.length ? currencies.join(", ") : displayCurrencyList(product.priceCurrencies)}). Неможливо безпечно додати в продаж без точної роздрібної ціни з однією валютою.`
+    };
+  }
+  const sourceCurrency = source.currencies[0];
+  if (sourceCurrency === BASE_CURRENCY) {
+    return {
+      ok: true,
+      price: roundCurrencyAmount(source.price),
+      priceCurrency: BASE_CURRENCY,
+      sourcePrice: roundCurrencyAmount(source.price),
+      sourceCurrency: BASE_CURRENCY,
+      exchangeRate: 1,
+      exchangeRateDate: "",
+      priceSource: source.priceType || "sql-price",
+      priceWarning: ""
+    };
+  }
+  try {
+    await fetchExchangeRates();
+  } catch (error) {
+    return {
+      ok: false,
+      error: `Курси валют НБУ не завантажились: ${String(error?.message || error || "невідома помилка")}. Повторіть після відновлення /api/live/exchange-rates.`
+    };
+  }
+  const rate = exchangeRateForCurrency(sourceCurrency);
+  if (!rate) {
+    return {
+      ok: false,
+      error: `Курс ${sourceCurrency} не завантажено з НБУ. Перевірте /api/live/exchange-rates і повторіть додавання товару.`
+    };
+  }
+  return {
+    ok: true,
+    price: roundCurrencyAmount(source.price * Number(rate.rate || 0)),
+    priceCurrency: BASE_CURRENCY,
+    sourcePrice: roundCurrencyAmount(source.price),
+    sourceCurrency,
+    exchangeRate: Number(rate.rate || 0),
+    exchangeRateDate: rate.exchangedate || exchangeRateLookup.loadedAt || "",
+    priceSource: source.priceType || "sql-price-nbu-rate",
+    priceWarning: `${formatMoney(source.price, sourceCurrency)} за курсом НБУ ${rate.rate}`
+  };
+}
+
+function prepareCheckoutLine(product, priceInfo = {}) {
   return normalizeCheckoutLine({
     lineId: `cart-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     productId: product.id,
     qty: 1,
     discount: 0,
-    price: Number(product.price || 0),
+    price: Number(priceInfo.price ?? product.price ?? 0),
+    priceCurrency: priceInfo.priceCurrency || BASE_CURRENCY,
+    sourcePrice: Number(priceInfo.sourcePrice ?? priceInfo.price ?? product.price ?? 0),
+    sourceCurrency: priceInfo.sourceCurrency || priceInfo.priceCurrency || BASE_CURRENCY,
+    exchangeRate: Number(priceInfo.exchangeRate || 1),
+    exchangeRateDate: priceInfo.exchangeRateDate || "",
+    priceSource: priceInfo.priceSource || "",
+    priceWarning: priceInfo.priceWarning || "",
     warehouseCode: SQL_MAIN_WAREHOUSE_CODE,
     warehouseName: SQL_MAIN_WAREHOUSE_NAME,
     warehouseStockQty: productWarehouseStockFallback(product),
@@ -5055,7 +5338,7 @@ async function hydrateCheckoutLine(lineId) {
   render();
 }
 
-function addCartProduct(productOrId) {
+async function addCartProduct(productOrId) {
   if (!canDo("sale_create")) return alert("Немає дозволу створювати продаж.");
   const product = typeof productOrId === "object" && productOrId
     ? rememberLiveProduct(productOrId)
@@ -5067,12 +5350,18 @@ function addCartProduct(productOrId) {
   if (existing) {
     existing.qty = Number(existing.qty || 1) + 1;
   } else {
-    state.checkout.lines.push(prepareCheckoutLine(product));
+    const priceInfo = await resolveProductPriceForSale(product);
+    if (!priceInfo.ok) {
+      alert(priceInfo.error || "Ціну товару не вдалося визначити з валютою.");
+      return false;
+    }
+    state.checkout.lines.push(prepareCheckoutLine(product, priceInfo));
   }
   audit(`Додано товар у кошик: ${product.sku}`);
   saveState();
   render();
   hydrateCheckoutLine(existing?.lineId || state.checkout.lines[state.checkout.lines.length - 1]?.lineId);
+  return true;
 }
 
 async function addSelectedCheckoutProduct(value = state.checkout.search) {
@@ -5090,8 +5379,12 @@ async function addSelectedCheckoutProduct(value = state.checkout.search) {
     alert("Товар не знайдено через live API або fallback-довідник. Перевірте назву, SKU, штрихкод або QR.");
     return;
   }
-  state.checkout.search = "";
-  addCartProduct(product);
+  const added = await addCartProduct(product);
+  if (added) {
+    state.checkout.search = "";
+    saveState();
+    render();
+  }
 }
 
 async function scanCheckoutProduct(value) {
@@ -5104,7 +5397,12 @@ async function scanCheckoutProduct(value) {
     alert("Товар за штрихкодом або QR не знайдено через live API або fallback-довідник. Пошук залишено у полі товарів.");
     return;
   }
-  addCartProduct(product);
+  const added = await addCartProduct(product);
+  if (added) {
+    state.checkout.search = "";
+    saveState();
+    render();
+  }
 }
 
 function removeCartLine(index) {
@@ -5119,7 +5417,14 @@ function currentSaleLines() {
     const saleLine = {
       ...line,
       qty: isWeaponProduct(product) ? 1 : Math.max(1, Number(line.qty || 1)),
-      price: Number(product.price || line.price || 0),
+      price: Number(line.price || product.price || 0),
+      priceCurrency: line.priceCurrency || BASE_CURRENCY,
+      sourcePrice: Number(line.sourcePrice ?? line.price ?? 0),
+      sourceCurrency: line.sourceCurrency || line.priceCurrency || BASE_CURRENCY,
+      exchangeRate: Number(line.exchangeRate || 1),
+      exchangeRateDate: line.exchangeRateDate || "",
+      priceSource: line.priceSource || "",
+      priceWarning: line.priceWarning || "",
       warehouseCode: line.warehouseCode || SQL_MAIN_WAREHOUSE_CODE,
       warehouseName: line.warehouseName || SQL_MAIN_WAREHOUSE_NAME,
       warehouseStockQty: checkoutLineWarehouseStock(line, product),

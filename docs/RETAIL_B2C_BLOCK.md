@@ -10,9 +10,9 @@ Repo: D:\Codex\CRM\retail-crm
 Stable LAN runtime: http://<LAN-IP>:18810/index.html
 Legacy/manual local runtime: internal diagnostics only, not the working URL
 MESER runtime: http://192.168.0.5:8790/index.html
-Current build: 20260609-b2c-stock-select-fix
-App version: 2026.06.09.3
-Released at: 2026-06-09 17:03:10 +03:00
+Current build: 20260609-b2c-currency-rates
+App version: 2026.06.09.4
+Released at: 2026-06-09 17:32:53 +03:00
 Contract version: 2026.06.07-retail-live-api-1
 ```
 
@@ -30,6 +30,8 @@ This block is one autonomous module in the Odoo-like modular CRM.
 ```
 
 The block owns retail workflows, not master data. Product, price, stock, serial number, receipt and 1C-origin facts come from the SQL core.
+
+Retail sale prices are currency-aware. B2C must not treat SQL numeric currency codes as UAH by default: `980=UAH`, `978=EUR`, `840=USD`. When a selected sale price has one foreign currency, the backend downloads official NBU exchange rates through `/api/live/exchange-rates` and the POS stores the sale line price in UAH together with source currency, source price, exchange rate and exchange-rate date. If SQL returns one product price with mixed currencies, the POS blocks adding the product until SQL exposes one exact retail price with one currency.
 
 Retail sale product selection reads Warehouse 1 stock through bounded live endpoints. The POS product autocomplete uses `/api/live/stock-balances?warehouseCode=2&search=&limit=&offset=` and shows only products with a positive `Склад №1` balance; in server mode it must not fall back to the local/demo full product list when live stock search returns zero rows. After a product is selected, the sale line reloads product-scoped stock by `productCode` and `warehouseCode`. Serial numbers are fetched only after a concrete weapon product is selected through `/api/live/serial-stock?productCode=&warehouseCode=2&limit=20&offset=`; `productCode` is required, and weapon rows require one available live serial number before a sale can be posted.
 
@@ -146,6 +148,7 @@ GET /api/settings
 PUT /api/settings
 GET /api/live/products?search=&limit=&offset=
 GET /api/live/product-prices?search=&limit=&offset=
+GET /api/live/exchange-rates?currency=&force=
 GET /api/live/counterparties?search=&limit=&offset=
 GET /api/products?search=&barcode=&limit=&offset=
 GET /api/products/:id
@@ -202,6 +205,7 @@ The POS product datalist renders only the current bounded result set. If the bac
 ```text
 SQL live товари: GET /api/live/products?search=&limit=&offset=
 SQL live ціни: GET /api/live/product-prices?search=&limit=&offset=
+SQL live курси: GET /api/live/exchange-rates?currency=&force=
 ```
 
 `Довідники -> Клієнти і лояльність` now keeps B2C-created clients separately and shows 1C/SQL counterparties through:

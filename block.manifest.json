@@ -27,9 +27,9 @@
     "dataDir": "data"
   },
   "currentApp": {
-    "build": "20260609-b2c-stock-select-fix",
-    "version": "2026.06.09.3",
-    "releasedAt": "2026-06-09 17:03:10 +03:00",
+    "build": "20260609-b2c-currency-rates",
+    "version": "2026.06.09.4",
+    "releasedAt": "2026-06-09 17:32:53 +03:00",
     "contractVersion": "2026.06.07-retail-live-api-1"
   },
   "sourceOfTruth": {
@@ -90,6 +90,7 @@
       "PUT /api/settings",
       "GET /api/live/products?search=&limit=&offset=",
       "GET /api/live/product-prices?search=&limit=&offset=",
+      "GET /api/live/exchange-rates?currency=&force=",
       "GET /api/live/counterparties?search=&limit=&offset=",
       "GET /api/live/stock-balances?productCode=&warehouseCode=&limit=&offset=",
       "GET /api/live/serial-stock?productCode=&warehouseCode=&limit=&offset=",
@@ -142,6 +143,16 @@
       "maxLimit": 100,
       "filters": ["search", "offset"],
       "source": "CRM SQL API /one-c-mirror/product-prices",
+      "fallback": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/live/exchange-rates",
+      "model": "ExchangeRate",
+      "defaultLimit": 0,
+      "maxLimit": 0,
+      "filters": ["currency", "valcode", "search", "force"],
+      "source": "NBU official exchange-rate API cached by Retail B2C backend",
       "fallback": false
     },
     {
