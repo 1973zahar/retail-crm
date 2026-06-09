@@ -36,14 +36,14 @@ Window map:
 - Вікно 3 / локальний = local Windows, workspace D:\Codex\CRM.
 
 Поточна локальна Retail B2C версія:
-- build: 20260609-b2c-fast-live-search
-- app version: 2026.06.09.2
-- releasedAt: 2026-06-09 15:47:21 +03:00
+- build: 20260609-b2c-stock-select-fix
+- app version: 2026.06.09.3
+- releasedAt: 2026-06-09 17:03:10 +03:00
 
 Поточна MESER health версія:
-- build: 20260609-b2c-fast-live-search
-- app version: 2026.06.09.2
-- releasedAt: 2026-06-09 15:47:21 +03:00
+- build: 20260609-b2c-stock-select-fix
+- app version: 2026.06.09.3
+- releasedAt: 2026-06-09 17:03:10 +03:00
 
 Поточна основна MESER адреса:
 http://192.168.0.5:8790/index.html
@@ -54,8 +54,8 @@ http://192.168.0.5:8790/api/health
 Остання підтверджена MESER health відповідь:
 - ok: True
 - mode: server-powershell
-- build: 20260609-b2c-fast-live-search
-- appVersion: 2026.06.09.2
+- build: 20260609-b2c-stock-select-fix
+- appVersion: 2026.06.09.3
 - crmSqlApiBaseUrl: http://192.168.0.166:3000
 - publicBaseUrl: http://192.168.0.5:8790
 - dataDir: D:\Codex\CRM\retail-crm\data
@@ -90,12 +90,12 @@ Invoke-WebRequest -UseBasicParsing -Uri 'http://192.168.0.5:8790/index.html' -Ti
 - MESER scheduled task: `Retail B2C CRM`
 - MESER URL: `http://192.168.0.5:8790/index.html`
 - MESER health: `http://192.168.0.5:8790/api/health`
-- Current local build: `20260609-b2c-fast-live-search`
-- Current local app version: `2026.06.09.2`
-- Current local version timestamp: `2026-06-09 15:47:21 +03:00`
-- Current MESER health build: `20260609-b2c-fast-live-search`
-- Current MESER health app version: `2026.06.09.2`
-- Current MESER health timestamp: `2026-06-09 15:47:21 +03:00`
+- Current local build: `20260609-b2c-stock-select-fix`
+- Current local app version: `2026.06.09.3`
+- Current local version timestamp: `2026-06-09 17:03:10 +03:00`
+- Current MESER health build: `20260609-b2c-stock-select-fix`
+- Current MESER health app version: `2026.06.09.3`
+- Current MESER health timestamp: `2026-06-09 17:03:10 +03:00`
 - SQL API base: `http://192.168.0.166:3000`
 
 Local LAN launcher may print an operator URL like:
@@ -325,7 +325,7 @@ if ($r.Content -match 'app\.js\?v=([^"'']+)') { $matches[1] } else { 'no-build' 
 Expected current MESER build:
 
 ```text
-20260609-b2c-fast-live-search
+20260609-b2c-stock-select-fix
 ```
 
 Expected current health:
@@ -333,8 +333,8 @@ Expected current health:
 ```text
 ok: True
 mode: server-powershell
-appVersion: 2026.06.09.2
-build: 20260609-b2c-fast-live-search
+appVersion: 2026.06.09.3
+build: 20260609-b2c-stock-select-fix
 crmSqlApiBaseUrl: http://192.168.0.166:3000
 publicBaseUrl: http://192.168.0.5:8790
 ```
@@ -342,7 +342,7 @@ publicBaseUrl: http://192.168.0.5:8790
 Current known performance note:
 
 ```text
-Retail B2C build 20260609-b2c-fast-live-search fixes MESER product lookup false negatives by parsing SQL numeric strings correctly in server.ps1 and by removing the POS empty client auto-load that blocked product search on the single-threaded PowerShell fallback.
+Retail B2C build 20260609-b2c-stock-select-fix fixes MESER POS selection after datalist choice by caching selected live stock products and extracting the long product code from full option labels before retrying /api/live/stock-balances.
 The deployed Ubuntu SQL API /one-c-mirror/counterparties endpoint is still slow and ignores search until the prepared SQL API counterparties_live read-model migration/API patch is deployed on Ubuntu.
 ```
 
