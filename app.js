@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.09.14";
-const APP_BUILD = "20260609-b2c-cart-merge-price-change";
-const APP_RELEASED_AT = "2026-06-09 23:44:48 +03:00";
+const APP_VERSION = "2026.06.10.1";
+const APP_BUILD = "20260610-b2c-live-qty-totals";
+const APP_RELEASED_AT = "2026-06-10 00:04:20 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SESSION_TOKEN_KEY = "retail-crm-b2c-session-token-v1";
@@ -4243,7 +4243,7 @@ function renderCheckoutPanel(full = false) {
                     <td>${checkoutLinePriceHtml(line, index)}</td>
                     <td><input class="mini-input" data-cart-qty="${index}" type="number" min="1" ${weapon ? 'max="1"' : ""} value="${line.qty}"></td>
                     <td><input class="mini-input" data-cart-discount="${index}" type="number" min="0" value="${line.discount}"></td>
-                    <td><strong>${formatMoney(lineTotal(line))}</strong></td>
+                    <td><strong data-cart-line-total="${index}">${formatMoney(lineTotal(line))}</strong></td>
                     <td><button class="secondary" type="button" data-remove-cart="${index}">Прибрати</button></td>
                   </tr>
                 `;
@@ -4253,9 +4253,9 @@ function renderCheckoutPanel(full = false) {
         </div>
         <div class="cart-summary full">
           <div>
-            <span>Підсумок: ${formatMoney(subtotal)}</span>
-            <span>Лояльність: -${formatMoney(loyalDiscount)}</span>
-            <strong>Разом: ${formatMoney(total)}</strong>
+            <span>Підсумок: <span data-cart-subtotal>${formatMoney(subtotal)}</span></span>
+            <span>Лояльність: -<span data-cart-loyalty>${formatMoney(loyalDiscount)}</span></span>
+            <strong>Разом: <span data-cart-total>${formatMoney(total)}</span></strong>
           </div>
           <button class="primary" type="submit" ${openShift() && lines.length ? "" : "disabled"}>Провести продаж</button>
         </div>
@@ -6884,6 +6884,23 @@ function updateCartField(target, options = {}) {
   return changed;
 }
 
+function updateCartTotalsInPlace() {
+  const lines = cartLines();
+  lines.forEach((line, index) => {
+    const lineTotalTarget = document.querySelector(`[data-cart-line-total="${index}"]`);
+    if (lineTotalTarget) lineTotalTarget.textContent = formatMoney(lineTotal(line));
+  });
+  const subtotal = receiptSubtotal(lines);
+  const loyalty = loyaltyDiscount(lines);
+  const total = checkoutTotal(lines);
+  const subtotalTarget = document.querySelector("[data-cart-subtotal]");
+  const loyaltyTarget = document.querySelector("[data-cart-loyalty]");
+  const totalTarget = document.querySelector("[data-cart-total]");
+  if (subtotalTarget) subtotalTarget.textContent = formatMoney(subtotal);
+  if (loyaltyTarget) loyaltyTarget.textContent = formatMoney(loyalty);
+  if (totalTarget) totalTarget.textContent = formatMoney(total);
+}
+
 function commitCartInlineEdits() {
   let changed = false;
   document.querySelectorAll("[data-cart-qty], [data-cart-discount]").forEach((target) => {
@@ -7116,7 +7133,9 @@ document.addEventListener("click", (event) => {
 
 document.addEventListener("input", (event) => {
   if (event.target.dataset.cartQty !== undefined || event.target.dataset.cartDiscount !== undefined) {
-    updateCartField(event.target, { commitEmpty: false, saveAfter: false, renderAfter: false });
+    if (updateCartField(event.target, { commitEmpty: false, saveAfter: false, renderAfter: false })) {
+      updateCartTotalsInPlace();
+    }
     return;
   }
   if (event.target.dataset.productLookup !== undefined || event.target.dataset.customerLookup !== undefined) {
