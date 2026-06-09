@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.09.13";
-const APP_BUILD = "20260609-b2c-cart-line-edit-apply";
-const APP_RELEASED_AT = "2026-06-09 23:03:32 +03:00";
+const APP_VERSION = "2026.06.09.14";
+const APP_BUILD = "20260609-b2c-cart-merge-price-change";
+const APP_RELEASED_AT = "2026-06-09 23:44:48 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SESSION_TOKEN_KEY = "retail-crm-b2c-session-token-v1";
@@ -1512,6 +1512,9 @@ function normalizeCheckoutLine(line) {
   return {
     lineId: line.lineId || `cart-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     productId: line.productId || "",
+    productCode: line.productCode || "",
+    sku: line.sku || "",
+    sqlId: line.sqlId || "",
     qty: Math.max(1, Number(line.qty || 1)),
     price: Number(line.price || 0),
     priceCurrency: normalizeCurrencyCode(line.priceCurrency || BASE_CURRENCY),
@@ -3094,6 +3097,28 @@ function productById(id) {
   return liveProductCache.get(id) || state.products.find((product) => product.id === id) || EMPTY_PRODUCT;
 }
 
+function productCartIdentity(product) {
+  const source = product || {};
+  return normalizeScanText(source.productCode || source.sku || source.sqlId || source.id || "");
+}
+
+function checkoutLineProductIdentity(line) {
+  const product = productById(line?.productId);
+  return productCartIdentity({
+    ...product,
+    productCode: line?.productCode || product.productCode,
+    sku: line?.sku || product.sku,
+    sqlId: line?.sqlId || product.sqlId,
+    id: line?.productId || product.id
+  });
+}
+
+function findCheckoutLineForProduct(product) {
+  const target = productCartIdentity(product);
+  if (!target) return null;
+  return state.checkout.lines.find((line) => checkoutLineProductIdentity(line) === target) || null;
+}
+
 function customerById(id) {
   return state.customers.find((customer) => customer.id === id) || WALK_IN_CUSTOMER;
 }
@@ -3557,6 +3582,9 @@ function cartLines() {
     return {
       productId: product.id,
       lineId: normalized.lineId,
+      productCode: normalized.productCode || product.productCode || product.sku || "",
+      sku: normalized.sku || product.sku || product.productCode || "",
+      sqlId: normalized.sqlId || product.sqlId || "",
       qty: isWeaponProduct(product) ? 1 : Math.max(1, Number(normalized.qty || 1)),
       price: Number(Object.prototype.hasOwnProperty.call(line, "price") ? normalized.price : product.price || 0),
       priceCurrency: normalized.priceCurrency || BASE_CURRENCY,
@@ -3592,7 +3620,7 @@ function checkoutLinePriceHtml(line, index) {
   const priceOptions = Array.isArray(line.priceOptions) ? line.priceOptions : [];
   const selector = canDo("price_select") && priceOptions.length
     ? `
-      <select class="mini-select" data-cart-price-option="${index}">
+      <select class="mini-select" data-cart-price-option="${escapeHtml(line.lineId || index)}">
         <option value="" ${line.priceOptionId ? "" : "selected"}>Виберіть прикріплену ціну</option>
         ${priceOptions.map((item) => option(item.id, priceOptionLabel(item), item.id === line.priceOptionId)).join("")}
       </select>
@@ -5543,6 +5571,9 @@ function prepareCheckoutLine(product, priceInfo = {}) {
   return normalizeCheckoutLine({
     lineId: `cart-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     productId: product.id,
+    productCode: product.productCode || product.sku || "",
+    sku: product.sku || product.productCode || "",
+    sqlId: product.sqlId || "",
     qty: 1,
     discount: 0,
     price: Number(priceInfo.price ?? product.price ?? 0),
@@ -5643,11 +5674,17 @@ async function addCartProduct(productOrId) {
     ? rememberLiveProduct(productOrId)
     : productById(productOrId);
   if (!product.id) return alert("Товар не знайдено в довіднику.");
-  const productId = product.id;
   const weapon = isWeaponProduct(product);
-  const existing = weapon ? null : state.checkout.lines.find((line) => line.productId === productId);
+  const existing = weapon ? null : findCheckoutLineForProduct(product);
   if (existing) {
     existing.qty = Number(existing.qty || 1) + 1;
+    existing.productId = product.id;
+    existing.productCode = existing.productCode || product.productCode || product.sku || "";
+    existing.sku = existing.sku || product.sku || product.productCode || "";
+    existing.sqlId = existing.sqlId || product.sqlId || "";
+    if (!Array.isArray(existing.priceOptions) || !existing.priceOptions.length) {
+      existing.priceOptions = productAttachedPriceOptions(product);
+    }
   } else {
     const priceInfo = await resolveProductPriceForSale(product);
     if (!priceInfo.ok) {
@@ -6869,13 +6906,28 @@ function updateCartSerial(index, serialName) {
   render();
 }
 
-async function updateCartPriceOption(index, optionId) {
+function checkoutLineIndexByToken(token) {
+  const raw = String(token ?? "");
+  if (/^\d+$/.test(raw) && state.checkout.lines[Number(raw)]) return Number(raw);
+  return state.checkout.lines.findIndex((line) => line.lineId === raw);
+}
+
+function findCheckoutPriceOption(line, optionId) {
+  const rawId = String(optionId || "");
+  if (!rawId) return null;
+  const options = normalizeCheckoutLine(line).priceOptions;
+  return options.find((item) => item.id === rawId)
+    || options.find((item) => normalizeScanText(priceOptionLabel(item)) === normalizeScanText(rawId))
+    || null;
+}
+
+async function updateCartPriceOption(lineToken, optionId) {
   if (!canDo("price_select")) return alert("Немає дозволу вибирати тип ціни.");
+  const index = checkoutLineIndexByToken(lineToken);
   const line = state.checkout.lines[index];
   if (!line) return;
   if (line.priceOptionId === optionId && Number(line.price || 0) > 0) return;
-  const normalized = normalizeCheckoutLine(line);
-  const selected = normalized.priceOptions.find((item) => item.id === optionId);
+  const selected = findCheckoutPriceOption(line, optionId);
   if (!selected) {
     Object.assign(line, {
       price: 0,
@@ -7067,10 +7119,6 @@ document.addEventListener("input", (event) => {
     updateCartField(event.target, { commitEmpty: false, saveAfter: false, renderAfter: false });
     return;
   }
-  if (event.target.dataset.cartPriceOption !== undefined) {
-    updateCartPriceOption(Number(event.target.dataset.cartPriceOption), event.target.value);
-    return;
-  }
   if (event.target.dataset.productLookup !== undefined || event.target.dataset.customerLookup !== undefined) {
     updateCheckoutField(event.target);
   }
@@ -7097,7 +7145,7 @@ document.addEventListener("change", (event) => {
   if (event.target.dataset.returnConfirmRefund !== undefined) updateReturnConfirmRefund(event.target.value);
   if (event.target.dataset.cartSerial !== undefined) updateCartSerial(Number(event.target.dataset.cartSerial), event.target.value);
   if (event.target.dataset.cartQty !== undefined || event.target.dataset.cartDiscount !== undefined) updateCartField(event.target);
-  if (event.target.dataset.cartPriceOption !== undefined) updateCartPriceOption(Number(event.target.dataset.cartPriceOption), event.target.value);
+  if (event.target.dataset.cartPriceOption !== undefined) updateCartPriceOption(event.target.dataset.cartPriceOption, event.target.value);
   if (event.target.dataset.checkoutField !== undefined) updateCheckoutField(event.target);
   if (event.target.dataset.customerLookup !== undefined) selectCustomerFromLookup(event.target.value);
   if (event.target.dataset.checkoutScan !== undefined && event.target.value.trim()) scanCheckoutProduct(event.target.value);

@@ -11,9 +11,9 @@ try {
 } catch {
 }
 
-$AppVersion = "2026.06.09.13"
-$AppBuild = "20260609-b2c-cart-line-edit-apply"
-$AppReleasedAt = "2026-06-09 23:03:32 +03:00"
+$AppVersion = "2026.06.09.14"
+$AppBuild = "20260609-b2c-cart-merge-price-change"
+$AppReleasedAt = "2026-06-09 23:44:48 +03:00"
 $RootDir = $PSScriptRoot
 $ResolvedDataDir = if ([System.IO.Path]::IsPathRooted($DataDir)) { $DataDir } else { Join-Path $RootDir $DataDir }
 $StatePath = Join-Path $ResolvedDataDir "retail-crm-state.json"
