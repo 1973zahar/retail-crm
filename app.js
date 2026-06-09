@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.09.2";
-const APP_BUILD = "20260609-b2c-fast-live-search";
-const APP_RELEASED_AT = "2026-06-09 15:47:21 +03:00";
+const APP_VERSION = "2026.06.09.3";
+const APP_BUILD = "20260609-b2c-stock-select-fix";
+const APP_RELEASED_AT = "2026-06-09 17:03:10 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SESSION_TOKEN_KEY = "retail-crm-b2c-session-token-v1";
@@ -72,6 +72,7 @@ const DEFAULT_SYSTEM_SETTINGS = {
   lastSavedAt: ""
 };
 const LIVE_PRODUCT_LOOKUP_LIMIT = 20;
+const LIVE_PRODUCT_LOOKUP_CACHE_LIMIT = 1000;
 const LIVE_CUSTOMER_LOOKUP_LIMIT = 20;
 const LIVE_STOCK_LOOKUP_LIMIT = 20;
 const LIVE_SERIAL_LOOKUP_LIMIT = 20;
@@ -128,6 +129,7 @@ const serverSync = {
   timer: null
 };
 const liveProductCache = new Map();
+const liveProductLookupCache = new Map();
 const liveTableLoadQueue = new Set();
 const liveProductLookup = {
   query: "",
@@ -1583,9 +1585,33 @@ async function fetchJson(path, options = {}) {
   return payload;
 }
 
+function liveProductLookupKeys(product) {
+  if (!product) return [];
+  return [
+    productLookupValue(product),
+    product.id,
+    product.sqlId,
+    product.productCode,
+    product.sku,
+    product.barcode,
+    product.qr,
+    product.name
+  ].map(normalizeScanText).filter(Boolean);
+}
+
+function rememberLiveLookupProduct(product) {
+  if (!product) return product;
+  if (liveProductLookupCache.size > LIVE_PRODUCT_LOOKUP_CACHE_LIMIT) {
+    liveProductLookupCache.clear();
+  }
+  liveProductLookupKeys(product).forEach((key) => liveProductLookupCache.set(key, product));
+  return product;
+}
+
 function rememberLiveProduct(product) {
   const normalized = normalizeProduct(product);
   if (normalized.id) liveProductCache.set(normalized.id, normalized);
+  rememberLiveLookupProduct(normalized);
   return normalized;
 }
 
@@ -1600,6 +1626,32 @@ function localProductLookupItems(query, limit = LIVE_PRODUCT_LOOKUP_LIMIT) {
     .filter((product) => productMatchesQuery(product, query))
     .filter(productHasMainWarehouseStock)
     .slice(0, Math.max(1, Math.min(100, Number(limit || LIVE_PRODUCT_LOOKUP_LIMIT))));
+}
+
+function cachedLiveLookupProducts() {
+  return Array.from(new Set(liveProductLookupCache.values())).filter(productHasMainWarehouseStock);
+}
+
+function findCachedLiveLookupProduct(value) {
+  const raw = normalizeScanText(value);
+  if (!raw) return null;
+  const direct = liveProductLookupCache.get(raw);
+  if (direct && productHasMainWarehouseStock(direct)) return direct;
+  return cachedLiveLookupProducts().find((product) => (
+    normalizeScanText(productLookupValue(product)) === raw
+    || productMatchesQuery(product, value)
+    || productScanTargets(product).some((target) => raw.includes(target))
+  )) || null;
+}
+
+function liveProductLookupSearchTerm(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const cached = findCachedLiveLookupProduct(raw);
+  if (cached) return liveProductCode(cached) || cached.productCode || cached.sku || raw;
+  const numericCodes = normalizeScanText(raw).match(/\d{5,}/g) || [];
+  const longestNumericCode = numericCodes.sort((left, right) => right.length - left.length)[0];
+  return longestNumericCode || raw;
 }
 
 function currentProductLookupItems() {
@@ -1865,10 +1917,13 @@ function queueLiveCustomerLookup(value) {
 
 function findStockedLiveLookupProduct(value) {
   const raw = normalizeScanText(value);
-  if (!raw || !Array.isArray(liveProductLookup.items)) return null;
-  const items = liveProductLookup.items.filter(productHasMainWarehouseStock);
+  if (!raw) return null;
+  const items = Array.isArray(liveProductLookup.items)
+    ? liveProductLookup.items.filter(productHasMainWarehouseStock)
+    : [];
   return items.find((product) => normalizeScanText(productLookupValue(product)) === raw)
     || items.find((product) => productMatchesQuery(product, value))
+    || findCachedLiveLookupProduct(value)
     || null;
 }
 
@@ -2235,6 +2290,8 @@ function queueLiveProductLookup(value) {
   window.clearTimeout(liveProductLookup.timer);
   liveProductLookup.query = query;
   liveProductLookup.barcode = "";
+  const requestId = liveProductLookup.requestId + 1;
+  liveProductLookup.requestId = requestId;
   if (!query) {
     liveProductLookup.items = [];
     liveProductLookup.total = 0;
@@ -2253,19 +2310,32 @@ function queueLiveProductLookup(value) {
     renderProductLookupOptions();
     return;
   }
+  const cached = findCachedLiveLookupProduct(query);
+  if (cached) {
+    liveProductLookup.items = [cached];
+    liveProductLookup.total = 1;
+    liveProductLookup.limit = LIVE_PRODUCT_LOOKUP_LIMIT;
+    liveProductLookup.offset = 0;
+    liveProductLookup.loading = false;
+    liveProductLookup.error = "";
+    liveProductLookup.source = "crm-sql-live-stock-cache";
+    liveProductLookup.fallback = false;
+    liveProductLookup.lastLoadedAt = nowIso();
+    renderProductLookupOptions();
+    return;
+  }
   liveProductLookup.items = [];
   liveProductLookup.total = 0;
   liveProductLookup.source = "";
   liveProductLookup.fallback = false;
-  const requestId = liveProductLookup.requestId + 1;
-  liveProductLookup.requestId = requestId;
   liveProductLookup.loading = true;
   liveProductLookup.error = "";
   renderProductLookupOptions();
   liveProductLookup.timer = window.setTimeout(async () => {
     try {
-      const payload = await queryLiveStockedProducts({ search: query, limit: LIVE_PRODUCT_LOOKUP_LIMIT });
+      const payload = await queryLiveStockedProducts({ search: liveProductLookupSearchTerm(query), limit: LIVE_PRODUCT_LOOKUP_LIMIT });
       if (requestId !== liveProductLookup.requestId) return;
+      liveProductLookup.query = query;
       liveProductLookup.items = payload.items;
     } catch (error) {
       if (requestId !== liveProductLookup.requestId) return;
@@ -2294,7 +2364,8 @@ async function resolveProductForSale(value, { scan = false } = {}) {
     liveProductLookup.error = "";
     renderProductLookupOptions();
     try {
-      const payload = await queryLiveStockedProducts({ search: query, limit: LIVE_PRODUCT_LOOKUP_LIMIT });
+      const payload = await queryLiveStockedProducts({ search: liveProductLookupSearchTerm(query), limit: LIVE_PRODUCT_LOOKUP_LIMIT });
+      liveProductLookup.query = query;
       liveProductLookup.loading = false;
       renderProductLookupOptions();
       if (payload.items.length) return enrichStockLookupProductForSale(payload.items[0]);
@@ -3726,7 +3797,7 @@ function renderCheckoutPanel(full = false) {
                     <td><button class="secondary" type="button" data-remove-cart="${index}">Прибрати</button></td>
                   </tr>
                 `;
-              }).join("") || '<tr><td colspan="8" class="muted">Залишків ще не імпортовано з SQL. Локальні демо-залишки вимкнено.</td></tr>'}
+              }).join("") || '<tr><td colspan="8" class="muted">Додайте товар із поля вище. Live-залишки завантажуються під час вибору товару.</td></tr>'}
             </tbody>
           </table>
         </div>
