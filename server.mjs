@@ -3,9 +3,9 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const APP_VERSION = "2026.06.09.7";
-const APP_BUILD = "20260609-b2c-fast-customer-search";
-const APP_RELEASED_AT = "2026-06-09 20:19:03 +03:00";
+const APP_VERSION = "2026.06.09.8";
+const APP_BUILD = "20260609-b2c-customer-search-complete";
+const APP_RELEASED_AT = "2026-06-09 20:36:58 +03:00";
 const ROOT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const CRM_SQL_API_BASE_URL = String(process.env.CRM_SQL_API_BASE_URL || "http://192.168.0.166:3000").replace(/\/+$/, "");
 const CRM_SQL_API_TIMEOUT_MS = Math.max(1000, Number(process.env.CRM_SQL_API_TIMEOUT_MS || 30000));
@@ -901,6 +901,21 @@ function uniqueLiveCounterparties(items) {
   });
 }
 
+function liveCounterpartyMatchesSearch(item, search) {
+  const query = String(search || "").trim().toLowerCase();
+  if (!query) return true;
+  return [
+    item.counterpartyCode,
+    item.id,
+    item.sqlId,
+    item.name,
+    item.fullName,
+    item.phone,
+    item.email,
+    item.taxId
+  ].some((value) => String(value || "").toLowerCase().includes(query));
+}
+
 function normalizeLiveWarehouse(row) {
   const warehouseCode = textValue(row.warehouseCode, row.warehouse_code, row.code, row.id);
   return {
@@ -995,7 +1010,18 @@ async function listLiveCounterparties(url) {
   const hasSearch = Boolean(String(query.search || "").trim());
   const pathName = hasSearch ? "/one-c-mirror/counterparty-balances" : "/one-c-mirror/counterparties";
   const { payload } = await fetchCrmSql(pathName, query.params);
-  const items = uniqueLiveCounterparties(payloadItems(payload).map(normalizeLiveCounterparty));
+  const balanceItems = uniqueLiveCounterparties(payloadItems(payload).map(normalizeLiveCounterparty));
+  let items = balanceItems;
+  if (hasSearch && balanceItems.length <= 1) {
+    const fallbackParams = new URLSearchParams(query.params);
+    fallbackParams.set("limit", "100");
+    fallbackParams.set("offset", "0");
+    const { payload: fallbackPayload } = await fetchCrmSql("/one-c-mirror/counterparties", fallbackParams);
+    const fallbackItems = payloadItems(fallbackPayload)
+      .map(normalizeLiveCounterparty)
+      .filter((item) => liveCounterpartyMatchesSearch(item, query.search));
+    items = uniqueLiveCounterparties([...balanceItems, ...fallbackItems]).slice(0, query.limit);
+  }
   const envelopePayload = hasSearch
     ? { ...payload, total: items.length, hasMore: false, nextOffset: null }
     : payload;

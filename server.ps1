@@ -11,9 +11,9 @@ try {
 } catch {
 }
 
-$AppVersion = "2026.06.09.7"
-$AppBuild = "20260609-b2c-fast-customer-search"
-$AppReleasedAt = "2026-06-09 20:19:03 +03:00"
+$AppVersion = "2026.06.09.8"
+$AppBuild = "20260609-b2c-customer-search-complete"
+$AppReleasedAt = "2026-06-09 20:36:58 +03:00"
 $RootDir = $PSScriptRoot
 $ResolvedDataDir = if ([System.IO.Path]::IsPathRooted($DataDir)) { $DataDir } else { Join-Path $RootDir $DataDir }
 $StatePath = Join-Path $ResolvedDataDir "retail-crm-state.json"
@@ -823,6 +823,25 @@ function Select-UniqueLiveCounterparties($Items) {
   return $unique
 }
 
+function Test-LiveCounterpartyMatch($Item, [string]$Search) {
+  $query = $Search.Trim().ToLowerInvariant()
+  if (-not $query) { return $true }
+  $values = @(
+    (Get-TextValue $Item @("counterpartyCode")),
+    (Get-TextValue $Item @("id")),
+    (Get-TextValue $Item @("sqlId")),
+    (Get-TextValue $Item @("name")),
+    (Get-TextValue $Item @("fullName")),
+    (Get-TextValue $Item @("phone")),
+    (Get-TextValue $Item @("email")),
+    (Get-TextValue $Item @("taxId"))
+  )
+  foreach ($value in $values) {
+    if ($value -and $value.ToLowerInvariant().Contains($query)) { return $true }
+  }
+  return $false
+}
+
 function ConvertTo-LiveWarehouse($Row) {
   $warehouseCode = Get-TextValue $Row @("warehouseCode", "warehouse_code", "code", "id")
   return @{
@@ -918,6 +937,19 @@ function New-LiveCounterpartiesResponse($Params) {
   $items = @()
   foreach ($row in (Get-PayloadItems $payload)) { $items += ConvertTo-LiveCounterparty $row }
   $items = @(Select-UniqueLiveCounterparties $items)
+  if ($search -and @($items).Count -le 1) {
+    $fallbackParams = @{}
+    foreach ($key in $query.params.Keys) { $fallbackParams[$key] = $query.params[$key] }
+    $fallbackParams.limit = 100
+    $fallbackParams.offset = 0
+    $fallbackPayload = Invoke-CrmSqlApi "/one-c-mirror/counterparties" $fallbackParams
+    $fallbackItems = @()
+    foreach ($row in (Get-PayloadItems $fallbackPayload)) {
+      $item = ConvertTo-LiveCounterparty $row
+      if (Test-LiveCounterpartyMatch $item $search) { $fallbackItems += $item }
+    }
+    $items = @(Select-UniqueLiveCounterparties (@($items) + @($fallbackItems)) | Select-Object -First ([int]$query.limit))
+  }
   if ($search) {
     $payload | Add-Member -NotePropertyName total -NotePropertyValue @($items).Count -Force
     $payload | Add-Member -NotePropertyName hasMore -NotePropertyValue $false -Force

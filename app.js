@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.09.7";
-const APP_BUILD = "20260609-b2c-fast-customer-search";
-const APP_RELEASED_AT = "2026-06-09 20:19:03 +03:00";
+const APP_VERSION = "2026.06.09.8";
+const APP_BUILD = "20260609-b2c-customer-search-complete";
+const APP_RELEASED_AT = "2026-06-09 20:36:58 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SESSION_TOKEN_KEY = "retail-crm-b2c-session-token-v1";
@@ -2063,12 +2063,12 @@ function currentCustomerLookupItems() {
   if (!query) {
     return pool.slice(0, LIVE_CUSTOMER_LOOKUP_LIMIT);
   }
-  const localMatches = state.customers.filter((customer) => customerMatchesQuery(customer, query));
+  const cachedMatches = pool.filter((customer) => customerMatchesQuery(customer, query));
   const liveMatches = serverModeEnabled() && queryKey === liveKey && liveCustomerLookup.source
     ? liveCustomerLookup.items
     : [];
   const merged = new Map();
-  [...localMatches, ...liveMatches].forEach((customer) => {
+  [...cachedMatches, ...liveMatches].forEach((customer) => {
     const normalized = normalizeCustomer(customer);
     const key = customerIdentityKeys(normalized)[0] || normalized.id;
     if (key && !merged.has(key)) merged.set(key, normalized);
