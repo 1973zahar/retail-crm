@@ -882,10 +882,15 @@ function New-LiveProductsResponse($Params) {
 }
 
 function New-LiveProductPricesResponse($Params) {
-  $query = Get-LiveQueryParams $Params 20 100
+  $query = Get-LiveQueryParams $Params 20 100 @("productCode")
   $payload = Invoke-CrmSqlApi "/one-c-mirror/product-prices" $query.params
+  $productCodeFilter = (Get-QueryValue $Params "productCode").Trim().ToLowerInvariant()
   $items = @()
-  foreach ($row in (Get-PayloadItems $payload)) { $items += ConvertTo-LiveProductPrice $row }
+  foreach ($row in (Get-PayloadItems $payload)) {
+    $item = ConvertTo-LiveProductPrice $row
+    if ($productCodeFilter -and ([string]$item.productCode).Trim().ToLowerInvariant() -ne $productCodeFilter) { continue }
+    $items += $item
+  }
   return New-CrmSqlEnvelope "/one-c-mirror/product-prices" $query $items $payload
 }
 

@@ -970,10 +970,13 @@ async function listLiveProducts(url) {
 }
 
 async function listLiveProductPrices(url) {
-  const query = liveQuery(url, 20, 100);
+  const query = liveQuery(url, 20, 100, ["productCode"]);
   const pathName = "/one-c-mirror/product-prices";
   const { payload } = await fetchCrmSql(pathName, query.params);
-  const items = payloadItems(payload).map(normalizeLivePrice);
+  const productCode = String(query.filters.productCode || "").trim().toLowerCase();
+  const items = payloadItems(payload)
+    .map(normalizeLivePrice)
+    .filter((item) => !productCode || String(item.productCode || "").trim().toLowerCase() === productCode);
   return sqlEnvelope(pathName, url, query, items, payload);
 }
 

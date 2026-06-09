@@ -2220,6 +2220,7 @@ async function fetchLiveProductPricesForSale(product) {
   const productCode = liveProductCode(product);
   if (!productCode) return [];
   const params = new URLSearchParams({
+    productCode,
     search: productCode,
     limit: "100",
     offset: "0"
