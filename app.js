@@ -1,16 +1,16 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.09.4";
-const APP_BUILD = "20260609-b2c-currency-rates";
-const APP_RELEASED_AT = "2026-06-09 17:32:53 +03:00";
+const APP_VERSION = "2026.06.09.5";
+const APP_BUILD = "20260609-b2c-price-selector";
+const APP_RELEASED_AT = "2026-06-09 18:51:43 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SESSION_TOKEN_KEY = "retail-crm-b2c-session-token-v1";
 const DEVICE_KEY = "retail-crm-b2c-device-v1";
 const SIDEBAR_COLLAPSED_KEY = "retail-crm-b2c-sidebar-collapsed-v1";
-const ROLE_PERMISSION_SCHEMA = "20260606-server-settings";
+const ROLE_PERMISSION_SCHEMA = "20260609-price-selector";
 const SCHEMA_DEFAULT_BLOCKS = ["settings"];
-const SCHEMA_DEFAULT_ACTIONS = ["customer_create", "drilldown_view", "document_edit", "document_list_view", "document_list_sort", "document_list_collapse", "exchange_view", "system_settings"];
+const SCHEMA_DEFAULT_ACTIONS = ["customer_create", "drilldown_view", "document_edit", "document_list_view", "document_list_sort", "document_list_collapse", "exchange_view", "system_settings", "price_select"];
 
 const nowIso = () => new Date().toISOString();
 const today = () => nowIso().slice(0, 10);
@@ -88,6 +88,10 @@ const CURRENCY_LABELS = {
   EUR: "EUR",
   USD: "USD"
 };
+const DEFAULT_CHECKOUT_PRICE_TYPE = "Роздрібна (ГРН)";
+const DEFAULT_CHECKOUT_PRICE_CURRENCY = "UAH";
+const DEFAULT_CHECKOUT_PRICE_TYPES = ["Роздрібна (ГРН)", "Роздрібна", "Роздрібна (EUR)", "Роздрібна (USD)", "Оптова", "Гуртова", "Закупівельна"];
+const DEFAULT_CHECKOUT_CURRENCIES = ["UAH", "EUR", "USD"];
 const LIVE_TABLES = {
   products: {
     endpoint: "/api/live/products",
@@ -195,6 +199,7 @@ const ROLE_BLOCKS = [
 ];
 const ROLE_ACTIONS = [
   { id: "sale_create", label: "Створити продаж" },
+  { id: "price_select", label: "Вибір типу ціни і валюти" },
   { id: "return_create", label: "Повернення" },
   { id: "drilldown_view", label: "Розшифровки сум і карток" },
   { id: "document_edit", label: "Редагування документів" },
@@ -225,17 +230,17 @@ const EMPLOYEE_ROLES = {
   admin: {
     label: "Адміністратор",
     blocks: ["dashboard", "pos", "returns", "catalog", "customers", "stock", "inventory", "exchange", "settings", "reports", "employees", "log"],
-    actions: ["sale_create", "return_create", "drilldown_view", "document_edit", "document_list_view", "document_list_sort", "document_list_collapse", "customer_create", "cash_open", "cash_close", "inventory_post", "inventory_resort", "sql_import", "exchange_view", "exchange_import", "exchange_export", "exchange_automation", "system_settings", "employee_manage", "reports_view", "audit_view"]
+    actions: ["sale_create", "price_select", "return_create", "drilldown_view", "document_edit", "document_list_view", "document_list_sort", "document_list_collapse", "customer_create", "cash_open", "cash_close", "inventory_post", "inventory_resort", "sql_import", "exchange_view", "exchange_import", "exchange_export", "exchange_automation", "system_settings", "employee_manage", "reports_view", "audit_view"]
   },
   seller: {
     label: "Продавець",
     blocks: ["dashboard", "pos", "catalog", "customers", "stock"],
-    actions: ["sale_create", "document_list_view", "document_list_sort", "document_list_collapse", "customer_create"]
+    actions: ["sale_create", "price_select", "document_list_view", "document_list_sort", "document_list_collapse", "customer_create"]
   },
   cashier: {
     label: "Касир",
     blocks: ["dashboard", "pos", "returns"],
-    actions: ["sale_create", "return_create", "drilldown_view", "document_list_view", "document_list_sort", "document_list_collapse", "cash_open", "cash_close"]
+    actions: ["sale_create", "price_select", "return_create", "drilldown_view", "document_list_view", "document_list_sort", "document_list_collapse", "cash_open", "cash_close"]
   }
 };
 const sqlProductSnapshot = [
@@ -541,6 +546,8 @@ const seedState = {
     customerId: "walk-in",
     customerSearch: "",
     paymentMethod: "card",
+    priceType: DEFAULT_CHECKOUT_PRICE_TYPE,
+    priceCurrency: DEFAULT_CHECKOUT_PRICE_CURRENCY,
     search: "",
     note: "",
     printReceiptId: "",
@@ -902,6 +909,8 @@ function normalizeState(input) {
     ...clone(seedState.checkout),
     ...(next.checkout || {})
   };
+  next.checkout.priceType = normalizePriceTypeLabel(next.checkout.priceType);
+  next.checkout.priceCurrency = normalizeCurrencyCode(next.checkout.priceCurrency || DEFAULT_CHECKOUT_PRICE_CURRENCY);
   next.checkout.lines = Array.isArray(next.checkout.lines) && next.checkout.lines.length
     ? next.checkout.lines.map(normalizeCheckoutLine)
     : clone(seedState.checkout.lines).map(normalizeCheckoutLine);
@@ -1123,6 +1132,41 @@ function displayCurrencyList(value, fallback = BASE_CURRENCY) {
   return CURRENCY_LABELS[normalized] || normalized;
 }
 
+function splitOptionLabels(value) {
+  if (Array.isArray(value)) return value.flatMap(splitOptionLabels);
+  if (value && typeof value === "object") {
+    return splitOptionLabels(value.name || value.label || value.title || value.priceTypeName || value.priceType || value.currency || value.code || "");
+  }
+  return String(value || "")
+    .split(/[;,]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function normalizePriceTypeLabel(value, fallback = DEFAULT_CHECKOUT_PRICE_TYPE) {
+  const label = String(value || "").trim();
+  return label || fallback;
+}
+
+function normalizePriceTypeText(value) {
+  return normalizeScanText(value)
+    .replace(/[()]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function priceTypeMatches(source, selected) {
+  const selectedText = normalizePriceTypeText(selected);
+  if (!selectedText) return true;
+  const sourceText = normalizePriceTypeText(source);
+  if (!sourceText) return false;
+  if (sourceText === selectedText) return true;
+  return splitOptionLabels(source).some((label) => {
+    const text = normalizePriceTypeText(label);
+    return text === selectedText || selectedText.includes(text) || text.includes(selectedText);
+  });
+}
+
 function normalizeProductPriceRows(value) {
   const rows = Array.isArray(value) ? value : (value && typeof value === "object" ? [value] : []);
   return rows.map((price) => {
@@ -1144,6 +1188,53 @@ function productCurrencyTokens(product) {
     ...(Array.isArray(product?.prices) ? product.prices.flatMap((price) => [price.currencyRaw, price.currency]) : [])
   ];
   return currencyTokens(values);
+}
+
+function productPriceTypeLabels(product) {
+  return Array.from(new Set([
+    ...splitOptionLabels(product?.priceTypes),
+    ...(Array.isArray(product?.prices) ? product.prices.flatMap((price) => splitOptionLabels(price.priceType || price.priceTypeName || price.price_type_name)) : [])
+  ].map(normalizePriceTypeLabel)));
+}
+
+function productPriceTypeAvailable(product, selectedType) {
+  const labels = productPriceTypeLabels(product);
+  if (!labels.length) return true;
+  return labels.some((label) => priceTypeMatches(label, selectedType));
+}
+
+function productAvailableCurrencies(product, rows = []) {
+  const tokens = new Set([
+    ...productCurrencyTokens(product),
+    ...rows.flatMap((row) => row.currencies?.length ? row.currencies : currencyTokens(row.currencyRaw || row.currency))
+  ]);
+  if (!tokens.size) tokens.add(normalizeCurrencyCode(product?.priceCurrency || product?.currency || BASE_CURRENCY));
+  return Array.from(tokens);
+}
+
+function checkoutPriceTypeOptions(product = null) {
+  return Array.from(new Set([
+    state.checkout?.priceType,
+    ...DEFAULT_CHECKOUT_PRICE_TYPES,
+    ...splitOptionLabels(state.references?.priceTypes || []),
+    ...productPriceTypeLabels(product)
+  ].map((item) => normalizePriceTypeLabel(item)).filter(Boolean)));
+}
+
+function checkoutCurrencyOptions(product = null) {
+  return Array.from(new Set([
+    state.checkout?.priceCurrency,
+    ...DEFAULT_CHECKOUT_CURRENCIES,
+    ...currencyTokens(splitOptionLabels(state.references?.currencies || [])),
+    ...productCurrencyTokens(product)
+  ].map((item) => normalizeCurrencyCode(item)).filter(Boolean)));
+}
+
+function checkoutPriceCriteria() {
+  return {
+    priceType: normalizePriceTypeLabel(state.checkout?.priceType),
+    currency: normalizeCurrencyCode(state.checkout?.priceCurrency || DEFAULT_CHECKOUT_PRICE_CURRENCY)
+  };
 }
 
 function priceRowRank(row) {
@@ -1340,6 +1431,8 @@ function normalizeCheckoutLine(line) {
     exchangeRate: Number(line.exchangeRate || 1),
     exchangeRateDate: line.exchangeRateDate || "",
     priceSource: line.priceSource || "",
+    selectedPriceType: normalizePriceTypeLabel(line.selectedPriceType || DEFAULT_CHECKOUT_PRICE_TYPE),
+    selectedPriceCurrency: normalizeCurrencyCode(line.selectedPriceCurrency || line.sourceCurrency || line.priceCurrency || DEFAULT_CHECKOUT_PRICE_CURRENCY),
     priceWarning: line.priceWarning || "",
     discount: Math.max(0, Number(line.discount || 0)),
     warehouseCode: line.warehouseCode || SQL_MAIN_WAREHOUSE_CODE,
@@ -2120,6 +2213,36 @@ async function fetchLiveProducts({ search = "", barcode = "", limit = LIVE_PRODU
   const items = payloadItems(payload).map(rememberLiveProduct);
   markServerOnline(payload);
   return { ...payload, items };
+}
+
+async function fetchLiveProductPricesForSale(product) {
+  if (!serverModeEnabled()) return [];
+  const productCode = liveProductCode(product);
+  if (!productCode) return [];
+  const params = new URLSearchParams({
+    search: productCode,
+    limit: "100",
+    offset: "0"
+  });
+  try {
+    const payload = await fetchJson(`/api/live/product-prices?${params.toString()}`);
+    const target = normalizeScanText(productCode);
+    const productName = normalizeScanText(product.name);
+    const rows = payloadItems(payload).map(normalizeLivePrice).filter((row) => {
+      const rowCode = normalizeScanText(row.productCode);
+      const rowName = normalizeScanText(row.productName);
+      return !rowCode || rowCode === target || rowName === productName;
+    });
+    markServerOnline(payload);
+    return rows.map((row) => ({
+      priceType: row.priceTypeName || row.priceTypeCode || "",
+      currency: normalizeCurrencyCode(row.currency),
+      currencyRaw: row.currency,
+      price: Number(row.price || row.amount || 0)
+    })).filter((row) => Number(row.price || 0) > 0);
+  } catch (error) {
+    return [];
+  }
 }
 
 function stockLookupAvailableQty(row) {
@@ -3329,6 +3452,8 @@ function cartLines() {
       exchangeRate: Number(normalized.exchangeRate || 1),
       exchangeRateDate: normalized.exchangeRateDate || "",
       priceSource: normalized.priceSource || "",
+      selectedPriceType: normalized.selectedPriceType || DEFAULT_CHECKOUT_PRICE_TYPE,
+      selectedPriceCurrency: normalized.selectedPriceCurrency || normalized.sourceCurrency || DEFAULT_CHECKOUT_PRICE_CURRENCY,
       priceWarning: normalized.priceWarning || "",
       discount: Math.max(0, Number(normalized.discount || 0)),
       warehouseCode: normalized.warehouseCode || SQL_MAIN_WAREHOUSE_CODE,
@@ -3349,12 +3474,15 @@ function cartLines() {
 
 function checkoutLinePriceHtml(line) {
   const price = formatMoney(line.price, line.priceCurrency || BASE_CURRENCY);
-  if (!line.sourceCurrency || line.sourceCurrency === BASE_CURRENCY) return price;
   const details = [
-    formatMoney(line.sourcePrice, line.sourceCurrency),
-    line.exchangeRate ? `курс ${line.exchangeRate}` : "",
-    line.exchangeRateDate || ""
+    line.selectedPriceType || "",
+    line.selectedPriceCurrency && line.selectedPriceCurrency !== (line.sourceCurrency || BASE_CURRENCY) ? line.selectedPriceCurrency : "",
+    line.sourceCurrency && line.sourceCurrency !== BASE_CURRENCY ? formatMoney(line.sourcePrice, line.sourceCurrency) : "",
+    line.sourceCurrency && line.sourceCurrency !== BASE_CURRENCY && line.exchangeRate ? `курс ${line.exchangeRate}` : "",
+    line.sourceCurrency && line.sourceCurrency !== BASE_CURRENCY ? line.exchangeRateDate || "" : "",
+    line.priceWarning || ""
   ].filter(Boolean).join(" · ");
+  if (!details) return price;
   return `${price}<br><span class="muted">${escapeHtml(details)}</span>`;
 }
 
@@ -3946,6 +4074,10 @@ function renderCheckoutPanel(full = false) {
     ? state.checkout.customerSearch
     : customerLookupValue(customer);
   const productLookupItems = currentProductLookupItems();
+  const selectedLookupProduct = findStockedLiveLookupProduct(state.checkout.search);
+  const priceSelectionEnabled = canDo("price_select");
+  const priceTypeOptions = checkoutPriceTypeOptions(selectedLookupProduct);
+  const currencyOptions = checkoutCurrencyOptions(selectedLookupProduct);
   return `
     <section class="panel ${full ? "" : "compact-panel"}">
       <div class="split">
@@ -3957,6 +4089,8 @@ function renderCheckoutPanel(full = false) {
         <label class="field"><span>Оплата</span><select name="paymentMethod" data-checkout-field>${["cash", "card", "bank"].map((method) => option(method, paymentLabel(method), method === state.checkout.paymentMethod)).join("")}</select></label>
         <label class="field wide"><span>Товар із залишком / штрихкод / QR</span><input name="search" data-product-lookup list="product-options" value="${escapeHtml(state.checkout.search)}" autocomplete="off" placeholder="назва, SKU, штрихкод або QR із залишком на Склад №1"><datalist id="product-options">${productLookupItems.map((product) => `<option value="${escapeHtml(productLookupValue(product))}"></option>`).join("")}</datalist><small class="lookup-status ${productLookupStatusClass()}" data-product-lookup-status>${escapeHtml(productLookupStatusText())}</small></label>
         <div class="field lookup-action"><span>Додати</span><button class="secondary" type="button" data-add-selected-product>Додати товар</button></div>
+        <label class="field"><span>Тип ціни</span><select name="priceType" data-checkout-field ${priceSelectionEnabled ? "" : "disabled"}>${priceTypeOptions.map((type) => option(type, type, type === state.checkout.priceType)).join("")}</select></label>
+        <label class="field"><span>Валюта</span><select name="priceCurrency" data-checkout-field ${priceSelectionEnabled ? "" : "disabled"}>${currencyOptions.map((currency) => option(currency, CURRENCY_LABELS[currency] || currency, currency === state.checkout.priceCurrency)).join("")}</select></label>
         <div class="loyalty-note full">
           <span class="pill">${escapeHtml(LOYALTY_LABELS[customer.loyalty] || customer.loyalty)}</span>
           <strong>${escapeHtml(customer.name)}</strong>
@@ -5167,17 +5301,39 @@ function checkoutLineById(lineId) {
 
 async function resolveProductPriceForSale(product) {
   const directPrice = Number(product.price || 0);
-  const rows = normalizeProductPriceRows(product.prices)
+  const criteria = checkoutPriceCriteria();
+  const localRows = normalizeProductPriceRows(product.prices)
+    .filter((row) => Number(row.price || 0) > 0)
+    .sort((left, right) => priceRowRank(left) - priceRowRank(right));
+  const localResolved = localRows.map((row) => ({
+    ...row,
+    currencies: currencyTokens(row.currencyRaw || row.currency),
+    price: Number(row.price || 0)
+  })).filter((row) => row.price > 0);
+  const hasSelectedLocalRow = localResolved.some((row) => (
+    row.currencies.length === 1
+    && row.currencies[0] === criteria.currency
+    && priceTypeMatches(row.priceType, criteria.priceType)
+  ));
+  const needsExactLiveRows = serverModeEnabled()
+    && !hasSelectedLocalRow
+    && (productCurrencyTokens(product).length > 1 || productPriceTypeLabels(product).length > 1);
+  const liveRows = needsExactLiveRows ? await fetchLiveProductPricesForSale(product) : [];
+  const rows = (liveRows.length ? liveRows : localRows)
     .filter((row) => Number(row.price || 0) > 0)
     .sort((left, right) => priceRowRank(left) - priceRowRank(right));
   const candidates = rows.length
     ? rows
-    : [{ price: directPrice, currency: normalizeCurrencyCode(product.priceCurrency || product.currency || product.priceCurrencies || BASE_CURRENCY), currencyRaw: product.priceCurrencies || product.priceCurrency || product.currency || BASE_CURRENCY, priceType: "" }];
+    : [{ price: directPrice, currency: normalizeCurrencyCode(product.priceCurrency || product.currency || product.priceCurrencies || BASE_CURRENCY), currencyRaw: product.priceCurrencies || product.priceCurrency || product.currency || BASE_CURRENCY, priceType: product.priceTypes || "" }];
   const resolved = candidates.map((row) => ({
     ...row,
     currencies: currencyTokens(row.currencyRaw || row.currency),
     price: Number(row.price || 0)
   })).filter((row) => row.price > 0);
+  const availableCurrencies = productAvailableCurrencies(product, resolved);
+  const preferredCurrency = availableCurrencies.includes(criteria.currency)
+    ? criteria.currency
+    : (availableCurrencies.length === 1 ? availableCurrencies[0] : (availableCurrencies.includes(BASE_CURRENCY) ? BASE_CURRENCY : criteria.currency));
   if (!resolved.length) {
     return {
       ok: true,
@@ -5188,18 +5344,37 @@ async function resolveProductPriceForSale(product) {
       exchangeRate: 1,
       exchangeRateDate: "",
       priceSource: "missing-price",
+      selectedPriceType: criteria.priceType,
+      selectedPriceCurrency: preferredCurrency,
       priceWarning: "ціна після вибору"
     };
   }
-  const singleCurrencyRows = resolved.filter((row) => row.currencies.length === 1);
-  const bestRank = singleCurrencyRows.length ? Math.min(...singleCurrencyRows.map(priceRowRank)) : Number.POSITIVE_INFINITY;
-  const bestRows = singleCurrencyRows.filter((row) => priceRowRank(row) === bestRank);
-  const source = bestRows.find((row) => row.currencies[0] === BASE_CURRENCY) || (bestRows.length === 1 ? bestRows[0] : null);
+  const typeRows = resolved.filter((row) => priceTypeMatches(row.priceType, criteria.priceType));
+  const exactRows = typeRows.filter((row) => row.currencies.length === 1 && row.currencies[0] === preferredCurrency);
+  const rankedExactRows = exactRows.sort((left, right) => priceRowRank(left) - priceRowRank(right));
+  const summaryCurrencies = productCurrencyTokens(product);
+  const summarySource = directPrice > 0
+    && productPriceTypeAvailable(product, criteria.priceType)
+    && (!summaryCurrencies.length || summaryCurrencies.includes(preferredCurrency))
+    ? {
+      price: directPrice,
+      currency: preferredCurrency,
+      currencyRaw: preferredCurrency,
+      currencies: [preferredCurrency],
+      priceType: criteria.priceType || product.priceTypes || "sql-price-summary",
+      priceWarning: liveRows.length ? "" : "ціна зі зведення SQL"
+    }
+    : null;
+  const fallbackRows = typeRows.filter((row) => row.currencies.length === 1);
+  const source = rankedExactRows[0]
+    || summarySource
+    || fallbackRows.find((row) => row.currencies[0] === BASE_CURRENCY)
+    || fallbackRows[0]
+    || null;
   if (!source) {
-    const currencies = productCurrencyTokens(product);
     return {
       ok: false,
-      error: `У товарі "${product.name}" ціна має кілька валют (${currencies.length ? currencies.join(", ") : displayCurrencyList(product.priceCurrencies)}). Неможливо безпечно додати в продаж без точної роздрібної ціни з однією валютою.`
+      error: `У товарі "${product.name}" не знайдено ціну для типу "${criteria.priceType}" і валюти ${preferredCurrency}. Перевірте тип ціни, валюту або SQL-довідник цін.`
     };
   }
   const sourceCurrency = source.currencies[0];
@@ -5213,7 +5388,9 @@ async function resolveProductPriceForSale(product) {
       exchangeRate: 1,
       exchangeRateDate: "",
       priceSource: source.priceType || "sql-price",
-      priceWarning: ""
+      selectedPriceType: criteria.priceType,
+      selectedPriceCurrency: sourceCurrency,
+      priceWarning: source.priceWarning || ""
     };
   }
   try {
@@ -5240,7 +5417,9 @@ async function resolveProductPriceForSale(product) {
     exchangeRate: Number(rate.rate || 0),
     exchangeRateDate: rate.exchangedate || exchangeRateLookup.loadedAt || "",
     priceSource: source.priceType || "sql-price-nbu-rate",
-    priceWarning: `${formatMoney(source.price, sourceCurrency)} за курсом НБУ ${rate.rate}`
+    selectedPriceType: criteria.priceType,
+    selectedPriceCurrency: sourceCurrency,
+    priceWarning: source.priceWarning || `${formatMoney(source.price, sourceCurrency)} за курсом НБУ ${rate.rate}`
   };
 }
 
@@ -5257,6 +5436,8 @@ function prepareCheckoutLine(product, priceInfo = {}) {
     exchangeRate: Number(priceInfo.exchangeRate || 1),
     exchangeRateDate: priceInfo.exchangeRateDate || "",
     priceSource: priceInfo.priceSource || "",
+    selectedPriceType: priceInfo.selectedPriceType || state.checkout.priceType || DEFAULT_CHECKOUT_PRICE_TYPE,
+    selectedPriceCurrency: priceInfo.selectedPriceCurrency || priceInfo.sourceCurrency || state.checkout.priceCurrency || DEFAULT_CHECKOUT_PRICE_CURRENCY,
     priceWarning: priceInfo.priceWarning || "",
     warehouseCode: SQL_MAIN_WAREHOUSE_CODE,
     warehouseName: SQL_MAIN_WAREHOUSE_NAME,
@@ -5424,6 +5605,8 @@ function currentSaleLines() {
       exchangeRate: Number(line.exchangeRate || 1),
       exchangeRateDate: line.exchangeRateDate || "",
       priceSource: line.priceSource || "",
+      selectedPriceType: line.selectedPriceType || DEFAULT_CHECKOUT_PRICE_TYPE,
+      selectedPriceCurrency: line.selectedPriceCurrency || line.sourceCurrency || DEFAULT_CHECKOUT_PRICE_CURRENCY,
       priceWarning: line.priceWarning || "",
       warehouseCode: line.warehouseCode || SQL_MAIN_WAREHOUSE_CODE,
       warehouseName: line.warehouseName || SQL_MAIN_WAREHOUSE_NAME,
@@ -6457,7 +6640,13 @@ function updateCheckoutField(target) {
     return;
   }
   if (target.dataset.checkoutField !== undefined) {
-    state.checkout[target.name] = target.value;
+    if (target.name === "priceType") {
+      state.checkout.priceType = normalizePriceTypeLabel(target.value);
+    } else if (target.name === "priceCurrency") {
+      state.checkout.priceCurrency = normalizeCurrencyCode(target.value || DEFAULT_CHECKOUT_PRICE_CURRENCY);
+    } else {
+      state.checkout[target.name] = target.value;
+    }
     saveState();
   }
 }

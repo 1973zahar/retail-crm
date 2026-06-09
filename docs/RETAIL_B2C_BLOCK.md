@@ -10,9 +10,9 @@ Repo: D:\Codex\CRM\retail-crm
 Stable LAN runtime: http://<LAN-IP>:18810/index.html
 Legacy/manual local runtime: internal diagnostics only, not the working URL
 MESER runtime: http://192.168.0.5:8790/index.html
-Current build: 20260609-b2c-currency-rates
-App version: 2026.06.09.4
-Released at: 2026-06-09 17:32:53 +03:00
+Current build: 20260609-b2c-price-selector
+App version: 2026.06.09.5
+Released at: 2026-06-09 18:51:43 +03:00
 Contract version: 2026.06.07-retail-live-api-1
 ```
 
