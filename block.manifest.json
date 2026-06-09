@@ -27,9 +27,9 @@
     "dataDir": "data"
   },
   "currentApp": {
-    "build": "20260608-b2c-lan-only-launcher",
-    "version": "2026.06.08.5",
-    "releasedAt": "2026-06-08 20:40:22 +03:00",
+    "build": "20260609-b2c-single-employee-session",
+    "version": "2026.06.09.1",
+    "releasedAt": "2026-06-09 14:37:31 +03:00",
     "contractVersion": "2026.06.07-retail-live-api-1"
   },
   "sourceOfTruth": {
@@ -221,6 +221,7 @@
     "Do not expose import/export launch controls outside Data Exchange.",
     "Do not show import launch blocks inside directories.",
     "Do not switch workers through sidebar selectors; use login/logout sessions.",
+    "Only one computer/browser device may own an active session for one employee; a login from another computer replaces the previous employee session.",
     "Do not manually create products, prices, stock balances, serial numbers or receipts.",
     "Do not duplicate SQL core master data as the local source of truth.",
     "Do not load full product, stock, serial, customer, balance or order tables into browser state as production data; use bounded backend endpoints.",

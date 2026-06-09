@@ -10,9 +10,9 @@ Repo: D:\Codex\CRM\retail-crm
 Stable LAN runtime: http://<LAN-IP>:18810/index.html
 Legacy/manual local runtime: internal diagnostics only, not the working URL
 MESER runtime: http://192.168.0.5:8790/index.html
-Current build: 20260608-b2c-lan-only-launcher
-App version: 2026.06.08.5
-Released at: 2026-06-08 20:40:22 +03:00
+Current build: 20260609-b2c-single-employee-session
+App version: 2026.06.09.1
+Released at: 2026-06-09 14:37:31 +03:00
 Contract version: 2026.06.07-retail-live-api-1
 ```
 
@@ -37,7 +37,9 @@ Retail sale customer selection reads SQL counterparties through bounded live end
 
 The stock directory screen reads real Warehouse 1 balances through `/api/live/stock-balances?warehouseCode=2&search=&limit=&offset=`. Local/demo `state.stock` rows must not be the visible source-of-truth table in `Довідники -> Залишки`; they are only fallback/demo data for offline prototype flows.
 
-Multi-user server sync stores only shared business state. Browser-local UI and draft state stays local per operator/session: current screen, active employee session, selected cashier, selected document row, checkout draft, confirm modals, drilldowns, live table pages, stock serial lookup page and inventory draft must not be written back as another user's global `/api/state`.
+Multi-user server sync stores shared business state plus the minimal `employeeSessions` registry used to enforce one active computer per employee. Browser-local UI and draft state stays local per operator/session: current screen, selected cashier, selected document row, checkout draft, confirm modals, drilldowns, live table pages, stock serial lookup page and inventory draft must not be written back as another user's global `/api/state`.
+
+One employee can own an active B2C session on only one browser device/computer at a time. Logging in with the employee password/PIN from a second computer replaces the previous employee session. The previous computer detects the replacement on the next server refresh, clears its local employee session, and opens the login dialog without deleting the new session from the server.
 
 Current migration direction:
 

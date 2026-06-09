@@ -7,9 +7,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$AppVersion = "2026.06.08.5"
-$AppBuild = "20260608-b2c-lan-only-launcher"
-$AppReleasedAt = "2026-06-08 20:40:22 +03:00"
+$AppVersion = "2026.06.09.1"
+$AppBuild = "20260609-b2c-single-employee-session"
+$AppReleasedAt = "2026-06-09 14:37:31 +03:00"
 $RootDir = $PSScriptRoot
 $ResolvedDataDir = if ([System.IO.Path]::IsPathRooted($DataDir)) { $DataDir } else { Join-Path $RootDir $DataDir }
 $StatePath = Join-Path $ResolvedDataDir "retail-crm-state.json"
@@ -1107,6 +1107,15 @@ function Handle-Api($Client, $Request) {
     }
     $current = Read-JsonFile $StatePath (New-DefaultStateContainer)
     $baseRevision = if ($body.baseRevision) { [int]$body.baseRevision } else { 0 }
+    $conflict = ($baseRevision -lt [int]($current.revision))
+    $nextState = $body.state
+    if ($conflict -and $current.state -and $current.state.employeeSessions) {
+      if ($nextState.PSObject.Properties.Name -contains "employeeSessions") {
+        $nextState.employeeSessions = $current.state.employeeSessions
+      } else {
+        $nextState | Add-Member -NotePropertyName "employeeSessions" -NotePropertyValue $current.state.employeeSessions
+      }
+    }
     $next = @{
       revision = [int]($current.revision) + 1
       savedAt = [DateTime]::UtcNow.ToString("o")
@@ -1114,8 +1123,8 @@ function Handle-Api($Client, $Request) {
       build = if ($body.build) { [string]$body.build } else { $AppBuild }
       appVersion = if ($body.appVersion) { [string]$body.appVersion } else { $AppVersion }
       releasedAt = if ($body.releasedAt) { [string]$body.releasedAt } else { $AppReleasedAt }
-      conflict = ($baseRevision -gt 0 -and $baseRevision -lt [int]($current.revision))
-      state = $body.state
+      conflict = $conflict
+      state = $nextState
     }
     Write-JsonFile $StatePath $next
     Send-Json $Client 200 $next

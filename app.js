@@ -1,10 +1,12 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.08.5";
-const APP_BUILD = "20260608-b2c-lan-only-launcher";
-const APP_RELEASED_AT = "2026-06-08 20:40:22 +03:00";
+const APP_VERSION = "2026.06.09.1";
+const APP_BUILD = "20260609-b2c-single-employee-session";
+const APP_RELEASED_AT = "2026-06-09 14:37:31 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
+const SESSION_TOKEN_KEY = "retail-crm-b2c-session-token-v1";
+const DEVICE_KEY = "retail-crm-b2c-device-v1";
 const SIDEBAR_COLLAPSED_KEY = "retail-crm-b2c-sidebar-collapsed-v1";
 const ROLE_PERMISSION_SCHEMA = "20260606-server-settings";
 const SCHEMA_DEFAULT_BLOCKS = ["settings"];
@@ -556,6 +558,7 @@ const seedState = {
     seedEmployee("e-004", "EMP-004", "Петро Касир", "cashier", "+380671110004", "cashier@retail.local", "cashier")
   ],
   activeEmployeeId: "e-001",
+  employeeSessions: {},
   selectedCashierId: "e-004",
   selectedReturnId: "",
   stockUi: {
@@ -706,8 +709,11 @@ const NAV_ICONS = {
 const VIEW_ALIASES = { checkout: "pos", receipts: "pos", cash: "pos" };
 
 let sessionEmployeeId = loadSessionEmployeeId();
+let sessionToken = loadSessionToken();
+const browserDeviceId = loadBrowserDeviceId();
 let state = loadState();
 let loginDialog = { open: false, employeeId: "" };
+let sessionNotice = "";
 let sidebarCollapsed = loadSidebarCollapsed();
 
 function clone(value) {
@@ -722,13 +728,47 @@ function loadSessionEmployeeId() {
   }
 }
 
-function storeSessionEmployeeId(employeeId) {
+function loadSessionToken() {
+  try {
+    return sessionStorage.getItem(SESSION_TOKEN_KEY) || "";
+  } catch (error) {
+    return "";
+  }
+}
+
+function createOpaqueId(prefix) {
+  if (window.crypto && typeof window.crypto.randomUUID === "function") {
+    return `${prefix}-${window.crypto.randomUUID()}`;
+  }
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function loadBrowserDeviceId() {
+  try {
+    const existing = localStorage.getItem(DEVICE_KEY);
+    if (existing) return existing;
+    const next = createOpaqueId("device");
+    localStorage.setItem(DEVICE_KEY, next);
+    return next;
+  } catch (error) {
+    return createOpaqueId("device-memory");
+  }
+}
+
+function currentDeviceLabel() {
+  return `Комп'ютер ${browserDeviceId.slice(-8).toUpperCase()}`;
+}
+
+function storeSessionEmployeeId(employeeId, token = sessionToken) {
   sessionEmployeeId = employeeId || "";
+  sessionToken = sessionEmployeeId ? (token || createOpaqueId("session")) : "";
   try {
     if (sessionEmployeeId) {
       sessionStorage.setItem(SESSION_KEY, sessionEmployeeId);
+      sessionStorage.setItem(SESSION_TOKEN_KEY, sessionToken);
     } else {
       sessionStorage.removeItem(SESSION_KEY);
+      sessionStorage.removeItem(SESSION_TOKEN_KEY);
     }
   } catch (error) {
     // Keep the in-memory session when browser storage is blocked.
@@ -787,6 +827,7 @@ function normalizeState(input) {
   next.activeEmployeeId = next.employees.some((employee) => employee.id === next.activeEmployeeId)
     ? next.activeEmployeeId
     : next.employees.find((employee) => employee.role === "director")?.id || next.employees[0]?.id || "";
+  next.employeeSessions = normalizeEmployeeSessions(next.employeeSessions, next.employees);
   next.selectedCashierId = next.selectedCashierId || next.employees.find((item) => item.role === "cashier" && item.status === "active")?.id || seedState.selectedCashierId;
   next.selectedReturnId = next.selectedReturnId || "";
   next.stockUi = {
@@ -873,6 +914,26 @@ function normalizeState(input) {
   return next;
 }
 
+function normalizeEmployeeSessions(input, employees = []) {
+  const activeEmployeeIds = new Set(employees.filter((employee) => employee.status === "active").map((employee) => employee.id));
+  const source = input && typeof input === "object" ? input : {};
+  return Object.fromEntries(Object.entries(source).map(([employeeId, session]) => {
+    const id = String(session?.employeeId || employeeId || "").trim();
+    if (!id || !activeEmployeeIds.has(id)) return null;
+    const deviceId = String(session?.deviceId || "").trim();
+    if (!deviceId) return null;
+    return [id, {
+      employeeId: id,
+      deviceId,
+      deviceLabel: String(session?.deviceLabel || "Комп'ютер").slice(0, 80),
+      sessionToken: String(session?.sessionToken || "").slice(0, 120),
+      startedAt: String(session?.startedAt || nowIso()),
+      lastSeenAt: String(session?.lastSeenAt || session?.startedAt || nowIso()),
+      replacedAt: String(session?.replacedAt || "")
+    }];
+  }).filter(Boolean));
+}
+
 function clientLocalStateSnapshot(source = state) {
   return Object.fromEntries(CLIENT_LOCAL_STATE_KEYS.map((key) => [key, clone(source?.[key] ?? seedState[key])]));
 }
@@ -910,7 +971,7 @@ function mergeServerStateWithClientUi(serverState, clientUi = clientLocalStateSn
     }
   });
   if (sessionEmployeeId && next.employees.some((employee) => employee.id === sessionEmployeeId && employee.status === "active")) {
-    next.activeEmployeeId = sessionEmployeeId;
+    next.activeEmployeeId = employeeSessionIsCurrent(sessionEmployeeId, next) ? sessionEmployeeId : "";
   }
   if (!canOpenBlock(next.currentView, next)) next.currentView = firstAllowedView(next);
   return normalizeState(next);
@@ -2249,8 +2310,9 @@ async function bootstrapServerState() {
     if (payload.state) {
       state = mergeServerStateWithClientUi(payload.state, clientUi);
       if (payload.settings) state.systemSettings = normalizeSystemSettings({ ...state.systemSettings, ...payload.settings });
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       rememberSharedStateFingerprint(state);
+      applySessionRulesAfterServerMerge();
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     } else {
       queueServerStateSave();
     }
@@ -2316,8 +2378,9 @@ async function refreshServerState(force = false) {
     });
     if ((force || Number(payload.revision || 0) > previousRevision) && payload.state) {
       state = mergeServerStateWithClientUi(payload.state, clientUi);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       rememberSharedStateFingerprint(state);
+      applySessionRulesAfterServerMerge();
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       render();
     }
   } catch (error) {
@@ -2576,8 +2639,114 @@ function employeeStatusLabel(status) {
   return EMPLOYEE_STATUSES[status] || status || "-";
 }
 
+function employeeSessionRecord(employeeId, source = state) {
+  return source.employeeSessions?.[employeeId] || null;
+}
+
+function employeeSessionIsCurrent(employeeId, source = state) {
+  if (!employeeId) return false;
+  const record = employeeSessionRecord(employeeId, source);
+  return !record?.deviceId || record.deviceId === browserDeviceId;
+}
+
+function employeeSessionLabel(employee) {
+  const record = employeeSessionRecord(employee?.id);
+  if (!record?.deviceId) return "Сеанс не відкрито";
+  if (record.deviceId === browserDeviceId) return "Сеанс на цьому комп'ютері";
+  return `Сеанс на іншому комп'ютері: ${record.deviceLabel || "без назви"}`;
+}
+
+function registerEmployeeSession(employee) {
+  state.employeeSessions = normalizeEmployeeSessions(state.employeeSessions, state.employees);
+  const previous = state.employeeSessions[employee.id] || null;
+  const token = createOpaqueId("session");
+  const timestamp = nowIso();
+  storeSessionEmployeeId(employee.id, token);
+  state.employeeSessions[employee.id] = {
+    employeeId: employee.id,
+    deviceId: browserDeviceId,
+    deviceLabel: currentDeviceLabel(),
+    sessionToken: token,
+    startedAt: previous?.deviceId === browserDeviceId ? previous.startedAt || timestamp : timestamp,
+    lastSeenAt: timestamp,
+    replacedAt: previous?.deviceId && previous.deviceId !== browserDeviceId ? timestamp : ""
+  };
+  return previous;
+}
+
+function clearEmployeeSession(employeeId = sessionEmployeeId) {
+  const record = employeeSessionRecord(employeeId);
+  if (record?.deviceId === browserDeviceId) {
+    delete state.employeeSessions[employeeId];
+  }
+}
+
+function ensureCurrentEmployeeSessionRegistered() {
+  if (!sessionEmployeeId) return false;
+  const employee = state.employees.find((item) => item.id === sessionEmployeeId && item.status === "active");
+  if (!employee) {
+    storeSessionEmployeeId("");
+    state.activeEmployeeId = "";
+    return true;
+  }
+  const record = employeeSessionRecord(employee.id);
+  if (record?.deviceId && record.deviceId !== browserDeviceId) return false;
+  if (record?.deviceId === browserDeviceId) return false;
+  const token = sessionToken || createOpaqueId("session");
+  const timestamp = nowIso();
+  storeSessionEmployeeId(employee.id, token);
+  state.employeeSessions[employee.id] = {
+    employeeId: employee.id,
+    deviceId: browserDeviceId,
+    deviceLabel: currentDeviceLabel(),
+    sessionToken: token,
+    startedAt: timestamp,
+    lastSeenAt: timestamp,
+    replacedAt: ""
+  };
+  return true;
+}
+
+function enforceCurrentEmployeeSession(reason = "sync") {
+  if (!sessionEmployeeId) return false;
+  const employee = state.employees.find((item) => item.id === sessionEmployeeId);
+  const record = employeeSessionRecord(sessionEmployeeId);
+  const invalidEmployee = !employee || employee.status !== "active";
+  const replacedByOtherDevice = Boolean(record?.deviceId && record.deviceId !== browserDeviceId);
+  if (!invalidEmployee && !replacedByOtherDevice) return false;
+  const employeeName = employee?.name || "працівника";
+  storeSessionEmployeeId("");
+  state.activeEmployeeId = "";
+  loginDialog = { open: true, employeeId: employee?.id || activeEmployees()[0]?.id || "" };
+  sessionNotice = replacedByOtherDevice
+    ? `Сеанс ${employeeName} відкрито на іншому комп'ютері. Цей комп'ютер автоматично вийшов із B2C.`
+    : "Сеанс завершено, бо працівник не активний або відсутній.";
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch (error) {
+    // Keep the in-memory logout when browser storage is blocked.
+  }
+  return true;
+}
+
+function applySessionRulesAfterServerMerge() {
+  const forcedLogout = enforceCurrentEmployeeSession("server-sync");
+  if (forcedLogout) return { forcedLogout, registered: false };
+  const registered = ensureCurrentEmployeeSessionRegistered();
+  if (registered) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch (error) {
+      // Keep the in-memory session when browser storage is blocked.
+    }
+    queueServerStateSave();
+  }
+  return { forcedLogout, registered };
+}
+
 function currentEmployee(source = state) {
-  return source.employees.find((employee) => employee.id === sessionEmployeeId && employee.status === "active") || null;
+  const employee = source.employees.find((item) => item.id === sessionEmployeeId && item.status === "active") || null;
+  return employee && employeeSessionIsCurrent(employee.id, source) ? employee : null;
 }
 
 function rolePermissionSet(role, source = state) {
@@ -3321,7 +3490,7 @@ function renderSessionStatus() {
       <span class="card-icon" aria-hidden="true">С</span>
       <span class="top-status-label">Сеанс</span>
       <strong>${escapeHtml(employee.name)}</strong>
-      <small>${escapeHtml(roleLabel(employee.role))}</small>
+      <small>${escapeHtml(roleLabel(employee.role))} · ${escapeHtml(employeeSessionLabel(employee))}</small>
       <div class="top-status-actions">
         <button class="topbar-action" type="button" data-open-employee-login>Змінити вхід</button>
         <button class="topbar-action danger-outline" type="button" data-logout-employee>Вийти</button>
@@ -3390,10 +3559,11 @@ function renderEmployeeLoginModal() {
           ${currentEmployee() ? `<button class="secondary" type="button" data-close-employee-login>Закрити</button>` : ""}
         </div>
         <form class="form-grid one-col" data-action="employee-login">
+          ${sessionNotice ? `<p class="warning-note">${escapeHtml(sessionNotice)}</p>` : ""}
           <label class="field"><span>Логін працівника</span><select name="employeeId" required>
             ${active.map((employee) => option(employee.id, `${employee.login || employee.code} · ${employee.name} · ${roleLabel(employee.role)}`, employee.id === selectedId)).join("")}
           </select></label>
-          <label class="field"><span>PIN</span><input name="pin" type="password" autocomplete="current-password" placeholder="якщо встановлено в картці"></label>
+          <label class="field"><span>Пароль / PIN</span><input name="pin" type="password" autocomplete="current-password" placeholder="пароль/PIN із картки працівника"></label>
           <div class="toolbar">
             ${currentEmployee() ? `<button class="secondary" type="button" data-close-employee-login>Скасувати</button>` : ""}
             <button class="primary" type="submit" ${active.length ? "" : "disabled"}>Увійти</button>
@@ -4396,7 +4566,7 @@ function renderEmployees() {
                   <td><strong>${escapeHtml(employee.name)}</strong><br><span class="muted">${escapeHtml(employee.login || "-")} · ${escapeHtml(employee.schedule || "-")}</span></td>
                   <td>${canManageEmployees ? `<select class="mini-select" data-employee-role="${escapeHtml(employee.id)}">${roleRows.map(([id, role]) => option(id, role.label, id === employee.role)).join("")}</select>` : `<span class="pill">${escapeHtml(roleLabel(employee.role))}</span>`}</td>
                   <td>${escapeHtml(employee.phone || "-")}<br><span class="muted">${escapeHtml(employee.email || "-")}</span></td>
-                  <td><span class="pill ${employee.status === "active" ? "good" : employee.status === "vacation" ? "warn" : "danger"}">${escapeHtml(employeeStatusLabel(employee.status))}</span></td>
+                  <td><span class="pill ${employee.status === "active" ? "good" : employee.status === "vacation" ? "warn" : "danger"}">${escapeHtml(employeeStatusLabel(employee.status))}</span><br><span class="muted">${escapeHtml(employeeSessionLabel(employee))}</span></td>
                   <td>${escapeHtml(employee.store || "-")}<br><span class="muted">з ${escapeHtml(employee.hireDate || "-")}</span></td>
                   <td>
                     ${canDo("cash_open") ? `<button class="secondary" type="button" data-select-cashier="${escapeHtml(employee.id)}" ${employee.status === "active" ? "" : "disabled"}>У касу</button>` : ""}
@@ -4416,7 +4586,7 @@ function renderEmployees() {
           <label class="field"><span>Телефон</span><input name="phone" placeholder="+380..."></label>
           <label class="field"><span>Email</span><input name="email" type="email" placeholder="name@company.ua"></label>
           <label class="field"><span>Логін</span><input name="login" placeholder="login"></label>
-          <label class="field"><span>PIN / код доступу</span><input name="pin" placeholder="службовий PIN"></label>
+          <label class="field"><span>Пароль / PIN</span><input name="pin" type="password" autocomplete="new-password" placeholder="службовий пароль/PIN"></label>
           <label class="field"><span>Статус</span><select name="status">${Object.entries(EMPLOYEE_STATUSES).map(([id, label]) => option(id, label, id === "active")).join("")}</select></label>
           <label class="field"><span>Магазин</span><input name="store" value="B2C магазин"></label>
           <label class="field"><span>Графік</span><input name="schedule" value="5/2"></label>
@@ -5713,6 +5883,7 @@ function toggleEmployeeStatus(employeeId) {
   if (!canDo("employee_manage")) return alert("Немає дозволу керувати працівниками.");
   const employee = employeeById(employeeId);
   employee.status = employee.status === "active" ? "inactive" : "active";
+  if (employee.status !== "active") delete state.employeeSessions[employee.id];
   if (employee.status !== "active" && state.selectedCashierId === employee.id) {
     state.selectedCashierId = activeEmployees()[0]?.id || "";
   }
@@ -5751,6 +5922,7 @@ function toggleRolePermission(type, roleId, permissionId, checked) {
 }
 
 function openEmployeeLogin() {
+  if (currentEmployee()) sessionNotice = "";
   loginDialog = {
     open: true,
     employeeId: currentEmployee()?.id || activeEmployees()[0]?.id || ""
@@ -5771,17 +5943,24 @@ function loginEmployee(form) {
   const enteredPin = String(data.pin || "").trim();
   const requiredPin = String(employee.pin || "").trim();
   if (requiredPin && enteredPin !== requiredPin) {
-    audit(`Невдала спроба входу для ${employee.name}: невірний PIN`, "auth");
+    audit(`Невдала спроба входу для ${employee.name}: невірний пароль/PIN`, "auth");
     saveState();
     render();
-    return alert("Невірний PIN працівника.");
+    return alert("Невірний пароль/PIN працівника.");
   }
   const previous = currentEmployee();
-  storeSessionEmployeeId(employee.id);
+  const previousSession = employeeSessionRecord(employee.id);
+  const displacedOtherComputer = Boolean(previousSession?.deviceId && previousSession.deviceId !== browserDeviceId);
+  registerEmployeeSession(employee);
   state.activeEmployeeId = employee.id;
   loginDialog = { open: false, employeeId: "" };
+  sessionNotice = displacedOtherComputer
+    ? `Попередній сеанс ${employee.name} на іншому комп'ютері буде завершено при наступному оновленні.`
+    : "";
   if (!canOpenBlock(state.currentView)) state.currentView = firstAllowedView();
-  audit(previous?.id === employee.id
+  audit(displacedOtherComputer
+    ? `Вхід працівника у B2C: ${employee.name} (${roleLabel(employee.role)}); попередній сеанс на іншому комп'ютері витіснено`
+    : previous?.id === employee.id
     ? `Працівник повторно увійшов у B2C: ${employee.name} (${roleLabel(employee.role)})`
     : `Вхід працівника у B2C: ${employee.name} (${roleLabel(employee.role)})`,
     employee.name);
@@ -5793,8 +5972,11 @@ function logoutEmployee() {
   const employee = currentEmployee();
   if (!employee) return openEmployeeLogin();
   audit(`Вихід працівника з B2C: ${employee.name} (${roleLabel(employee.role)})`, employee.name);
+  clearEmployeeSession(employee.id);
   storeSessionEmployeeId("");
+  state.activeEmployeeId = "";
   loginDialog = { open: true, employeeId: activeEmployees()[0]?.id || "" };
+  sessionNotice = "";
   saveState();
   render();
 }

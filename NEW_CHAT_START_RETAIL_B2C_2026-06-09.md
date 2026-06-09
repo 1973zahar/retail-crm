@@ -35,7 +35,12 @@ Window map:
 - Вікно 2 / MESER = Windows Server 192.168.0.5, user fresh\zahar, Retail B2C host.
 - Вікно 3 / локальний = local Windows, workspace D:\Codex\CRM.
 
-Поточна Retail B2C версія:
+Поточна локальна Retail B2C версія:
+- build: 20260609-b2c-single-employee-session
+- app version: 2026.06.09.1
+- releasedAt: 2026-06-09 14:37:31 +03:00
+
+Поточна MESER health версія може відставати до deploy:
 - build: 20260608-b2c-lan-only-launcher
 - app version: 2026.06.08.5
 - releasedAt: 2026-06-08 20:40:22 +03:00
@@ -85,9 +90,12 @@ Invoke-WebRequest -UseBasicParsing -Uri 'http://192.168.0.5:8790/index.html' -Ti
 - MESER scheduled task: `Retail B2C CRM`
 - MESER URL: `http://192.168.0.5:8790/index.html`
 - MESER health: `http://192.168.0.5:8790/api/health`
-- Current build: `20260608-b2c-lan-only-launcher`
-- Current app version: `2026.06.08.5`
-- Version timestamp: `2026-06-08 20:40:22 +03:00`
+- Current local build: `20260609-b2c-single-employee-session`
+- Current local app version: `2026.06.09.1`
+- Current local version timestamp: `2026-06-09 14:37:31 +03:00`
+- Current MESER health build: `20260608-b2c-lan-only-launcher`
+- Current MESER health app version: `2026.06.08.5`
+- Current MESER health timestamp: `2026-06-08 20:40:22 +03:00`
 - SQL API base: `http://192.168.0.166:3000`
 
 Local LAN launcher may print an operator URL like:
@@ -215,11 +223,12 @@ Serial directory:
 ## Multi-User Rules
 
 Retail B2C is multi-user. Shared business state may sync, but per-user working state must stay local.
+The one exception is the minimal shared `employeeSessions` registry that enforces one active computer/browser device per employee.
 
 Do not write these into shared `/api/state`:
 
 - current screen/view;
-- active employee session;
+- browser-local active employee session token;
 - selected cashier;
 - checkout draft;
 - selected customer/product in a draft;
@@ -230,6 +239,8 @@ Do not write these into shared `/api/state`:
 
 Multiple operators must be able to work in parallel without one browser switching to another
 operator's screen or draft.
+
+One employee can be active on only one computer/browser device at a time. If the same employee logs in with password/PIN from another computer, the new login replaces the previous `employeeSessions` owner. The previous computer must auto-clear its local session and show the login dialog on the next server refresh without deleting the newer session.
 
 ## MESER Deployment And Autostart
 
