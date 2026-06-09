@@ -1,16 +1,16 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.10.2";
-const APP_BUILD = "20260610-b2c-price-qty-discount-live";
-const APP_RELEASED_AT = "2026-06-10 00:29:40 +03:00";
+const APP_VERSION = "2026.06.10.3";
+const APP_BUILD = "20260610-b2c-discount-percent-employee-edit";
+const APP_RELEASED_AT = "2026-06-10 00:47:02 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SESSION_TOKEN_KEY = "retail-crm-b2c-session-token-v1";
 const DEVICE_KEY = "retail-crm-b2c-device-v1";
 const SIDEBAR_COLLAPSED_KEY = "retail-crm-b2c-sidebar-collapsed-v1";
-const ROLE_PERMISSION_SCHEMA = "20260609-price-selector";
+const ROLE_PERMISSION_SCHEMA = "20260610-employee-edit-percent-discount";
 const SCHEMA_DEFAULT_BLOCKS = ["settings"];
-const SCHEMA_DEFAULT_ACTIONS = ["customer_create", "drilldown_view", "document_edit", "document_list_view", "document_list_sort", "document_list_collapse", "exchange_view", "system_settings", "price_select"];
+const SCHEMA_DEFAULT_ACTIONS = ["customer_create", "drilldown_view", "document_edit", "document_list_view", "document_list_sort", "document_list_collapse", "exchange_view", "system_settings", "price_select", "employee_edit"];
 
 const nowIso = () => new Date().toISOString();
 const today = () => nowIso().slice(0, 10);
@@ -217,6 +217,7 @@ const ROLE_ACTIONS = [
   { id: "exchange_automation", label: "Налаштування автоматизації" },
   { id: "system_settings", label: "Системні налаштування" },
   { id: "employee_manage", label: "Керувати працівниками" },
+  { id: "employee_edit", label: "Працівники: зміна всіх полів" },
   { id: "reports_view", label: "Звіти" },
   { id: "audit_view", label: "Журнал дій" }
 ];
@@ -229,7 +230,7 @@ const EMPLOYEE_ROLES = {
   admin: {
     label: "Адміністратор",
     blocks: ["pos", "returns", "catalog", "customers", "stock", "inventory", "exchange", "settings", "reports", "employees", "log"],
-    actions: ["sale_create", "price_select", "return_create", "drilldown_view", "document_edit", "document_list_view", "document_list_sort", "document_list_collapse", "customer_create", "cash_open", "cash_close", "inventory_post", "inventory_resort", "sql_import", "exchange_view", "exchange_import", "exchange_export", "exchange_automation", "system_settings", "employee_manage", "reports_view", "audit_view"]
+    actions: ["sale_create", "price_select", "return_create", "drilldown_view", "document_edit", "document_list_view", "document_list_sort", "document_list_collapse", "customer_create", "cash_open", "cash_close", "inventory_post", "inventory_resort", "sql_import", "exchange_view", "exchange_import", "exchange_export", "exchange_automation", "system_settings", "employee_manage", "employee_edit", "reports_view", "audit_view"]
   },
   seller: {
     label: "Продавець",
@@ -570,6 +571,10 @@ const seedState = {
     type: "",
     id: ""
   },
+  employeeEdit: {
+    open: false,
+    employeeId: ""
+  },
   listUi: {
     receipts: { collapsed: false, sortBy: "date", sortDir: "desc", date: "", customer: "" },
     returns: { collapsed: false, sortBy: "date", sortDir: "desc", date: "", customer: "" },
@@ -695,6 +700,7 @@ const CLIENT_LOCAL_STATE_KEYS = [
   "returnConfirm",
   "drilldown",
   "documentEdit",
+  "employeeEdit",
   "listUi",
   "stockUi",
   "liveTables",
@@ -935,6 +941,11 @@ function normalizeState(input) {
     ...clone(seedState.documentEdit),
     ...(next.documentEdit || {})
   };
+  next.employeeEdit = {
+    ...clone(seedState.employeeEdit),
+    ...(next.employeeEdit || {})
+  };
+  if (!next.employeeEdit.open) next.employeeEdit.employeeId = "";
   next.listUi = normalizeListUi(next.listUi);
   if (!canOpenBlock(next.currentView, next)) next.currentView = firstAllowedView(next);
   return next;
@@ -1537,7 +1548,7 @@ function normalizeCheckoutLine(line) {
     selectedPriceType: normalizePriceTypeLabel(line.selectedPriceType || DEFAULT_CHECKOUT_PRICE_TYPE),
     selectedPriceCurrency: normalizeCurrencyCode(line.selectedPriceCurrency || line.sourceCurrency || line.priceCurrency || DEFAULT_CHECKOUT_PRICE_CURRENCY),
     priceWarning: line.priceWarning || "",
-    discount: Math.max(0, Number(line.discount || 0)),
+    discount: discountPercentValue(line.discountPercent ?? line.discount ?? 0),
     warehouseCode: line.warehouseCode || SQL_MAIN_WAREHOUSE_CODE,
     warehouseName: line.warehouseName || SQL_MAIN_WAREHOUSE_NAME,
     warehouseStockQty: Number(line.warehouseStockQty ?? line.availableQty ?? 0),
@@ -1667,20 +1678,25 @@ function normalizeExchangeRecord(record) {
 
 function normalizeReceipt(receipt, products) {
   if (Array.isArray(receipt.lines)) {
-    const lines = receipt.lines.map((line) => ({
-      productId: line.productId,
-      qty: Number(line.qty || 0),
-      price: Number(line.price || 0),
-      discount: Number(line.discount || 0),
-      total: Number(line.total || 0),
-      warehouseCode: line.warehouseCode || SQL_MAIN_WAREHOUSE_CODE,
-      warehouseName: line.warehouseName || SQL_MAIN_WAREHOUSE_NAME,
-      warehouseStockQty: Number(line.warehouseStockQty || 0),
-      serialName: line.serialName || line.serialNumber || "",
-      serialNumber: line.serialNumber || line.serialName || ""
-    }));
+    const lines = receipt.lines.map((line) => {
+      const discount = discountPercentValue(line.discountPercent ?? line.discount ?? 0);
+      return {
+        productId: line.productId,
+        qty: Number(line.qty || 0),
+        price: Number(line.price || 0),
+        discount,
+        discountPercent: discount,
+        total: Number(line.total || 0),
+        warehouseCode: line.warehouseCode || SQL_MAIN_WAREHOUSE_CODE,
+        warehouseName: line.warehouseName || SQL_MAIN_WAREHOUSE_NAME,
+        warehouseStockQty: Number(line.warehouseStockQty || 0),
+        serialName: line.serialName || line.serialNumber || "",
+        serialNumber: line.serialNumber || line.serialName || ""
+      };
+    });
     const linesTotal = lines.reduce((sum, line) => {
-      const fallbackTotal = Math.max(0, Number(line.qty || 0) * Number(line.price || 0) - Number(line.discount || 0));
+      const gross = Number(line.qty || 0) * Number(line.price || 0);
+      const fallbackTotal = roundCurrencyAmount(Math.max(0, gross * (1 - discountPercentValue(line.discount) / 100)));
       return sum + Number(line.total || fallbackTotal || 0);
     }, 0);
     return {
@@ -1949,6 +1965,12 @@ function exchangeRateForCurrency(currency) {
 
 function roundCurrencyAmount(value) {
   return Math.round(Number(value || 0) * 100) / 100;
+}
+
+function discountPercentValue(value) {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.min(100, Math.max(0, numeric));
 }
 
 function liveProductLookupKeys(product) {
@@ -3292,6 +3314,10 @@ function canDo(actionId, source = state) {
   return roleHas(currentEmployee(source)?.role, "actions", actionId, source);
 }
 
+function canEditEmployeeFields(source = state) {
+  return canDo("employee_edit", source) || canDo("employee_manage", source);
+}
+
 function firstAllowedView(source = state) {
   return flatNavItems().find(([id]) => canOpenBlock(id, source))?.[0] || "pos";
 }
@@ -3579,8 +3605,9 @@ function lineTotal(line) {
   const product = productById(line.productId);
   const price = Number(line.price ?? product.price ?? 0);
   const qty = Math.max(1, Number(line.qty || 1));
-  const discount = Math.max(0, Number(line.discount || 0));
-  return Math.max(0, qty * price - discount);
+  const discount = discountPercentValue(line.discountPercent ?? line.discount ?? 0);
+  const gross = qty * price;
+  return roundCurrencyAmount(Math.max(0, gross * (1 - discount / 100)));
 }
 
 function cartLines() {
@@ -3607,7 +3634,8 @@ function cartLines() {
       selectedPriceType: normalized.selectedPriceType || DEFAULT_CHECKOUT_PRICE_TYPE,
       selectedPriceCurrency: normalized.selectedPriceCurrency || normalized.sourceCurrency || DEFAULT_CHECKOUT_PRICE_CURRENCY,
       priceWarning: normalized.priceWarning || "",
-      discount: Math.max(0, Number(normalized.discount || 0)),
+      discount: discountPercentValue(normalized.discount),
+      discountPercent: discountPercentValue(normalized.discount),
       warehouseCode: normalized.warehouseCode || SQL_MAIN_WAREHOUSE_CODE,
       warehouseName: normalized.warehouseName || SQL_MAIN_WAREHOUSE_NAME,
       warehouseStockQty: normalized.warehouseStockQty,
@@ -4125,6 +4153,45 @@ function renderNav() {
   document.getElementById("nav").innerHTML = itemsHtml;
 }
 
+function renderEmployeeEditModal() {
+  if (!state.employeeEdit?.open) return "";
+  const employee = state.employees.find((item) => item.id === state.employeeEdit.employeeId);
+  if (!employee) return "";
+  const disabled = canEditEmployeeFields() ? "" : "disabled";
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="employee-edit-title">
+        <div class="split">
+          <div>
+            <p class="eyebrow">B2C.10 Працівники</p>
+            <h2 id="employee-edit-title">Картка працівника</h2>
+          </div>
+          <button class="secondary" type="button" data-close-employee-edit>Закрити</button>
+        </div>
+        <form class="form-grid" data-action="save-employee-edit">
+          <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
+          <label class="field"><span>Код</span><input name="code" value="${escapeHtml(employee.code)}" required ${disabled}></label>
+          <label class="field wide"><span>ПІБ</span><input name="name" value="${escapeHtml(employee.name)}" required ${disabled}></label>
+          <label class="field"><span>Роль</span><select name="role" ${disabled}>${Object.entries(EMPLOYEE_ROLES).map(([id, role]) => option(id, role.label, id === employee.role)).join("")}</select></label>
+          <label class="field"><span>Статус</span><select name="status" ${disabled}>${Object.entries(EMPLOYEE_STATUSES).map(([id, label]) => option(id, label, id === employee.status)).join("")}</select></label>
+          <label class="field"><span>Телефон</span><input name="phone" value="${escapeHtml(employee.phone || "")}" ${disabled}></label>
+          <label class="field"><span>Email</span><input name="email" type="email" value="${escapeHtml(employee.email || "")}" ${disabled}></label>
+          <label class="field"><span>Логін</span><input name="login" value="${escapeHtml(employee.login || "")}" ${disabled}></label>
+          <label class="field"><span>Пароль / PIN</span><input name="pin" type="password" autocomplete="new-password" value="${escapeHtml(employee.pin || "")}" ${disabled}></label>
+          <label class="field"><span>Магазин</span><input name="store" value="${escapeHtml(employee.store || "")}" ${disabled}></label>
+          <label class="field"><span>Графік</span><input name="schedule" value="${escapeHtml(employee.schedule || "")}" ${disabled}></label>
+          <label class="field"><span>Дата прийому</span><input name="hireDate" type="date" value="${escapeHtml(employee.hireDate || today())}" ${disabled}></label>
+          <label class="field wide"><span>Коментар</span><input name="note" value="${escapeHtml(employee.note || "")}" ${disabled}></label>
+          <div class="toolbar full">
+            <button class="secondary" type="button" data-close-employee-edit>Скасувати</button>
+            <button class="primary" type="submit" ${disabled}>Зберегти зміни</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
 function renderEmployeeLoginModal() {
   const active = activeEmployees();
   const selectedId = loginDialog.employeeId
@@ -4227,7 +4294,7 @@ function renderCheckoutPanel(full = false) {
         <label class="field full"><span>Коментар</span><input name="note" data-checkout-field value="${escapeHtml(state.checkout.note || "")}" placeholder="примітка до продажу"></label>
         <div class="table-wrap full">
           <table>
-            <thead><tr><th>Товар</th><th>Склад №1</th><th>Серійний номер</th><th>Ціна</th><th>К-сть</th><th>Знижка</th><th>Сума</th><th></th></tr></thead>
+            <thead><tr><th>Товар</th><th>Склад №1</th><th>Серійний номер</th><th>Ціна</th><th>К-сть</th><th>Знижка, %</th><th>Сума</th><th></th></tr></thead>
             <tbody>
               ${lines.map((line, index) => {
                 const product = productById(line.productId);
@@ -4251,7 +4318,7 @@ function renderCheckoutPanel(full = false) {
                     <td>${serialControl}</td>
                     <td>${checkoutLinePriceHtml(line, index)}</td>
                     <td><input class="mini-input" data-cart-qty="${index}" type="number" min="1" ${weapon ? 'max="1"' : ""} value="${line.qty}"></td>
-                    <td><input class="mini-input" data-cart-discount="${index}" type="number" min="0" value="${line.discount}"></td>
+                    <td><input class="mini-input" data-cart-discount="${index}" type="number" min="0" max="100" step="0.01" value="${line.discount}" title="Знижка у відсотках"></td>
                     <td><strong data-cart-line-total="${index}">${formatMoney(lineTotal(line))}</strong></td>
                     <td><button class="secondary" type="button" data-remove-cart="${index}">Прибрати</button></td>
                   </tr>
@@ -4380,10 +4447,12 @@ function renderReceiptSlip(receipt) {
       <hr>
       ${receipt.lines.map((line) => {
         const product = productById(line.productId);
+        const discount = discountPercentValue(line.discountPercent ?? line.discount ?? 0);
         const details = [
           `${product.sku} x ${line.qty}`,
           line.warehouseName || SQL_MAIN_WAREHOUSE_NAME,
-          line.serialName ? `SN ${line.serialName}` : ""
+          line.serialName ? `SN ${line.serialName}` : "",
+          discount ? `знижка ${discount}%` : ""
         ].filter(Boolean).join(" · ");
         return `<div class="receipt-line"><span>${escapeHtml(details)}</span><strong>${formatMoney(line.total)}</strong></div>`;
       }).join("")}
@@ -5099,6 +5168,7 @@ function renderEmployees() {
   const activeCount = state.employees.filter((employee) => employee.status === "active").length;
   const roleRows = Object.entries(EMPLOYEE_ROLES);
   const canManageEmployees = canDo("employee_manage");
+  const canEditEmployees = canEditEmployeeFields();
   return `
     <section class="grid four">
       <article class="card metric"><span>Працівники</span><strong>${state.employees.length}</strong><small>${activeCount} активних.</small></article>
@@ -5117,14 +5187,15 @@ function renderEmployees() {
             <thead><tr><th>Код</th><th>Працівник</th><th>Роль</th><th>Контакти</th><th>Статус</th><th>Магазин</th><th>Дії</th></tr></thead>
             <tbody>
               ${state.employees.map((employee) => `
-                <tr>
+                <tr ${canEditEmployees ? `data-edit-employee="${escapeHtml(employee.id)}" tabindex="0" role="button" title="Редагувати картку працівника"` : ""}>
                   <td>${escapeHtml(employee.code)}</td>
                   <td><strong>${escapeHtml(employee.name)}</strong><br><span class="muted">${escapeHtml(employee.login || "-")} · ${escapeHtml(employee.schedule || "-")}</span></td>
-                  <td>${canManageEmployees ? `<select class="mini-select" data-employee-role="${escapeHtml(employee.id)}">${roleRows.map(([id, role]) => option(id, role.label, id === employee.role)).join("")}</select>` : `<span class="pill">${escapeHtml(roleLabel(employee.role))}</span>`}</td>
+                  <td>${canEditEmployees ? `<select class="mini-select" data-employee-role="${escapeHtml(employee.id)}">${roleRows.map(([id, role]) => option(id, role.label, id === employee.role)).join("")}</select>` : `<span class="pill">${escapeHtml(roleLabel(employee.role))}</span>`}</td>
                   <td>${escapeHtml(employee.phone || "-")}<br><span class="muted">${escapeHtml(employee.email || "-")}</span></td>
                   <td><span class="pill ${employee.status === "active" ? "good" : employee.status === "vacation" ? "warn" : "danger"}">${escapeHtml(employeeStatusLabel(employee.status))}</span><br><span class="muted">${escapeHtml(employeeSessionLabel(employee))}</span></td>
                   <td>${escapeHtml(employee.store || "-")}<br><span class="muted">з ${escapeHtml(employee.hireDate || "-")}</span></td>
                   <td>
+                    ${canEditEmployees ? `<button class="secondary" type="button" data-edit-employee="${escapeHtml(employee.id)}">Редагувати</button>` : ""}
                     ${canDo("cash_open") ? `<button class="secondary" type="button" data-select-cashier="${escapeHtml(employee.id)}" ${employee.status === "active" ? "" : "disabled"}>У касу</button>` : ""}
                     ${canManageEmployees ? `<button class="secondary" type="button" data-toggle-employee="${escapeHtml(employee.id)}">${employee.status === "active" ? "Вимкнути" : "Активувати"}</button>` : ""}
                   </td>
@@ -5785,6 +5856,8 @@ function currentSaleLines() {
       selectedPriceType: line.selectedPriceType || DEFAULT_CHECKOUT_PRICE_TYPE,
       selectedPriceCurrency: line.selectedPriceCurrency || line.sourceCurrency || DEFAULT_CHECKOUT_PRICE_CURRENCY,
       priceWarning: line.priceWarning || "",
+      discount: discountPercentValue(line.discount),
+      discountPercent: discountPercentValue(line.discount),
       warehouseCode: line.warehouseCode || SQL_MAIN_WAREHOUSE_CODE,
       warehouseName: line.warehouseName || SQL_MAIN_WAREHOUSE_NAME,
       warehouseStockQty: checkoutLineWarehouseStock(line, product),
@@ -6621,6 +6694,21 @@ function postInventory() {
   render();
 }
 
+function openEmployeeEdit(employeeId) {
+  if (!canEditEmployeeFields()) return alert("Немає дозволу змінювати поля працівників.");
+  const employee = state.employees.find((item) => item.id === employeeId);
+  if (!employee) return alert("Працівника не знайдено.");
+  state.employeeEdit = { open: true, employeeId: employee.id };
+  saveState({ server: false });
+  render();
+}
+
+function closeEmployeeEdit() {
+  state.employeeEdit = { open: false, employeeId: "" };
+  saveState({ server: false });
+  render();
+}
+
 function createEmployee(form) {
   if (!canDo("employee_manage")) return alert("Немає дозволу керувати працівниками.");
   const data = Object.fromEntries(new FormData(form).entries());
@@ -6653,6 +6741,48 @@ function createEmployee(form) {
   render();
 }
 
+function saveEmployeeEdit(form) {
+  if (!canEditEmployeeFields()) return alert("Немає дозволу змінювати поля працівників.");
+  const data = Object.fromEntries(new FormData(form).entries());
+  const employee = state.employees.find((item) => item.id === data.employeeId);
+  if (!employee) return alert("Працівника не знайдено.");
+  const code = String(data.code || "").trim();
+  const name = String(data.name || "").trim();
+  const login = String(data.login || "").trim();
+  if (!code) return alert("Вкажіть код працівника.");
+  if (!name) return alert("Вкажіть ПІБ працівника.");
+  if (login && state.employees.some((item) => item.id !== employee.id && item.login.toLowerCase() === login.toLowerCase())) {
+    return alert("Працівник з таким логіном вже існує.");
+  }
+  const role = EMPLOYEE_ROLES[data.role] ? data.role : employee.role;
+  const status = EMPLOYEE_STATUSES[data.status] ? data.status : employee.status;
+  Object.assign(employee, {
+    code,
+    name,
+    role,
+    phone: String(data.phone || "").trim(),
+    email: String(data.email || "").trim(),
+    login,
+    pin: String(data.pin || "").trim(),
+    status,
+    store: String(data.store || "B2C магазин").trim(),
+    schedule: String(data.schedule || "").trim(),
+    hireDate: data.hireDate || today(),
+    note: String(data.note || "").trim()
+  });
+  if (employee.status !== "active") delete state.employeeSessions[employee.id];
+  if (employee.status !== "active" && state.selectedCashierId === employee.id) {
+    state.selectedCashierId = activeEmployees()[0]?.id || "";
+  }
+  if (employee.status === "active" && !state.selectedCashierId) {
+    state.selectedCashierId = employee.id;
+  }
+  state.employeeEdit = { open: false, employeeId: "" };
+  audit(`Оновлено картку працівника ${employee.name}: всі поля`);
+  saveState();
+  render();
+}
+
 function toggleEmployeeStatus(employeeId) {
   if (!canDo("employee_manage")) return alert("Немає дозволу керувати працівниками.");
   const employee = employeeById(employeeId);
@@ -6670,7 +6800,7 @@ function toggleEmployeeStatus(employeeId) {
 }
 
 function changeEmployeeRole(employeeId, role) {
-  if (!canDo("employee_manage")) return alert("Немає дозволу керувати працівниками.");
+  if (!canEditEmployeeFields()) return alert("Немає дозволу змінювати поля працівників.");
   const employee = employeeById(employeeId);
   if (!EMPLOYEE_ROLES[role]) return;
   employee.role = role;
@@ -6882,7 +7012,7 @@ function updateCartField(target, options = {}) {
     if (!rawValue && !commitEmpty) return false;
     const parsedDiscount = Number(rawValue || 0);
     if (!Number.isFinite(parsedDiscount)) return false;
-    const nextDiscount = Math.max(0, parsedDiscount);
+    const nextDiscount = discountPercentValue(parsedDiscount);
     if (Number(state.checkout.lines[index].discount || 0) !== nextDiscount) {
       state.checkout.lines[index].discount = nextDiscount;
       changed = true;
@@ -6917,7 +7047,7 @@ function syncCartInputValue(target) {
   }
   if (target.dataset.cartDiscount !== undefined) {
     const line = state.checkout.lines[Number(target.dataset.cartDiscount)];
-    if (line) target.value = String(Math.max(0, Number(line.discount || 0)));
+    if (line) target.value = String(discountPercentValue(line.discount));
   }
 }
 
@@ -7048,7 +7178,7 @@ function render() {
   const pageHtml = canOpenBlock(state.currentView)
     ? (views[state.currentView] || renderPos)()
     : renderNoAccess();
-  document.getElementById("app").innerHTML = `${pageHtml}${renderSalePaymentConfirm()}${renderReturnRefundConfirm()}${renderDrilldownModal()}${renderDocumentEditModal()}${renderEmployeeLoginModal()}`;
+  document.getElementById("app").innerHTML = `${pageHtml}${renderSalePaymentConfirm()}${renderReturnRefundConfirm()}${renderDrilldownModal()}${renderDocumentEditModal()}${renderEmployeeEditModal()}${renderEmployeeLoginModal()}`;
 }
 
 function renderNoAccess() {
@@ -7098,10 +7228,17 @@ document.addEventListener("click", (event) => {
   if (editDocumentButton) return editDocumentTarget(editDocumentButton.dataset.editDocument);
   const closeDocumentEditButton = event.target.closest("[data-close-document-edit]");
   if (closeDocumentEditButton) return closeDocumentEdit();
+  const closeEmployeeEditButton = event.target.closest("[data-close-employee-edit]");
+  if (closeEmployeeEditButton) return closeEmployeeEdit();
   const openDocumentButton = event.target.closest("[data-open-document]");
   if (openDocumentButton) {
     const interactive = event.target.closest("button, a, input, select, textarea");
     if (!interactive || interactive === openDocumentButton) return openDocumentTarget(openDocumentButton.dataset.openDocument);
+  }
+  const editEmployeeButton = event.target.closest("[data-edit-employee]");
+  if (editEmployeeButton) {
+    const interactive = event.target.closest("button, a, input, select, textarea");
+    if (!interactive || interactive === editEmployeeButton) return openEmployeeEdit(editEmployeeButton.dataset.editEmployee);
   }
   const returnButton = event.target.closest("[data-return-receipt]");
   if (returnButton) return createReturn(returnButton.dataset.returnReceipt);
@@ -7214,6 +7351,11 @@ document.addEventListener("keydown", (event) => {
     openDocumentTarget(event.target.dataset.openDocument);
     return;
   }
+  if ((event.key === "Enter" || event.key === " ") && event.target.dataset.editEmployee !== undefined) {
+    event.preventDefault();
+    openEmployeeEdit(event.target.dataset.editEmployee);
+    return;
+  }
   if ((event.key === "Enter" || event.key === " ") && event.target.dataset.drilldown !== undefined) {
     event.preventDefault();
     openDrilldown(event.target.dataset.drilldown);
@@ -7274,6 +7416,7 @@ document.addEventListener("submit", (event) => {
   if (form.dataset.action === "create-inventory-resort") createInventoryResort(form);
   if (form.dataset.action === "post-inventory") postInventory();
   if (form.dataset.action === "create-employee") createEmployee(form);
+  if (form.dataset.action === "save-employee-edit") saveEmployeeEdit(form);
   if (form.dataset.action === "open-shift") openCashShift(form);
   if (form.dataset.action === "close-shift") closeCashShift(form);
   if (form.dataset.action === "live-table-search") searchLiveTable(form);
