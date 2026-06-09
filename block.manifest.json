@@ -27,9 +27,9 @@
     "dataDir": "data"
   },
   "currentApp": {
-    "build": "20260609-b2c-customer-search-complete",
-    "version": "2026.06.09.8",
-    "releasedAt": "2026-06-09 20:36:58 +03:00",
+    "build": "20260609-b2c-merged-sales-panel",
+    "version": "2026.06.09.9",
+    "releasedAt": "2026-06-09 20:53:31 +03:00",
     "contractVersion": "2026.06.07-retail-live-api-1"
   },
   "sourceOfTruth": {
@@ -217,7 +217,6 @@
     }
   ],
   "uiBlocks": [
-    "dashboard",
     "sales",
     "directories",
     "customers_and_loyalty",
@@ -232,6 +231,7 @@
     "Do not expose import/export launch controls outside Data Exchange.",
     "Do not show import launch blocks inside directories.",
     "Do not switch workers through sidebar selectors; use login/logout sessions.",
+    "Panel and Sale are one POS screen; do not add a separate dashboard sidebar item for Retail B2C.",
     "Only one computer/browser device may own an active session for one employee; a login from another computer replaces the previous employee session.",
     "Do not manually create products, prices, stock balances, serial numbers or receipts.",
     "Do not duplicate SQL core master data as the local source of truth.",

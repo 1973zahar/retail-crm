@@ -3,9 +3,9 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const APP_VERSION = "2026.06.09.8";
-const APP_BUILD = "20260609-b2c-customer-search-complete";
-const APP_RELEASED_AT = "2026-06-09 20:36:58 +03:00";
+const APP_VERSION = "2026.06.09.9";
+const APP_BUILD = "20260609-b2c-merged-sales-panel";
+const APP_RELEASED_AT = "2026-06-09 20:53:31 +03:00";
 const ROOT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const CRM_SQL_API_BASE_URL = String(process.env.CRM_SQL_API_BASE_URL || "http://192.168.0.166:3000").replace(/\/+$/, "");
 const CRM_SQL_API_TIMEOUT_MS = Math.max(1000, Number(process.env.CRM_SQL_API_TIMEOUT_MS || 30000));

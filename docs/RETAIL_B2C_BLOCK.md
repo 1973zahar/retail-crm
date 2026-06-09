@@ -10,9 +10,9 @@ Repo: D:\Codex\CRM\retail-crm
 Stable LAN runtime: http://<LAN-IP>:18810/index.html
 Legacy/manual local runtime: internal diagnostics only, not the working URL
 MESER runtime: http://192.168.0.5:8790/index.html
-Current build: 20260609-b2c-customer-search-complete
-App version: 2026.06.09.8
-Released at: 2026-06-09 20:36:58 +03:00
+Current build: 20260609-b2c-merged-sales-panel
+App version: 2026.06.09.9
+Released at: 2026-06-09 20:53:31 +03:00
 Contract version: 2026.06.07-retail-live-api-1
 ```
 
@@ -30,6 +30,8 @@ This block is one autonomous module in the Odoo-like modular CRM.
 ```
 
 The block owns retail workflows, not master data. Product, price, stock, serial number, receipt and 1C-origin facts come from the SQL core.
+
+`Панель` and `Продаж` are one Retail B2C working screen. The separate dashboard/sidebar block is removed; old `dashboard`, `checkout`, `receipts` and `cash` view ids resolve to `pos`. The `Продаж` screen is the first/default view and contains the shift/cashier/sales/revenue cards, checkout, receipt list and cash shift controls.
 
 Retail sale prices are currency-aware. B2C must not treat SQL numeric currency codes as UAH by default: `980=UAH`, `978=EUR`, `840=USD`. When a selected sale price has one foreign currency, the backend downloads official NBU exchange rates through `/api/live/exchange-rates` and the POS stores the sale line price in UAH together with source currency, source price, exchange rate and exchange-rate date. If SQL returns one product price with mixed currencies, the POS blocks adding the product until SQL exposes one exact retail price with one currency.
 

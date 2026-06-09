@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.09.8";
-const APP_BUILD = "20260609-b2c-customer-search-complete";
-const APP_RELEASED_AT = "2026-06-09 20:36:58 +03:00";
+const APP_VERSION = "2026.06.09.9";
+const APP_BUILD = "20260609-b2c-merged-sales-panel";
+const APP_RELEASED_AT = "2026-06-09 20:53:31 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SESSION_TOKEN_KEY = "retail-crm-b2c-session-token-v1";
@@ -184,7 +184,6 @@ const liveCustomerLookup = {
 };
 const EMPLOYEE_STATUSES = { active: "Активний", inactive: "Вимкнений", vacation: "Відпустка" };
 const ROLE_BLOCKS = [
-  { id: "dashboard", label: "Панель" },
   { id: "pos", label: "Продаж" },
   { id: "returns", label: "Повернення" },
   { id: "catalog", label: "Товари SQL" },
@@ -229,17 +228,17 @@ const EMPLOYEE_ROLES = {
   },
   admin: {
     label: "Адміністратор",
-    blocks: ["dashboard", "pos", "returns", "catalog", "customers", "stock", "inventory", "exchange", "settings", "reports", "employees", "log"],
+    blocks: ["pos", "returns", "catalog", "customers", "stock", "inventory", "exchange", "settings", "reports", "employees", "log"],
     actions: ["sale_create", "price_select", "return_create", "drilldown_view", "document_edit", "document_list_view", "document_list_sort", "document_list_collapse", "customer_create", "cash_open", "cash_close", "inventory_post", "inventory_resort", "sql_import", "exchange_view", "exchange_import", "exchange_export", "exchange_automation", "system_settings", "employee_manage", "reports_view", "audit_view"]
   },
   seller: {
     label: "Продавець",
-    blocks: ["dashboard", "pos", "catalog", "customers", "stock"],
+    blocks: ["pos", "catalog", "customers", "stock"],
     actions: ["sale_create", "price_select", "document_list_view", "document_list_sort", "document_list_collapse", "customer_create"]
   },
   cashier: {
     label: "Касир",
-    blocks: ["dashboard", "pos", "returns"],
+    blocks: ["pos", "returns"],
     actions: ["sale_create", "price_select", "return_create", "drilldown_view", "document_list_view", "document_list_sort", "document_list_collapse", "cash_open", "cash_close"]
   }
 };
@@ -540,7 +539,7 @@ function inventoryLineFromProduct(row) {
 }
 
 const seedState = {
-  currentView: "dashboard",
+  currentView: "pos",
   systemSettings: clone(DEFAULT_SYSTEM_SETTINGS),
   checkout: {
     customerId: "walk-in",
@@ -703,7 +702,6 @@ const CLIENT_LOCAL_STATE_KEYS = [
 ];
 
 const navItems = [
-  ["dashboard", "Панель"],
   ["pos", "Продаж"],
   { id: "directories", label: "Довідники", children: [
     ["catalog", "Товари"],
@@ -719,7 +717,6 @@ const navItems = [
 ];
 
 const NAV_ICONS = {
-  dashboard: "П",
   pos: "₴",
   directories: "Д",
   catalog: "Т",
@@ -733,7 +730,7 @@ const NAV_ICONS = {
   log: "Ж"
 };
 
-const VIEW_ALIASES = { checkout: "pos", receipts: "pos", cash: "pos" };
+const VIEW_ALIASES = { dashboard: "pos", checkout: "pos", receipts: "pos", cash: "pos" };
 
 let sessionEmployeeId = loadSessionEmployeeId();
 let sessionToken = loadSessionToken();
@@ -1478,7 +1475,9 @@ function normalizeRolePermissions(input, schemaVersion = ROLE_PERMISSION_SCHEMA)
   const shouldBackfillSchemaActions = schemaVersion !== ROLE_PERMISSION_SCHEMA;
   return Object.fromEntries(Object.entries(base).map(([roleId, defaults]) => {
     const source = input?.[roleId] || defaults;
-    const sourceBlocks = Array.isArray(source.blocks) ? source.blocks.filter((id) => knownBlocks.has(id)) : [...defaults.blocks];
+    const sourceBlocks = Array.isArray(source.blocks)
+      ? source.blocks.map((id) => VIEW_ALIASES[id] || id).filter((id) => knownBlocks.has(id))
+      : [...defaults.blocks];
     const sourceActions = Array.isArray(source.actions) ? source.actions.filter((id) => knownActions.has(id)) : [...defaults.actions];
     const schemaBlocks = shouldBackfillSchemaActions
       ? defaults.blocks.filter((id) => SCHEMA_DEFAULT_BLOCKS.includes(id))
@@ -3166,7 +3165,7 @@ function canDo(actionId, source = state) {
 }
 
 function firstAllowedView(source = state) {
-  return flatNavItems().find(([id]) => canOpenBlock(id, source))?.[0] || "dashboard";
+  return flatNavItems().find(([id]) => canOpenBlock(id, source))?.[0] || "pos";
 }
 
 function rolePermissionCheckbox(roleId, type, permissionId) {
@@ -4009,38 +4008,7 @@ function renderEmployeeLoginModal() {
 }
 
 function renderDashboard() {
-  const posted = state.receipts.filter((receipt) => receipt.status === "posted");
-  const returned = state.returns;
-  const revenue = posted.reduce((sum, receipt) => sum + Number(receipt.total || 0), 0);
-  const returnsTotal = returned.reduce((sum, item) => sum + Number(item.total || 0), 0);
-  const lowStock = state.products.filter((product) => stockQty(product.id) <= product.minStock).length;
-  const shift = openShift();
-  setTitle("Панель магазину");
-  return `
-    <section class="grid four">
-      ${metricCard("Виторг", formatMoney(revenue - returnsTotal), `${posted.length} чеків, ${returned.length} повернень.`, "dashboard_revenue")}
-      ${metricCard("Середній чек", formatMoney(posted.length ? revenue / posted.length : 0), "Тільки B2C роздріб.", "dashboard_revenue")}
-      ${metricCard("Низький залишок", String(lowStock), "Позиції для поповнення магазину.")}
-      ${metricCard("Каса", shift ? "Відкрита" : "Закрита", shift ? `${shift.id} · очікувано ${formatMoney(shiftExpectedCash(shift))}` : "Немає активної зміни")}
-    </section>
-    <section class="stacked-panels section-gap">
-      ${canOpenBlock("pos") && canDo("sale_create") ? renderCheckoutPanel() : ""}
-      <article class="panel">
-        <div class="split">
-          <h2>Операції сьогодні</h2>
-          <span class="pill">B2C prototype</span>
-        </div>
-        <div class="stack">
-          ${canDo("audit_view") ? state.auditLog.slice(0, 6).map((row) => `
-            <div class="log-row">
-              <strong>${escapeHtml(row.event)}</strong>
-              <span>${formatDateTime(row.at)} · ${escapeHtml(row.actor)}</span>
-            </div>
-          `).join("") : '<p class="muted">Журнал дій приховано для цієї ролі.</p>'}
-        </div>
-      </article>
-    </section>
-  `;
+  return renderPos();
 }
 
 function renderCheckout() {
@@ -6705,7 +6673,7 @@ function render() {
   renderTopStatus();
   renderNav();
   const views = {
-    dashboard: renderDashboard,
+    dashboard: renderPos,
     pos: renderPos,
     checkout: renderPos,
     receipts: renderPos,
@@ -6721,7 +6689,7 @@ function render() {
     log: renderLog
   };
   const pageHtml = canOpenBlock(state.currentView)
-    ? (views[state.currentView] || renderDashboard)()
+    ? (views[state.currentView] || renderPos)()
     : renderNoAccess();
   document.getElementById("app").innerHTML = `${pageHtml}${renderSalePaymentConfirm()}${renderReturnRefundConfirm()}${renderDrilldownModal()}${renderDocumentEditModal()}${renderEmployeeLoginModal()}`;
 }
