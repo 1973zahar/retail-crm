@@ -7,9 +7,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$AppVersion = "2026.06.09.1"
-$AppBuild = "20260609-b2c-single-employee-session"
-$AppReleasedAt = "2026-06-09 14:37:31 +03:00"
+$AppVersion = "2026.06.09.2"
+$AppBuild = "20260609-b2c-fast-live-search"
+$AppReleasedAt = "2026-06-09 15:47:21 +03:00"
 $RootDir = $PSScriptRoot
 $ResolvedDataDir = if ([System.IO.Path]::IsPathRooted($DataDir)) { $DataDir } else { Join-Path $RootDir $DataDir }
 $StatePath = Join-Path $ResolvedDataDir "retail-crm-state.json"
@@ -290,7 +290,13 @@ function Get-NumberValue($Object, [string[]]$Names, [double]$Default = 0) {
   $value = Get-ObjectPropertyValue $Object $Names $null
   if ($null -eq $value) { return $Default }
   $number = 0.0
-  if ([double]::TryParse([string]$value, [ref]$number)) { return $number }
+  if ($value -is [int] -or $value -is [long] -or $value -is [double] -or $value -is [decimal]) {
+    return [double]$value
+  }
+  $text = ([string]$value).Trim()
+  if ([double]::TryParse($text, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$number)) { return $number }
+  if ([double]::TryParse($text.Replace(",", "."), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$number)) { return $number }
+  if ([double]::TryParse($text, [ref]$number)) { return $number }
   return $Default
 }
 

@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.09.1";
-const APP_BUILD = "20260609-b2c-single-employee-session";
-const APP_RELEASED_AT = "2026-06-09 14:37:31 +03:00";
+const APP_VERSION = "2026.06.09.2";
+const APP_BUILD = "20260609-b2c-fast-live-search";
+const APP_RELEASED_AT = "2026-06-09 15:47:21 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SESSION_TOKEN_KEY = "retail-crm-b2c-session-token-v1";
@@ -1942,6 +1942,31 @@ async function fetchLiveProductForStockRow(row) {
   }
 }
 
+async function enrichStockLookupProductForSale(product) {
+  if (!serverModeEnabled()) return product;
+  const productCode = liveProductCode(product);
+  if (!productCode) return product;
+  try {
+    const payload = await fetchLiveProducts({ search: productCode, limit: 5, offset: 0 });
+    const target = normalizeScanText(productCode);
+    const exact = payload.items.find((item) => (
+      normalizeScanText(item.productCode) === target
+      || normalizeScanText(item.sku) === target
+      || normalizeScanText(item.id) === target
+      || normalizeScanText(item.barcode) === target
+    ));
+    return mergeLiveProductWithStock(exact || payload.items[0] || product, {
+      productCode,
+      productName: product.name,
+      warehouseCode: SQL_MAIN_WAREHOUSE_CODE,
+      warehouseName: SQL_MAIN_WAREHOUSE_NAME,
+      availableQty: product.retailStockQty
+    });
+  } catch (error) {
+    return product;
+  }
+}
+
 async function queryLiveStockedProducts({ search = "", barcode = "", limit = LIVE_PRODUCT_LOOKUP_LIMIT, offset = 0 } = {}) {
   const lookup = String(search || barcode || "").trim();
   const params = new URLSearchParams({
@@ -1961,7 +1986,8 @@ async function queryLiveStockedProducts({ search = "", barcode = "", limit = LIV
       seen.add(key);
       return true;
     });
-  const items = (await Promise.all(stockRows.map(fetchLiveProductForStockRow)))
+  const items = stockRows
+    .map((row) => mergeLiveProductWithStock(null, row))
     .filter(Boolean)
     .filter(productHasMainWarehouseStock);
   liveProductLookup.items = items;
@@ -2263,7 +2289,7 @@ async function resolveProductForSale(value, { scan = false } = {}) {
   if (!query) return null;
   if (serverModeEnabled()) {
     const selected = findStockedLiveLookupProduct(query);
-    if (selected) return selected;
+    if (selected) return enrichStockLookupProductForSale(selected);
     liveProductLookup.loading = true;
     liveProductLookup.error = "";
     renderProductLookupOptions();
@@ -2271,7 +2297,7 @@ async function resolveProductForSale(value, { scan = false } = {}) {
       const payload = await queryLiveStockedProducts({ search: query, limit: LIVE_PRODUCT_LOOKUP_LIMIT });
       liveProductLookup.loading = false;
       renderProductLookupOptions();
-      if (payload.items.length) return payload.items[0];
+      if (payload.items.length) return enrichStockLookupProductForSale(payload.items[0]);
     } catch (error) {
       markServerOffline(error);
       liveProductLookup.loading = false;
@@ -2620,7 +2646,8 @@ function productLookupValue(product) {
   const scanCode = product.barcode || product.qr || product.productCode || product.sqlId || product.sku;
   const retailQty = product.retailStockQty ?? stockQty(product.id);
   const totalQty = product.stockTotalQty ?? stockTotalQty(product.id);
-  return `${product.productCode || product.sku} · ${product.name} · ${scanCode} · ${formatMoney(product.price)} · ${SQL_MAIN_WAREHOUSE_NAME} ${retailQty} · всього ${totalQty}`;
+  const priceText = Number(product.price || 0) > 0 ? formatMoney(product.price) : "ціна після вибору";
+  return `${product.productCode || product.sku} · ${product.name} · ${scanCode} · ${priceText} · ${SQL_MAIN_WAREHOUSE_NAME} ${retailQty} · всього ${totalQty}`;
 }
 
 function employeeById(id) {
@@ -3642,7 +3669,6 @@ function renderCheckoutPanel(full = false) {
       </section>
     `;
   }
-  if (serverModeEnabled()) ensureLiveTableLoaded("counterparties");
   const lines = cartLines();
   const subtotal = receiptSubtotal(lines);
   const loyalDiscount = loyaltyDiscount(lines);
