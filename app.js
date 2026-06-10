@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.10.3";
-const APP_BUILD = "20260610-b2c-discount-percent-employee-edit";
-const APP_RELEASED_AT = "2026-06-10 00:47:02 +03:00";
+const APP_VERSION = "2026.06.10.4";
+const APP_BUILD = "20260610-b2c-inventory-live-add-all";
+const APP_RELEASED_AT = "2026-06-10 12:08:28 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SESSION_TOKEN_KEY = "retail-crm-b2c-session-token-v1";
@@ -75,6 +75,8 @@ const LIVE_PRODUCT_LOOKUP_LIMIT = 100;
 const LIVE_PRODUCT_LOOKUP_CACHE_LIMIT = 1000;
 const LIVE_CUSTOMER_LOOKUP_LIMIT = 20;
 const LIVE_STOCK_LOOKUP_LIMIT = 20;
+const LIVE_INVENTORY_STOCK_PAGE_LIMIT = 100;
+const LIVE_INVENTORY_STOCK_PAGE_CONCURRENCY = 4;
 const LIVE_SERIAL_LOOKUP_LIMIT = 20;
 const LIVE_TABLE_LIMIT_OPTIONS = [20, 50, 100];
 const BASE_CURRENCY = "UAH";
@@ -146,6 +148,12 @@ const serverSync = {
 const liveProductCache = new Map();
 const liveProductLookupCache = new Map();
 const liveTableLoadQueue = new Set();
+const inventoryAddAllStockStatus = {
+  loading: false,
+  loaded: 0,
+  total: 0,
+  error: ""
+};
 const exchangeRateLookup = {
   items: [],
   byCurrency: new Map(),
@@ -2488,6 +2496,182 @@ async function queryLiveStockedProducts({ search = "", barcode = "", limit = LIV
   return { ...payload, items };
 }
 
+function findProductByLiveStockIdentity(row) {
+  const code = normalizeScanText(liveStockProductCode(row));
+  if (!code) return null;
+  return productSearchPool().find((product) => (
+    normalizeScanText(product.id) === code
+    || normalizeScanText(product.sqlId) === code
+    || normalizeScanText(product.productCode) === code
+    || normalizeScanText(product.sku) === code
+    || normalizeScanText(product.barcode) === code
+    || productScanTargets(product).includes(code)
+  )) || null;
+}
+
+function upsertInventoryProductFromLiveStock(row) {
+  const stockRowData = normalizeStockBalance(row);
+  const stockCode = liveStockProductCode(stockRowData);
+  const existing = findProductByLiveStockIdentity(stockRowData);
+  const stockQtyValue = stockLookupAvailableQty(stockRowData);
+  const product = normalizeProduct({
+    ...(existing || {}),
+    id: existing?.id || stockCode || stockRowData.productId || `stock-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    sqlId: existing?.sqlId || stockRowData.productId || stockCode || "",
+    productCode: existing?.productCode || stockCode || stockRowData.productId || "",
+    sku: existing?.sku || stockCode || stockRowData.productId || "",
+    name: stockRowData.productName || existing?.name || stockCode || "Товар із залишком",
+    source: existing?.source || stockRowData.source || "crm-sql-live-stock",
+    retailStockQty: stockQtyValue,
+    stockTotalQty: Math.max(Number(existing?.stockTotalQty || 0), stockQtyValue)
+  });
+  const index = state.products.findIndex((item) => item.id === product.id);
+  if (index >= 0) {
+    state.products[index] = product;
+  } else {
+    state.products.push(product);
+  }
+  return rememberLiveProduct(product);
+}
+
+function upsertInventoryStockBalance(product, row) {
+  const stockRowData = normalizeStockBalance({
+    ...row,
+    productId: product.id,
+    productCode: product.productCode || product.sku || row.productCode,
+    productName: product.name || row.productName,
+    warehouseCode: row.warehouseCode || SQL_MAIN_WAREHOUSE_CODE,
+    warehouseName: row.warehouseName || SQL_MAIN_WAREHOUSE_NAME
+  });
+  const productCodeKey = normalizeScanText(stockRowData.productCode || product.productCode || product.sku);
+  const warehouseCode = String(stockRowData.warehouseCode || SQL_MAIN_WAREHOUSE_CODE);
+  const existing = state.stock.find((item) => {
+    const sameWarehouse = item.warehouseCode ? String(item.warehouseCode) === warehouseCode : warehouseCode === SQL_MAIN_WAREHOUSE_CODE;
+    if (!sameWarehouse) return false;
+    if (item.productId === product.id) return true;
+    const itemCode = normalizeScanText(item.productCode || item.productId);
+    return Boolean(productCodeKey && itemCode === productCodeKey);
+  });
+  if (existing) {
+    Object.assign(existing, stockRowData);
+  } else {
+    state.stock.push(stockRowData);
+  }
+  return stockRowData;
+}
+
+function applyLiveStockRowsToInventory(rows) {
+  const grouped = new Map();
+  rows.forEach((sourceRow) => {
+    const row = normalizeStockBalance(sourceRow);
+    if (String(row.warehouseCode) !== SQL_MAIN_WAREHOUSE_CODE || stockLookupAvailableQty(row) <= 0) return;
+    const product = upsertInventoryProductFromLiveStock(row);
+    if (!product?.id) return;
+    const key = `${product.id}::${row.warehouseCode || SQL_MAIN_WAREHOUSE_CODE}`;
+    const current = grouped.get(key) || {
+      product,
+      row: {
+        ...row,
+        productId: product.id,
+        productCode: product.productCode || product.sku || row.productCode,
+        productName: product.name || row.productName
+      },
+      qty: 0,
+      reservedQty: 0
+    };
+    current.qty += stockLookupAvailableQty(row);
+    current.reservedQty += Number(row.reservedQty || 0);
+    grouped.set(key, current);
+  });
+
+  let added = 0;
+  let updated = 0;
+  grouped.forEach((entry) => {
+    const stockRowData = {
+      ...entry.row,
+      qty: entry.qty,
+      availableQty: entry.qty,
+      quantity: entry.qty,
+      reservedQty: entry.reservedQty
+    };
+    upsertInventoryStockBalance(entry.product, stockRowData);
+    const existed = state.inventory.lines.some((line) => line.productId === entry.product.id);
+    const line = inventoryLineForProduct(entry.product.id);
+    line.expectedQty = stockQty(entry.product.id);
+    if (existed) updated += 1;
+    else added += 1;
+  });
+
+  return { added, updated, products: grouped.size, sourceRows: rows.length };
+}
+
+async function fetchLiveInventoryStockPage(offset) {
+  const params = new URLSearchParams({
+    warehouseCode: SQL_MAIN_WAREHOUSE_CODE,
+    limit: String(LIVE_INVENTORY_STOCK_PAGE_LIMIT),
+    offset: String(Math.max(0, Number(offset || 0)))
+  });
+  const payload = await fetchJson(`/api/live/stock-balances?${params.toString()}`);
+  markServerOnline(payload);
+  return {
+    payload,
+    rows: payloadItems(payload),
+    limit: Math.max(1, Number(payload.limit || LIVE_INVENTORY_STOCK_PAGE_LIMIT)),
+    offset: Math.max(0, Number(payload.offset || offset || 0)),
+    nextOffset: payload.nextOffset === null || payload.nextOffset === undefined ? null : Number(payload.nextOffset),
+    total: Math.max(0, Number(payload.total || 0))
+  };
+}
+
+async function fetchRemainingLiveInventoryStockRowsSequential(firstPage) {
+  const rows = [];
+  const seenOffsets = new Set([firstPage.offset]);
+  let offset = firstPage.nextOffset;
+  while (Number.isFinite(offset) && offset > firstPage.offset) {
+    if (seenOffsets.has(offset)) {
+      throw new Error(`Live API повернув повторний offset ${offset}; зупинено, щоб не зациклити інвентаризацію.`);
+    }
+    seenOffsets.add(offset);
+    const page = await fetchLiveInventoryStockPage(offset);
+    rows.push(...page.rows);
+    inventoryAddAllStockStatus.loaded += page.rows.length;
+    inventoryAddAllStockStatus.total = Math.max(inventoryAddAllStockStatus.total, page.total, inventoryAddAllStockStatus.loaded);
+    if (!page.payload.hasMore || !page.rows.length || !Number.isFinite(page.nextOffset) || page.nextOffset <= offset) break;
+    offset = page.nextOffset;
+  }
+  return rows;
+}
+
+async function fetchAllLiveInventoryStockRows() {
+  const firstPage = await fetchLiveInventoryStockPage(0);
+  const rows = [...firstPage.rows];
+  inventoryAddAllStockStatus.loaded = rows.length;
+  inventoryAddAllStockStatus.total = Math.max(firstPage.total, rows.length);
+  if (!firstPage.payload.hasMore || !rows.length) return rows;
+
+  if (!firstPage.total || firstPage.total <= firstPage.limit || !Number.isFinite(firstPage.limit)) {
+    rows.push(...await fetchRemainingLiveInventoryStockRowsSequential(firstPage));
+    return rows;
+  }
+
+  const offsets = [];
+  for (let offset = firstPage.nextOffset || firstPage.limit; offset < firstPage.total; offset += firstPage.limit) {
+    offsets.push(offset);
+  }
+  for (let index = 0; index < offsets.length; index += LIVE_INVENTORY_STOCK_PAGE_CONCURRENCY) {
+    const batchOffsets = offsets.slice(index, index + LIVE_INVENTORY_STOCK_PAGE_CONCURRENCY);
+    const pages = await Promise.all(batchOffsets.map((offset) => fetchLiveInventoryStockPage(offset)));
+    pages
+      .sort((left, right) => left.offset - right.offset)
+      .forEach((page) => {
+        rows.push(...page.rows);
+        inventoryAddAllStockStatus.loaded = rows.length;
+        inventoryAddAllStockStatus.total = Math.max(inventoryAddAllStockStatus.total, page.total, rows.length);
+      });
+  }
+  return rows;
+}
+
 function liveTable(kind) {
   if (!state.liveTables) state.liveTables = normalizeLiveTables({});
   if (!state.liveTables[kind]) state.liveTables[kind] = normalizeLiveTableState({}, kind);
@@ -4647,6 +4831,9 @@ function renderStock() {
     : selectedSerialProductId
       ? state.stockUi.serialError || "Для вибраного товару категорії Зброя live серійних залишків не знайдено."
       : "Виберіть товар із категорії Зброя, щоб підтягнути серійні номери.";
+  const inventoryAddAllText = inventoryAddAllStockStatus.loading
+    ? `Додаю з SQL ${inventoryAddAllStockStatus.loaded}${inventoryAddAllStockStatus.total ? ` з ${inventoryAddAllStockStatus.total}` : ""}...`
+    : "Додати всі товари із залишками";
   return `
     <section class="stacked-panels">
       <article class="panel">
@@ -4727,7 +4914,8 @@ function renderStock() {
         <label class="field wide"><span>Пошук у інвентаризації</span><input name="inventorySearch" data-inventory-search value="${escapeHtml(state.inventory.search || "")}" placeholder="назва, SKU, штрихкод або QR"></label>
         <label class="field wide"><span>Сканер інвентаризації</span><input name="inventoryScan" data-inventory-scan autocomplete="off" placeholder="скануйте штрихкод або QR, Enter додає 1 до факту"></label>
         <div class="toolbar full no-print">
-          <button class="secondary" type="button" data-add-all-stock-inventory>Додати всі товари із залишками</button>
+          <button class="secondary" type="button" data-add-all-stock-inventory ${inventoryAddAllStockStatus.loading ? "disabled" : ""}>${escapeHtml(inventoryAddAllText)}</button>
+          ${inventoryAddAllStockStatus.error ? `<span class="lookup-status warn">${escapeHtml(inventoryAddAllStockStatus.error)}</span>` : ""}
           <button class="secondary" type="button" data-print-inventory>Друк Інвентаризаційний лист</button>
           <button class="secondary" type="button" data-reset-inventory>Очистити лист</button>
           ${canPostInventory ? '<button class="primary" type="submit">Провести і оновити склад</button>' : ""}
@@ -6525,7 +6713,7 @@ function addInventoryProductFromLookup(value = state.inventory.addSearch) {
   render();
 }
 
-function addAllInventoryStockProducts() {
+function addLocalInventoryStockProducts() {
   const productsWithStock = state.products.filter((product) => stockQty(product.id) > 0);
   const before = state.inventory.lines.length;
   productsWithStock.forEach((product) => {
@@ -6541,6 +6729,40 @@ function addAllInventoryStockProducts() {
   audit(`Додано товари із залишками до інвентаризації: ${added} нових із ${productsWithStock.length}`);
   saveState();
   render();
+}
+
+async function addAllInventoryStockProducts() {
+  if (!serverModeEnabled()) return addLocalInventoryStockProducts();
+  if (inventoryAddAllStockStatus.loading) return;
+  inventoryAddAllStockStatus.loading = true;
+  inventoryAddAllStockStatus.loaded = 0;
+  inventoryAddAllStockStatus.total = 0;
+  inventoryAddAllStockStatus.error = "";
+  render();
+  try {
+    const rows = await fetchAllLiveInventoryStockRows();
+    const filteredRows = rows
+      .map(normalizeStockBalance)
+      .filter((row) => String(row.warehouseCode) === SQL_MAIN_WAREHOUSE_CODE && stockLookupAvailableQty(row) > 0);
+    if (!filteredRows.length) {
+      inventoryAddAllStockStatus.error = `Live API не повернув товарів із залишками на ${SQL_MAIN_WAREHOUSE_NAME}.`;
+      alert(inventoryAddAllStockStatus.error);
+      return;
+    }
+    const result = applyLiveStockRowsToInventory(filteredRows);
+    state.inventory.addSearch = "";
+    state.inventory.search = "";
+    inventoryAddAllStockStatus.error = "";
+    audit(`Додано live SQL залишки до інвентаризації: ${result.added} нових, ${result.updated} оновлено, ${result.products} товарів із ${result.sourceRows} рядків складу ${SQL_MAIN_WAREHOUSE_CODE}`);
+    saveState();
+  } catch (error) {
+    inventoryAddAllStockStatus.error = String(error?.message || error || "Не вдалося завантажити live залишки.");
+    markServerOffline(error);
+    alert(`Не вдалося додати всі товари із залишками: ${inventoryAddAllStockStatus.error}`);
+  } finally {
+    inventoryAddAllStockStatus.loading = false;
+    render();
+  }
 }
 
 function removeInventoryProduct(productId) {
