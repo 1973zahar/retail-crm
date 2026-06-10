@@ -11,9 +11,9 @@ try {
 } catch {
 }
 
-$AppVersion = "2026.06.10.6"
-$AppBuild = "20260610-b2c-stock-list-controls"
-$AppReleasedAt = "2026-06-10 14:04:01 +03:00"
+$AppVersion = "2026.06.10.7"
+$AppBuild = "20260610-b2c-shared-session-auth"
+$AppReleasedAt = "2026-06-10 20:11:25 +03:00"
 $RootDir = $PSScriptRoot
 $ResolvedDataDir = if ([System.IO.Path]::IsPathRooted($DataDir)) { $DataDir } else { Join-Path $RootDir $DataDir }
 $StatePath = Join-Path $ResolvedDataDir "retail-crm-state.json"
@@ -174,8 +174,10 @@ function Get-StatusText([int]$StatusCode) {
     200 { "OK" }
     204 { "No Content" }
     400 { "Bad Request" }
+    401 { "Unauthorized" }
     403 { "Forbidden" }
     404 { "Not Found" }
+    409 { "Conflict" }
     500 { "Internal Server Error" }
     502 { "Bad Gateway" }
     default { "OK" }
@@ -205,6 +207,202 @@ function Send-Bytes($Client, [int]$StatusCode, [string]$ContentType, [byte[]]$By
 
 function Send-Json($Client, [int]$StatusCode, $Value) {
   Send-Bytes $Client $StatusCode "application/json; charset=utf-8" (Convert-ToJsonBytes $Value)
+}
+
+function Get-AuthObjectPropertyValue($Object, [string]$Name) {
+  if ($null -eq $Object) {
+    return $null
+  }
+  if ($Object -is [hashtable]) {
+    return $Object[$Name]
+  }
+  foreach ($property in $Object.PSObject.Properties) {
+    if ($property.Name -eq $Name) {
+      return $property.Value
+    }
+  }
+  return $null
+}
+
+function Set-AuthObjectPropertyValue($Object, [string]$Name, $Value) {
+  if ($Object -is [hashtable]) {
+    $Object[$Name] = $Value
+    return
+  }
+  $exists = $false
+  foreach ($property in $Object.PSObject.Properties) {
+    if ($property.Name -eq $Name) {
+      $exists = $true
+      break
+    }
+  }
+  if ($exists) {
+    $Object.$Name = $Value
+  } else {
+    $Object | Add-Member -NotePropertyName $Name -NotePropertyValue $Value
+  }
+}
+
+function Remove-AuthObjectPropertyValue($Object, [string]$Name) {
+  if ($null -eq $Object) {
+    return
+  }
+  if ($Object -is [hashtable]) {
+    if ($Object.ContainsKey($Name)) {
+      $Object.Remove($Name)
+    }
+    return
+  }
+  foreach ($property in @($Object.PSObject.Properties)) {
+    if ($property.Name -eq $Name) {
+      $Object.PSObject.Properties.Remove($Name)
+      return
+    }
+  }
+}
+
+function Ensure-AuthState($State) {
+  if ($null -eq $State) {
+    return $null
+  }
+  $employees = Get-AuthObjectPropertyValue $State "employees"
+  if ($null -eq $employees) {
+    return $null
+  }
+  $sessions = Get-AuthObjectPropertyValue $State "employeeSessions"
+  if ($null -eq $sessions -or $sessions -is [array]) {
+    $sessions = [pscustomobject]@{}
+    Set-AuthObjectPropertyValue $State "employeeSessions" $sessions
+  }
+  $auditLog = Get-AuthObjectPropertyValue $State "auditLog"
+  if ($null -eq $auditLog) {
+    Set-AuthObjectPropertyValue $State "auditLog" @()
+  }
+  return $State
+}
+
+function Get-AuthEmployee($State, [string]$EmployeeId, [bool]$ActiveOnly = $true) {
+  $employees = Get-AuthObjectPropertyValue $State "employees"
+  foreach ($employee in @($employees)) {
+    if ([string](Get-AuthObjectPropertyValue $employee "id") -ne $EmployeeId) {
+      continue
+    }
+    $status = [string](Get-AuthObjectPropertyValue $employee "status")
+    if ($ActiveOnly -and $status -and $status -ne "active") {
+      return $null
+    }
+    return $employee
+  }
+  return $null
+}
+
+function Get-AuthEmployeeName($Employee, [string]$Fallback = "auth") {
+  if ($null -eq $Employee) {
+    return $Fallback
+  }
+  $name = [string](Get-AuthObjectPropertyValue $Employee "name")
+  if ($name) {
+    return $name
+  }
+  $login = [string](Get-AuthObjectPropertyValue $Employee "login")
+  if ($login) {
+    return $login
+  }
+  $id = [string](Get-AuthObjectPropertyValue $Employee "id")
+  if ($id) {
+    return $id
+  }
+  return $Fallback
+}
+
+function Get-AuthSession($State, [string]$EmployeeId) {
+  $sessions = Get-AuthObjectPropertyValue $State "employeeSessions"
+  return Get-AuthObjectPropertyValue $sessions $EmployeeId
+}
+
+function Set-AuthSession($State, [string]$EmployeeId, $Session) {
+  $sessions = Get-AuthObjectPropertyValue $State "employeeSessions"
+  if ($null -eq $sessions) {
+    $sessions = [pscustomobject]@{}
+    Set-AuthObjectPropertyValue $State "employeeSessions" $sessions
+  }
+  Set-AuthObjectPropertyValue $sessions $EmployeeId $Session
+}
+
+function Remove-AuthSession($State, [string]$EmployeeId) {
+  $sessions = Get-AuthObjectPropertyValue $State "employeeSessions"
+  Remove-AuthObjectPropertyValue $sessions $EmployeeId
+}
+
+function Test-AuthSessionMatches($Record, $Body) {
+  if ($null -eq $Record -or $null -eq $Body) {
+    return $false
+  }
+  return ([string](Get-AuthObjectPropertyValue $Record "deviceId") -eq [string]($Body.deviceId)) -and
+    ([string](Get-AuthObjectPropertyValue $Record "sessionToken") -eq [string]($Body.sessionToken))
+}
+
+function Add-AuthAudit($State, [string]$Event, [string]$Actor = "auth") {
+  $existing = @(Get-AuthObjectPropertyValue $State "auditLog")
+  $rows = New-Object System.Collections.ArrayList
+  [void]$rows.Add([pscustomobject]@{
+    at = [DateTime]::UtcNow.ToString("o")
+    actor = $Actor
+    event = $Event
+  })
+  foreach ($row in $existing) {
+    if ($rows.Count -ge 100) {
+      break
+    }
+    if ($null -ne $row) {
+      [void]$rows.Add($row)
+    }
+  }
+  Set-AuthObjectPropertyValue $State "auditLog" @($rows)
+}
+
+function New-AuthStateEnvelope($Container, $Extra = @{}) {
+  $health = New-HealthPayload $Container
+  $payload = @{
+    ok = $health.ok
+    appVersion = $health.appVersion
+    build = $health.build
+    mode = $health.mode
+    host = $health.host
+    publicHost = $health.publicHost
+    publicBaseUrl = $health.publicBaseUrl
+    port = $health.port
+    dataDir = $health.dataDir
+    releasedAt = $health.releasedAt
+    revision = [int](Get-AuthObjectPropertyValue $Container "revision")
+    stateRevision = [int](Get-AuthObjectPropertyValue $Container "revision")
+    savedAt = [string](Get-AuthObjectPropertyValue $Container "savedAt")
+    savedBy = [string](Get-AuthObjectPropertyValue $Container "savedBy")
+    state = Get-AuthObjectPropertyValue $Container "state"
+  }
+  foreach ($key in $Extra.Keys) {
+    $payload[$key] = $Extra[$key]
+  }
+  return $payload
+}
+
+function Save-AuthStateContainer($Current, $NextState, [string]$SavedBy, $Body) {
+  $next = @{
+    revision = [int](Get-AuthObjectPropertyValue $Current "revision") + 1
+    savedAt = [DateTime]::UtcNow.ToString("o")
+    savedBy = if ($SavedBy) { $SavedBy } else { "auth" }
+    build = if ($Body -and $Body.build) { [string]$Body.build } else { $AppBuild }
+    appVersion = if ($Body -and $Body.appVersion) { [string]$Body.appVersion } else { $AppVersion }
+    releasedAt = if ($Body -and $Body.releasedAt) { [string]$Body.releasedAt } else { $AppReleasedAt }
+    conflict = $false
+    state = $NextState
+  }
+  Write-JsonFile $StatePath $next
+  return $next
+}
+
+function New-ServerOpaqueId([string]$Prefix) {
+  return "$Prefix-$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())-$([guid]::NewGuid().ToString("N").Substring(0, 10))"
 }
 
 function Decode-QueryValue([string]$Value) {
@@ -1425,6 +1623,152 @@ function Handle-Api($Client, $Request) {
   if ($method -eq "GET" -and $path -eq "/api/warehouses") {
     $stateContainer = Read-JsonFile $StatePath (New-DefaultStateContainer)
     Send-Json $Client 200 (New-WarehousesResponse $stateContainer (Get-QueryParams $Request.RawPath))
+    return
+  }
+
+  if ($method -eq "POST" -and $path -eq "/api/auth/login") {
+    $body = if ($Request.Body) { $Request.Body | ConvertFrom-Json } else { $null }
+    $current = Read-JsonFile $StatePath (New-DefaultStateContainer)
+    $authState = Ensure-AuthState (Get-AuthObjectPropertyValue $current "state")
+    if (-not $authState) {
+      Send-Json $Client 409 @{ error = "Server state is not initialized"; code = "STATE_NOT_INITIALIZED" }
+      return
+    }
+    $employeeId = [string]($body.employeeId)
+    $employee = Get-AuthEmployee $authState $employeeId $true
+    if (-not $employee) {
+      Send-Json $Client 403 @{ error = "Employee is not active"; code = "EMPLOYEE_NOT_ACTIVE" }
+      return
+    }
+    $requiredPin = ([string](Get-AuthObjectPropertyValue $employee "pin")).Trim()
+    if ($requiredPin -and ([string]($body.pin)).Trim() -ne $requiredPin) {
+      Send-Json $Client 401 @{ error = "Invalid employee PIN"; code = "AUTH_INVALID_PIN" }
+      return
+    }
+    $deviceId = ([string]($body.deviceId)).Trim()
+    if (-not $deviceId) {
+      Send-Json $Client 400 @{ error = "deviceId is required"; code = "DEVICE_ID_REQUIRED" }
+      return
+    }
+    if ($deviceId.Length -gt 160) {
+      $deviceId = $deviceId.Substring(0, 160)
+    }
+    $deviceLabel = ([string]($body.deviceLabel)).Trim()
+    if (-not $deviceLabel) {
+      $deviceLabel = "Computer"
+    }
+    if ($deviceLabel.Length -gt 80) {
+      $deviceLabel = $deviceLabel.Substring(0, 80)
+    }
+    $sessionToken = ([string]($body.sessionToken)).Trim()
+    if (-not $sessionToken) {
+      $sessionToken = New-ServerOpaqueId "session"
+    }
+    if ($sessionToken.Length -gt 160) {
+      $sessionToken = $sessionToken.Substring(0, 160)
+    }
+    $previous = Get-AuthSession $authState $employeeId
+    $incoming = [pscustomobject]@{ deviceId = $deviceId; sessionToken = $sessionToken }
+    $replaced = $false
+    if ($previous) {
+      $replaced = -not (Test-AuthSessionMatches $previous $incoming)
+    }
+    $now = [DateTime]::UtcNow.ToString("o")
+    $startedAt = $now
+    if ($previous -and -not $replaced) {
+      $previousStartedAt = [string](Get-AuthObjectPropertyValue $previous "startedAt")
+      if ($previousStartedAt) {
+        $startedAt = $previousStartedAt
+      }
+    }
+    $session = [pscustomobject]@{
+      employeeId = $employeeId
+      deviceId = $deviceId
+      deviceLabel = $deviceLabel
+      sessionToken = $sessionToken
+      startedAt = $startedAt
+      lastSeenAt = $now
+      replacedAt = if ($replaced) { $now } else { "" }
+    }
+    Set-AuthSession $authState $employeeId $session
+    $employeeName = Get-AuthEmployeeName $employee $employeeId
+    Add-AuthAudit $authState "B2C employee login: $employeeName" $employeeName
+    $next = Save-AuthStateContainer $current $authState $employeeName $body
+    Send-Json $Client 200 (New-AuthStateEnvelope $next @{
+      employeeId = $employeeId
+      session = $session
+      replacedSession = $replaced
+    })
+    return
+  }
+
+  if ($method -eq "POST" -and $path -eq "/api/auth/logout") {
+    $body = if ($Request.Body) { $Request.Body | ConvertFrom-Json } else { $null }
+    $current = Read-JsonFile $StatePath (New-DefaultStateContainer)
+    $authState = Ensure-AuthState (Get-AuthObjectPropertyValue $current "state")
+    if (-not $authState) {
+      Send-Json $Client 409 @{ error = "Server state is not initialized"; code = "STATE_NOT_INITIALIZED" }
+      return
+    }
+    $employeeId = [string]($body.employeeId)
+    $employee = Get-AuthEmployee $authState $employeeId $false
+    $record = Get-AuthSession $authState $employeeId
+    if ($record -and -not (Test-AuthSessionMatches $record $body)) {
+      Send-Json $Client 409 (New-AuthStateEnvelope $current @{
+        error = "Employee session is opened on another computer."
+        code = "USER_SESSION_REPLACED"
+      })
+      return
+    }
+    if ($record) {
+      Remove-AuthSession $authState $employeeId
+    }
+    $employeeName = Get-AuthEmployeeName $employee $employeeId
+    Add-AuthAudit $authState "B2C employee logout: $employeeName" $employeeName
+    $next = Save-AuthStateContainer $current $authState $employeeName $body
+    Send-Json $Client 200 (New-AuthStateEnvelope $next @{ loggedOut = $true })
+    return
+  }
+
+  if ($method -eq "POST" -and $path -eq "/api/auth/heartbeat") {
+    $body = if ($Request.Body) { $Request.Body | ConvertFrom-Json } else { $null }
+    $current = Read-JsonFile $StatePath (New-DefaultStateContainer)
+    $authState = Ensure-AuthState (Get-AuthObjectPropertyValue $current "state")
+    if (-not $authState) {
+      Send-Json $Client 409 @{ error = "Server state is not initialized"; code = "STATE_NOT_INITIALIZED" }
+      return
+    }
+    $employeeId = [string]($body.employeeId)
+    $employee = Get-AuthEmployee $authState $employeeId $true
+    $record = Get-AuthSession $authState $employeeId
+    if (-not $employee) {
+      Send-Json $Client 403 (New-AuthStateEnvelope $current @{
+        error = "Employee is not active"
+        code = "EMPLOYEE_NOT_ACTIVE"
+      })
+      return
+    }
+    if (-not $record -or -not (Test-AuthSessionMatches $record $body)) {
+      Send-Json $Client 409 (New-AuthStateEnvelope $current @{
+        error = "Employee session is opened on another computer."
+        code = "USER_SESSION_REPLACED"
+      })
+      return
+    }
+    Set-AuthObjectPropertyValue $record "lastSeenAt" ([DateTime]::UtcNow.ToString("o"))
+    if ($body.deviceLabel) {
+      $label = [string]($body.deviceLabel)
+      if ($label.Length -gt 80) {
+        $label = $label.Substring(0, 80)
+      }
+      Set-AuthObjectPropertyValue $record "deviceLabel" $label
+    }
+    $employeeName = Get-AuthEmployeeName $employee $employeeId
+    $next = Save-AuthStateContainer $current $authState $employeeName $body
+    Send-Json $Client 200 (New-AuthStateEnvelope $next @{
+      employeeId = $employeeId
+      session = $record
+    })
     return
   }
 

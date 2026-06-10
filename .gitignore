@@ -4,6 +4,7 @@ dist/
 data/
 data-test/
 data-smoke*/
+.codex-tmp/
 retail-crm.config.json
 *.log
 *.tmp

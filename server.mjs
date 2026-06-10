@@ -3,9 +3,9 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const APP_VERSION = "2026.06.10.6";
-const APP_BUILD = "20260610-b2c-stock-list-controls";
-const APP_RELEASED_AT = "2026-06-10 14:04:01 +03:00";
+const APP_VERSION = "2026.06.10.7";
+const APP_BUILD = "20260610-b2c-shared-session-auth";
+const APP_RELEASED_AT = "2026-06-10 20:11:25 +03:00";
 const ROOT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const CRM_SQL_API_BASE_URL = String(process.env.CRM_SQL_API_BASE_URL || "http://192.168.0.166:3000").replace(/\/+$/, "");
 const CRM_SQL_API_TIMEOUT_MS = Math.max(1000, Number(process.env.CRM_SQL_API_TIMEOUT_MS || 30000));
@@ -283,6 +283,106 @@ async function handleApi(request, response, url) {
   if (request.method === "GET" && url.pathname === "/api/warehouses") {
     const stateContainer = await readJson(statePath, defaultStateContainer());
     sendJson(response, 200, listWarehouses(stateContainer, url));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/auth/login") {
+    const body = await readBody(request);
+    const current = await readJson(statePath, defaultStateContainer());
+    const currentState = ensureAuthState(current.state);
+    if (!currentState) {
+      sendJson(response, 409, { error: "Server state is not initialized", code: "STATE_NOT_INITIALIZED" });
+      return;
+    }
+    const employee = findAuthEmployee(currentState, body.employeeId);
+    if (!employee) {
+      sendJson(response, 403, { error: "Працівника для входу не знайдено або він не активний.", code: "EMPLOYEE_NOT_ACTIVE" });
+      return;
+    }
+    const requiredPin = String(employee.pin || "").trim();
+    if (requiredPin && String(body.pin || "").trim() !== requiredPin) {
+      sendJson(response, 401, { error: "Невірний пароль/PIN працівника.", code: "AUTH_INVALID_PIN" });
+      return;
+    }
+    const timestamp = new Date().toISOString();
+    const previous = currentState.employeeSessions[employee.id] || null;
+    const sessionToken = String(body.sessionToken || "").trim() || opaqueServerId("session");
+    const session = {
+      employeeId: employee.id,
+      deviceId: String(body.deviceId || "").trim().slice(0, 160),
+      deviceLabel: String(body.deviceLabel || "Комп'ютер").trim().slice(0, 80) || "Комп'ютер",
+      sessionToken: sessionToken.slice(0, 160),
+      startedAt: previous?.deviceId === body.deviceId && previous?.sessionToken === sessionToken ? previous.startedAt || timestamp : timestamp,
+      lastSeenAt: timestamp,
+      replacedAt: previous && (previous.deviceId !== body.deviceId || previous.sessionToken !== sessionToken) ? timestamp : ""
+    };
+    if (!session.deviceId) {
+      sendJson(response, 400, { error: "deviceId is required", code: "DEVICE_ID_REQUIRED" });
+      return;
+    }
+    currentState.employeeSessions[employee.id] = session;
+    appendAuthAudit(currentState, `Вхід працівника у B2C: ${employee.name || employee.login || employee.id}`, employee.name || "auth");
+    const next = await saveAuthStateContainer(current, currentState, employee.name || employee.id, body);
+    sendJson(response, 200, authStateEnvelope(next, {
+      employeeId: employee.id,
+      session,
+      replacedSession: Boolean(previous && (previous.deviceId !== session.deviceId || previous.sessionToken !== session.sessionToken))
+    }));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/auth/logout") {
+    const body = await readBody(request);
+    const current = await readJson(statePath, defaultStateContainer());
+    const currentState = ensureAuthState(current.state);
+    if (!currentState) {
+      sendJson(response, 409, { error: "Server state is not initialized", code: "STATE_NOT_INITIALIZED" });
+      return;
+    }
+    const employee = findAuthEmployee(currentState, body.employeeId, false);
+    const record = currentState.employeeSessions?.[String(body.employeeId || "")] || null;
+    if (record && !authSessionMatches(record, body)) {
+      sendJson(response, 409, authStateEnvelope(current, {
+        error: "Сеанс працівника відкрито на іншому комп'ютері.",
+        code: "USER_SESSION_REPLACED"
+      }));
+      return;
+    }
+    if (record) delete currentState.employeeSessions[String(body.employeeId || "")];
+    appendAuthAudit(currentState, `Вихід працівника з B2C: ${employee?.name || body.employeeId || "працівник"}`, employee?.name || "auth");
+    const next = await saveAuthStateContainer(current, currentState, employee?.name || "auth", body);
+    sendJson(response, 200, authStateEnvelope(next, { loggedOut: true }));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/auth/heartbeat") {
+    const body = await readBody(request);
+    const current = await readJson(statePath, defaultStateContainer());
+    const currentState = ensureAuthState(current.state);
+    if (!currentState) {
+      sendJson(response, 409, { error: "Server state is not initialized", code: "STATE_NOT_INITIALIZED" });
+      return;
+    }
+    const employee = findAuthEmployee(currentState, body.employeeId);
+    const record = currentState.employeeSessions?.[String(body.employeeId || "")] || null;
+    if (!employee) {
+      sendJson(response, 403, authStateEnvelope(current, {
+        error: "Сеанс завершено, бо працівник не активний або відсутній.",
+        code: "EMPLOYEE_NOT_ACTIVE"
+      }));
+      return;
+    }
+    if (!record || !authSessionMatches(record, body)) {
+      sendJson(response, 409, authStateEnvelope(current, {
+        error: "Сеанс працівника відкрито на іншому комп'ютері.",
+        code: "USER_SESSION_REPLACED"
+      }));
+      return;
+    }
+    record.lastSeenAt = new Date().toISOString();
+    if (body.deviceLabel) record.deviceLabel = String(body.deviceLabel).slice(0, 80);
+    const next = await saveAuthStateContainer(current, currentState, employee.name || employee.id, body);
+    sendJson(response, 200, authStateEnvelope(next, { employeeId: employee.id, session: record }));
     return;
   }
 
@@ -1220,6 +1320,69 @@ function normalizeSettings(input) {
     autoRefreshSeconds: Math.max(5, Math.min(300, Number(source.autoRefreshSeconds || DEFAULT_SETTINGS.autoRefreshSeconds))),
     lastSavedAt: source.lastSavedAt || ""
   };
+}
+
+function ensureAuthState(source) {
+  if (!source || typeof source !== "object") return null;
+  if (!Array.isArray(source.employees)) return null;
+  if (!source.employeeSessions || typeof source.employeeSessions !== "object" || Array.isArray(source.employeeSessions)) {
+    source.employeeSessions = {};
+  }
+  if (!Array.isArray(source.auditLog)) source.auditLog = [];
+  return source;
+}
+
+function findAuthEmployee(source, employeeId, activeOnly = true) {
+  const id = String(employeeId || "").trim();
+  return (source.employees || []).find((employee) => (
+    String(employee.id || "") === id
+    && (!activeOnly || String(employee.status || "active") === "active")
+  )) || null;
+}
+
+function authSessionMatches(record, body) {
+  return Boolean(
+    record
+    && String(record.deviceId || "") === String(body.deviceId || "")
+    && String(record.sessionToken || "") === String(body.sessionToken || "")
+  );
+}
+
+function appendAuthAudit(source, event, actor = "auth") {
+  const auditLog = Array.isArray(source.auditLog) ? source.auditLog : [];
+  auditLog.unshift({ at: new Date().toISOString(), actor: String(actor || "auth"), event: String(event || "Подія входу") });
+  source.auditLog = auditLog.slice(0, 100);
+}
+
+function authStateEnvelope(container, extra = {}) {
+  return {
+    ...healthPayload(container),
+    revision: Number(container.revision || 0),
+    stateRevision: Number(container.revision || 0),
+    savedAt: container.savedAt || "",
+    savedBy: container.savedBy || "",
+    state: container.state,
+    ...extra
+  };
+}
+
+async function saveAuthStateContainer(current, nextState, savedBy, body = {}) {
+  const next = {
+    revision: Number(current.revision || 0) + 1,
+    savedAt: new Date().toISOString(),
+    savedBy: String(savedBy || "auth"),
+    build: String(body.build || APP_BUILD),
+    appVersion: String(body.appVersion || APP_VERSION),
+    releasedAt: String(body.releasedAt || APP_RELEASED_AT),
+    conflict: false,
+    state: nextState
+  };
+  await writeJsonAtomic(statePath, next);
+  return next;
+}
+
+function opaqueServerId(prefix) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
 async function readBody(request) {

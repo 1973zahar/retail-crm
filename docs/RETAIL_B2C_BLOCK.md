@@ -10,9 +10,9 @@ Repo: D:\Codex\CRM\retail-crm
 Stable LAN runtime: http://<LAN-IP>:18810/index.html
 Legacy/manual local runtime: internal diagnostics only, not the working URL
 MESER runtime: http://192.168.0.5:8790/index.html
-Current build: 20260610-b2c-stock-list-controls
-App version: 2026.06.10.6
-Released at: 2026-06-10 14:04:01 +03:00
+Current build: 20260610-b2c-shared-session-auth
+App version: 2026.06.10.7
+Released at: 2026-06-10 20:11:25 +03:00
 Contract version: 2026.06.07-retail-live-api-1
 ```
 

@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.10.6";
-const APP_BUILD = "20260610-b2c-stock-list-controls";
-const APP_RELEASED_AT = "2026-06-10 14:04:01 +03:00";
+const APP_VERSION = "2026.06.10.7";
+const APP_BUILD = "20260610-b2c-shared-session-auth";
+const APP_RELEASED_AT = "2026-06-10 20:11:25 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SESSION_TOKEN_KEY = "retail-crm-b2c-session-token-v1";
@@ -78,6 +78,7 @@ const LIVE_STOCK_LOOKUP_LIMIT = 20;
 const LIVE_INVENTORY_STOCK_PAGE_LIMIT = 100;
 const LIVE_INVENTORY_STOCK_PAGE_CONCURRENCY = 4;
 const LIVE_INVENTORY_SERIAL_PAGE_LIMIT = 100;
+const SESSION_HEARTBEAT_MS = 30000;
 const LIVE_SERIAL_LOOKUP_LIMIT = 20;
 const LIVE_TABLE_LIMIT_OPTIONS = [20, 50, 100];
 const LIVE_TABLE_ALL_VALUE = "all";
@@ -804,6 +805,7 @@ const browserDeviceId = loadBrowserDeviceId();
 let state = loadState();
 let loginDialog = { open: false, employeeId: "" };
 let sessionNotice = "";
+let sessionHeartbeatTimer = null;
 let sidebarCollapsed = loadSidebarCollapsed();
 
 function clone(value) {
@@ -1968,8 +1970,14 @@ function apiEndpoint(path) {
   return `${base}${path}`;
 }
 
+function appServedByHttpServer() {
+  return window.location.protocol === "http:" || window.location.protocol === "https:";
+}
+
 function serverModeEnabled() {
-  return state.systemSettings?.mode !== "local" && Boolean(apiEndpoint("/api/health"));
+  if (!apiEndpoint("/api/health")) return false;
+  if (appServedByHttpServer()) return true;
+  return state.systemSettings?.mode !== "local";
 }
 
 function serverSyncLabel() {
@@ -2003,9 +2011,23 @@ async function fetchJson(path, options = {}) {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(payload.error || `${response.status} ${response.statusText}`);
+    const error = new Error(apiErrorMessage(payload, response));
+    error.status = response.status;
+    error.payload = payload;
+    throw error;
   }
   return payload;
+}
+
+function apiErrorMessage(payload = {}, response = {}) {
+  const messages = {
+    AUTH_INVALID_PIN: "Невірний пароль/PIN працівника.",
+    EMPLOYEE_NOT_ACTIVE: "Працівника для входу не знайдено або він не активний.",
+    USER_SESSION_REPLACED: "Сеанс працівника відкрито на іншому комп'ютері.",
+    DEVICE_ID_REQUIRED: "Не вдалося визначити цей комп'ютер для входу.",
+    STATE_NOT_INITIALIZED: "Серверний стан B2C ще не ініціалізовано."
+  };
+  return messages[payload.code] || payload.error || `${response.status} ${response.statusText}`;
 }
 
 function normalizeExchangeRate(row) {
@@ -3653,16 +3675,27 @@ function employeeSessionRecord(employeeId, source = state) {
   return source.employeeSessions?.[employeeId] || null;
 }
 
+function employeeSessionMatchesBrowser(record) {
+  return Boolean(
+    record?.deviceId
+    && record.deviceId === browserDeviceId
+    && record.sessionToken
+    && sessionToken
+    && record.sessionToken === sessionToken
+  );
+}
+
 function employeeSessionIsCurrent(employeeId, source = state) {
   if (!employeeId) return false;
   const record = employeeSessionRecord(employeeId, source);
-  return !record?.deviceId || record.deviceId === browserDeviceId;
+  return employeeSessionMatchesBrowser(record);
 }
 
 function employeeSessionLabel(employee) {
   const record = employeeSessionRecord(employee?.id);
   if (!record?.deviceId) return "Сеанс не відкрито";
-  if (record.deviceId === browserDeviceId) return "Сеанс на цьому комп'ютері";
+  if (employeeSessionMatchesBrowser(record)) return "Сеанс на цьому комп'ютері";
+  if (record.deviceId === browserDeviceId) return "Потрібен повторний вхід на цьому комп'ютері";
   return `Сеанс на іншому комп'ютері: ${record.deviceLabel || "без назви"}`;
 }
 
@@ -3686,12 +3719,13 @@ function registerEmployeeSession(employee) {
 
 function clearEmployeeSession(employeeId = sessionEmployeeId) {
   const record = employeeSessionRecord(employeeId);
-  if (record?.deviceId === browserDeviceId) {
+  if (employeeSessionMatchesBrowser(record)) {
     delete state.employeeSessions[employeeId];
   }
 }
 
 function ensureCurrentEmployeeSessionRegistered() {
+  if (serverModeEnabled()) return false;
   if (!sessionEmployeeId) return false;
   const employee = state.employees.find((item) => item.id === sessionEmployeeId && item.status === "active");
   if (!employee) {
@@ -3700,8 +3734,8 @@ function ensureCurrentEmployeeSessionRegistered() {
     return true;
   }
   const record = employeeSessionRecord(employee.id);
-  if (record?.deviceId && record.deviceId !== browserDeviceId) return false;
-  if (record?.deviceId === browserDeviceId) return false;
+  if (employeeSessionMatchesBrowser(record)) return false;
+  if (record?.deviceId) return false;
   const token = sessionToken || createOpaqueId("session");
   const timestamp = nowIso();
   storeSessionEmployeeId(employee.id, token);
@@ -3722,14 +3756,18 @@ function enforceCurrentEmployeeSession(reason = "sync") {
   const employee = state.employees.find((item) => item.id === sessionEmployeeId);
   const record = employeeSessionRecord(sessionEmployeeId);
   const invalidEmployee = !employee || employee.status !== "active";
+  const missingServerSession = !record?.deviceId;
   const replacedByOtherDevice = Boolean(record?.deviceId && record.deviceId !== browserDeviceId);
-  if (!invalidEmployee && !replacedByOtherDevice) return false;
+  const replacedByOtherSession = Boolean(record?.deviceId && record.deviceId === browserDeviceId && !employeeSessionMatchesBrowser(record));
+  if (!invalidEmployee && !missingServerSession && !replacedByOtherDevice && !replacedByOtherSession) return false;
   const employeeName = employee?.name || "працівника";
   storeSessionEmployeeId("");
   state.activeEmployeeId = "";
   loginDialog = { open: true, employeeId: employee?.id || activeEmployees()[0]?.id || "" };
   sessionNotice = replacedByOtherDevice
     ? `Сеанс ${employeeName} відкрито на іншому комп'ютері. Цей комп'ютер автоматично вийшов із B2C.`
+    : replacedByOtherSession || missingServerSession
+    ? `Сеанс ${employeeName} більше не активний на цьому комп'ютері. Увійдіть повторно.`
     : "Сеанс завершено, бо працівник не активний або відсутній.";
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -3742,7 +3780,7 @@ function enforceCurrentEmployeeSession(reason = "sync") {
 function applySessionRulesAfterServerMerge() {
   const forcedLogout = enforceCurrentEmployeeSession("server-sync");
   if (forcedLogout) return { forcedLogout, registered: false };
-  const registered = ensureCurrentEmployeeSessionRegistered();
+  const registered = !serverModeEnabled() && ensureCurrentEmployeeSessionRegistered();
   if (registered) {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -7502,12 +7540,119 @@ function closeEmployeeLogin() {
   render();
 }
 
-function loginEmployee(form) {
+function cacheStateLocally() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch (error) {
+    // Keep the in-memory state when browser storage is blocked.
+  }
+}
+
+function applyServerStatePayload(payload, clientUi = clientLocalStateSnapshot()) {
+  if (!payload) return;
+  if (payload.state) {
+    state = mergeServerStateWithClientUi(payload.state, clientUi);
+    rememberSharedStateFingerprint(state);
+    cacheStateLocally();
+  }
+  markServerOnline({
+    revision: payload.stateRevision ?? payload.revision,
+    savedAt: payload.savedAt,
+    loadedAt: nowIso()
+  });
+}
+
+function forceLocalSessionLogout(message, employeeId = sessionEmployeeId) {
+  const employee = state.employees.find((item) => item.id === employeeId);
+  storeSessionEmployeeId("");
+  state.activeEmployeeId = "";
+  loginDialog = { open: true, employeeId: employee?.id || activeEmployees()[0]?.id || "" };
+  sessionNotice = message || "Сеанс завершено. Увійдіть повторно.";
+  cacheStateLocally();
+  syncSessionHeartbeatTimer();
+}
+
+async function heartbeatEmployeeSession(renderAfter = false) {
+  if (!serverModeEnabled() || !sessionEmployeeId || !sessionToken) return;
+  const employeeId = sessionEmployeeId;
+  try {
+    const payload = await fetchJson("/api/auth/heartbeat", {
+      method: "POST",
+      body: JSON.stringify({
+        employeeId,
+        deviceId: browserDeviceId,
+        sessionToken,
+        deviceLabel: currentDeviceLabel()
+      })
+    });
+    applyServerStatePayload(payload);
+    applySessionRulesAfterServerMerge();
+    cacheStateLocally();
+    if (renderAfter) render();
+  } catch (error) {
+    if (error.payload?.state) applyServerStatePayload(error.payload);
+    if ([401, 403, 409].includes(Number(error.status || 0))) {
+      forceLocalSessionLogout(error.message || "Сеанс працівника відкрито на іншому комп'ютері.", employeeId);
+      render();
+      return;
+    }
+    markServerOffline(error);
+    if (renderAfter) render();
+  }
+}
+
+function syncSessionHeartbeatTimer() {
+  const shouldRun = serverModeEnabled() && Boolean(sessionEmployeeId && sessionToken);
+  if (!shouldRun && sessionHeartbeatTimer) {
+    window.clearInterval(sessionHeartbeatTimer);
+    sessionHeartbeatTimer = null;
+    return;
+  }
+  if (shouldRun && !sessionHeartbeatTimer) {
+    sessionHeartbeatTimer = window.setInterval(() => heartbeatEmployeeSession(true), SESSION_HEARTBEAT_MS);
+  }
+}
+
+async function loginEmployee(form) {
   const data = Object.fromEntries(new FormData(form).entries());
   const employee = activeEmployees().find((item) => item.id === data.employeeId);
   if (!employee) return alert("Працівника для входу не знайдено або він не активний.");
   const enteredPin = String(data.pin || "").trim();
   const requiredPin = String(employee.pin || "").trim();
+  if (serverModeEnabled()) {
+    const token = createOpaqueId("session");
+    try {
+      const payload = await fetchJson("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({
+          employeeId: employee.id,
+          pin: enteredPin,
+          deviceId: browserDeviceId,
+          deviceLabel: currentDeviceLabel(),
+          sessionToken: token,
+          build: APP_BUILD,
+          appVersion: APP_VERSION,
+          releasedAt: APP_RELEASED_AT
+        })
+      });
+      storeSessionEmployeeId(employee.id, payload.session?.sessionToken || token);
+      applyServerStatePayload(payload);
+      const serverEmployee = state.employees.find((item) => item.id === employee.id) || employee;
+      state.activeEmployeeId = serverEmployee.id;
+      loginDialog = { open: false, employeeId: "" };
+      sessionNotice = payload.replacedSession
+        ? `Попередній сеанс ${serverEmployee.name} на іншому комп'ютері завершено сервером.`
+        : "";
+      if (!canOpenBlock(state.currentView)) state.currentView = firstAllowedView();
+      cacheStateLocally();
+      syncSessionHeartbeatTimer();
+      render();
+      return;
+    } catch (error) {
+      if (![401, 403].includes(Number(error.status || 0))) markServerOffline(error);
+      return alert(error.message || "Не вдалося виконати вхід працівника.");
+    }
+  }
   if (requiredPin && enteredPin !== requiredPin) {
     audit(`Невдала спроба входу для ${employee.name}: невірний пароль/PIN`, "auth");
     saveState({ server: false });
@@ -7534,16 +7679,38 @@ function loginEmployee(form) {
   render();
 }
 
-function logoutEmployee() {
+async function logoutEmployee() {
   const employee = currentEmployee();
-  if (!employee) return openEmployeeLogin();
-  audit(`Вихід працівника з B2C: ${employee.name} (${roleLabel(employee.role)})`, employee.name);
-  clearEmployeeSession(employee.id);
+  const employeeId = sessionEmployeeId;
+  const token = sessionToken;
+  if (!employee && !employeeId) return openEmployeeLogin();
+  let payload = null;
+  if (serverModeEnabled() && employeeId && token) {
+    try {
+      payload = await fetchJson("/api/auth/logout", {
+        method: "POST",
+        body: JSON.stringify({
+          employeeId,
+          deviceId: browserDeviceId,
+          sessionToken: token
+        })
+      });
+    } catch (error) {
+      if (![401, 403, 409].includes(Number(error.status || 0))) markServerOffline(error);
+    }
+  }
+  const useServerMode = serverModeEnabled();
+  if (employee && !useServerMode) {
+    audit(`Вихід працівника з B2C: ${employee.name} (${roleLabel(employee.role)})`, employee.name);
+  }
+  if (!useServerMode && employee) clearEmployeeSession(employee.id);
   storeSessionEmployeeId("");
+  if (payload?.state) applyServerStatePayload(payload);
   state.activeEmployeeId = "";
-  loginDialog = { open: true, employeeId: activeEmployees()[0]?.id || "" };
+  loginDialog = { open: true, employeeId: employee?.id || activeEmployees()[0]?.id || "" };
   sessionNotice = "";
-  saveState({ server: false });
+  cacheStateLocally();
+  syncSessionHeartbeatTimer();
   render();
 }
 
@@ -7841,6 +8008,7 @@ function render() {
     ? (views[state.currentView] || renderPos)()
     : renderNoAccess();
   document.getElementById("app").innerHTML = `${pageHtml}${renderSalePaymentConfirm()}${renderReturnRefundConfirm()}${renderDrilldownModal()}${renderDocumentEditModal()}${renderEmployeeEditModal()}${renderEmployeeLoginModal()}`;
+  syncSessionHeartbeatTimer();
 }
 
 function renderNoAccess() {
