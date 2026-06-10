@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.10.8";
-const APP_BUILD = "20260610-b2c-node-shared-session-auth";
-const APP_RELEASED_AT = "2026-06-10 21:02:10 +03:00";
+const APP_VERSION = "2026.06.10.9";
+const APP_BUILD = "20260610-b2c-shared-session-auth-large-state";
+const APP_RELEASED_AT = "2026-06-10 21:13:22 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SESSION_TOKEN_KEY = "retail-crm-b2c-session-token-v1";

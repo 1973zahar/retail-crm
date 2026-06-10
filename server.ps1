@@ -11,9 +11,9 @@ try {
 } catch {
 }
 
-$AppVersion = "2026.06.10.8"
-$AppBuild = "20260610-b2c-node-shared-session-auth"
-$AppReleasedAt = "2026-06-10 21:02:10 +03:00"
+$AppVersion = "2026.06.10.9"
+$AppBuild = "20260610-b2c-shared-session-auth-large-state"
+$AppReleasedAt = "2026-06-10 21:13:22 +03:00"
 $RootDir = $PSScriptRoot
 $ResolvedDataDir = if ([System.IO.Path]::IsPathRooted($DataDir)) { $DataDir } else { Join-Path $RootDir $DataDir }
 $StatePath = Join-Path $ResolvedDataDir "retail-crm-state.json"
@@ -90,6 +90,42 @@ function Convert-ToJsonBytes($Value) {
   return $Utf8.GetBytes($json + "`n")
 }
 
+function ConvertFrom-LargeJsonObject($Value) {
+  if ($null -eq $Value) {
+    return $null
+  }
+  if ($Value -is [System.Collections.IDictionary]) {
+    $object = [pscustomobject]@{}
+    foreach ($key in $Value.Keys) {
+      $object | Add-Member -NotePropertyName ([string]$key) -NotePropertyValue (ConvertFrom-LargeJsonObject $Value[$key])
+    }
+    return $object
+  }
+  if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string]) -and -not ($Value -is [byte[]])) {
+    $items = New-Object System.Collections.ArrayList
+    foreach ($item in $Value) {
+      [void]$items.Add((ConvertFrom-LargeJsonObject $item))
+    }
+    return ,([object[]]$items.ToArray())
+  }
+  return $Value
+}
+
+function ConvertFrom-LargeJsonText([string]$Json) {
+  if (-not $Json) {
+    return $null
+  }
+  try {
+    Add-Type -AssemblyName System.Web.Extensions -ErrorAction SilentlyContinue
+    $serializer = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+    $serializer.MaxJsonLength = [int]::MaxValue
+    $serializer.RecursionLimit = 1000
+    return ConvertFrom-LargeJsonObject ($serializer.DeserializeObject($Json))
+  } catch {
+    return $Json | ConvertFrom-Json
+  }
+}
+
 function Read-JsonFile($Path, $Fallback) {
   if (-not (Test-Path -LiteralPath $Path)) {
     return $Fallback
@@ -98,7 +134,7 @@ function Read-JsonFile($Path, $Fallback) {
   if (-not $raw) {
     return $Fallback
   }
-  return $raw | ConvertFrom-Json
+  return ConvertFrom-LargeJsonText $raw
 }
 
 function Read-StateHealthMetadata($Path) {
@@ -214,11 +250,11 @@ function Get-AuthObjectPropertyValue($Object, [string]$Name) {
     return $null
   }
   if ($Object -is [hashtable]) {
-    return $Object[$Name]
+    return ,$Object[$Name]
   }
   foreach ($property in $Object.PSObject.Properties) {
     if ($property.Name -eq $Name) {
-      return $property.Value
+      return ,$property.Value
     }
   }
   return $null

@@ -27,9 +27,9 @@
     "dataDir": "data"
   },
   "currentApp": {
-    "build": "20260610-b2c-node-shared-session-auth",
-    "version": "2026.06.10.8",
-    "releasedAt": "2026-06-10 21:02:10 +03:00",
+    "build": "20260610-b2c-shared-session-auth-large-state",
+    "version": "2026.06.10.9",
+    "releasedAt": "2026-06-10 21:13:22 +03:00",
     "contractVersion": "2026.06.07-retail-live-api-1"
   },
   "sourceOfTruth": {
