@@ -11,9 +11,9 @@ try {
 } catch {
 }
 
-$AppVersion = "2026.06.10.9"
-$AppBuild = "20260610-b2c-shared-session-auth-large-state"
-$AppReleasedAt = "2026-06-10 21:13:22 +03:00"
+$AppVersion = "2026.06.10.10"
+$AppBuild = "20260610-b2c-powershell-http-timeouts"
+$AppReleasedAt = "2026-06-10 21:22:42 +03:00"
 $RootDir = $PSScriptRoot
 $ResolvedDataDir = if ([System.IO.Path]::IsPathRooted($DataDir)) { $DataDir } else { Join-Path $RootDir $DataDir }
 $StatePath = Join-Path $ResolvedDataDir "retail-crm-state.json"
@@ -1461,6 +1461,9 @@ function Find-HeaderEnd([byte[]]$Bytes) {
 }
 
 function Read-HttpRequest($Client) {
+  $Client.ReceiveTimeout = 5000
+  $Client.SendTimeout = 10000
+  $Client.NoDelay = $true
   $stream = $Client.GetStream()
   $buffer = New-Object byte[] 8192
   $memory = New-Object System.IO.MemoryStream
