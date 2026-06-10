@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.10.5";
-const APP_BUILD = "20260610-b2c-inventory-warehouse-serials";
-const APP_RELEASED_AT = "2026-06-10 13:03:15 +03:00";
+const APP_VERSION = "2026.06.10.6";
+const APP_BUILD = "20260610-b2c-stock-list-controls";
+const APP_RELEASED_AT = "2026-06-10 14:04:01 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SESSION_TOKEN_KEY = "retail-crm-b2c-session-token-v1";
@@ -80,6 +80,19 @@ const LIVE_INVENTORY_STOCK_PAGE_CONCURRENCY = 4;
 const LIVE_INVENTORY_SERIAL_PAGE_LIMIT = 100;
 const LIVE_SERIAL_LOOKUP_LIMIT = 20;
 const LIVE_TABLE_LIMIT_OPTIONS = [20, 50, 100];
+const LIVE_TABLE_ALL_VALUE = "all";
+const LIVE_STOCK_ALL_LIMIT = 5000;
+const LIVE_STOCK_SORT_FIELDS = new Set([
+  "productCode",
+  "productName",
+  "warehouseName",
+  "warehouseCode",
+  "availableQty",
+  "reservedQty",
+  "quantity",
+  "snapshotAt",
+  "source"
+]);
 const BASE_CURRENCY = "UAH";
 const CURRENCY_NUMERIC_CODES = {
   "980": "UAH",
@@ -638,6 +651,7 @@ const seedState = {
   selectedCashierId: "e-004",
   selectedReturnId: "",
   stockUi: {
+    stockListCollapsed: false,
     serialProductId: "",
     serialRows: [],
     serialLimit: LIVE_SERIAL_LOOKUP_LIMIT,
@@ -910,6 +924,7 @@ function normalizeState(input) {
     ...clone(seedState.stockUi),
     ...(next.stockUi || {})
   };
+  next.stockUi.stockListCollapsed = Boolean(next.stockUi.stockListCollapsed);
   next.stockUi.serialRows = Array.isArray(next.stockUi.serialRows)
     ? next.stockUi.serialRows.map(normalizeSerialStock)
     : [];
@@ -1098,6 +1113,28 @@ function clampLiveLimit(value, fallback = 20) {
   return Math.max(1, Math.min(100, limit));
 }
 
+function normalizeLiveTableLimitChoice(value, kind, fallback = 20, mode = "") {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (kind === "stock" && (raw === LIVE_TABLE_ALL_VALUE || mode === LIVE_TABLE_ALL_VALUE)) {
+    return { limit: LIVE_STOCK_ALL_LIMIT, mode: LIVE_TABLE_ALL_VALUE };
+  }
+  return { limit: clampLiveLimit(value, fallback), mode: "page" };
+}
+
+function liveTableLimitSelection(table) {
+  return table.limitMode === LIVE_TABLE_ALL_VALUE ? LIVE_TABLE_ALL_VALUE : String(table.limit);
+}
+
+function normalizeLiveSortField(kind, field) {
+  const value = String(field || "").trim();
+  if (kind === "stock" && LIVE_STOCK_SORT_FIELDS.has(value)) return value;
+  return "";
+}
+
+function normalizeSortDirection(value) {
+  return String(value || "").toLowerCase() === "asc" ? "asc" : "desc";
+}
+
 function normalizeLiveTables(input) {
   return Object.fromEntries(Object.entries(LIVE_TABLES).map(([kind, config]) => [
     kind,
@@ -1107,11 +1144,14 @@ function normalizeLiveTables(input) {
 
 function normalizeLiveTableState(table, kind, config = LIVE_TABLES[kind]) {
   const source = table || {};
-  const limit = clampLiveLimit(source.limit, config.defaultLimit);
+  const limitChoice = normalizeLiveTableLimitChoice(source.limit, kind, config.defaultLimit, source.limitMode);
+  const limit = limitChoice.limit;
   const rows = Array.isArray(source.items) ? source.items : (Array.isArray(source.data) ? source.data : []);
+  const sortField = normalizeLiveSortField(kind, source.sortField || source.sortBy || source.sort);
   return {
     search: String(source.search || ""),
     limit,
+    limitMode: limitChoice.mode,
     offset: Math.max(0, Number(source.offset || 0)),
     total: Math.max(0, Number(source.total || 0)),
     totalExact: Boolean(source.totalExact),
@@ -1121,7 +1161,9 @@ function normalizeLiveTableState(table, kind, config = LIVE_TABLES[kind]) {
     loading: false,
     error: String(source.error || ""),
     source: String(source.source || ""),
-    lastLoadedAt: String(source.lastLoadedAt || "")
+    lastLoadedAt: String(source.lastLoadedAt || ""),
+    sortField,
+    sortDirection: sortField ? normalizeSortDirection(source.sortDirection || source.sortDir || source.direction) : "desc"
   };
 }
 
@@ -3021,19 +3063,30 @@ function liveTableTotal(payload, items) {
 async function loadLiveTable(kind, options = {}) {
   const config = liveTableConfig(kind);
   const table = liveTable(kind);
-  const limit = clampLiveLimit(options.limit ?? table.limit, config.defaultLimit);
+  const limitSource = options.limit ?? (table.limitMode === LIVE_TABLE_ALL_VALUE ? LIVE_TABLE_ALL_VALUE : table.limit);
+  const limitChoice = normalizeLiveTableLimitChoice(limitSource, kind, config.defaultLimit, options.limitMode ?? table.limitMode);
+  const limit = limitChoice.limit;
   const offset = Math.max(0, Number(options.offset ?? table.offset ?? 0));
   const params = new URLSearchParams();
   const search = String(options.search ?? table.search ?? "").trim();
+  const sortField = normalizeLiveSortField(kind, options.sortField ?? table.sortField);
+  const sortDirection = sortField ? normalizeSortDirection(options.sortDirection ?? table.sortDirection) : "desc";
   if (search) params.set("search", search);
   Object.entries(config.params || {}).forEach(([key, value]) => params.set(key, String(value)));
-  params.set("limit", String(limit));
+  params.set("limit", limitChoice.mode === LIVE_TABLE_ALL_VALUE ? LIVE_TABLE_ALL_VALUE : String(limit));
   params.set("offset", String(offset));
+  if (sortField) {
+    params.set("sort", sortField);
+    params.set("direction", sortDirection);
+  }
   table.loading = true;
   table.error = "";
   table.limit = limit;
+  table.limitMode = limitChoice.mode;
   table.offset = offset;
   table.search = search;
+  table.sortField = sortField;
+  table.sortDirection = sortDirection;
   saveState({ server: false });
   render();
   try {
@@ -3043,6 +3096,7 @@ async function loadLiveTable(kind, options = {}) {
     table.total = liveTableTotal(payload, items);
     table.totalExact = Boolean(payload.totalExact);
     table.limit = Number(payload.limit || limit);
+    table.limitMode = limitChoice.mode;
     table.offset = Number(payload.offset || offset);
     table.hasMore = typeof payload.hasMore === "boolean" ? payload.hasMore : items.length >= table.limit;
     table.nextOffset = payload.nextOffset === null || payload.nextOffset === undefined ? null : Math.max(0, Number(payload.nextOffset || 0));
@@ -3080,8 +3134,7 @@ function searchLiveTable(form) {
   const kind = form.dataset.liveKind;
   const formData = new FormData(form);
   const search = String(formData.get("search") || "").trim();
-  const limit = clampLiveLimit(formData.get("limit"), liveTableConfig(kind).defaultLimit);
-  return loadLiveTable(kind, { search, limit, offset: 0 });
+  return loadLiveTable(kind, { search, limit: formData.get("limit"), offset: 0 });
 }
 
 function refreshLiveTable(kind) {
@@ -3091,12 +3144,35 @@ function refreshLiveTable(kind) {
 
 function pageLiveTable(kind, direction) {
   const table = liveTable(kind);
-  const limit = clampLiveLimit(table.limit, liveTableConfig(kind).defaultLimit);
+  const limit = normalizeLiveTableLimitChoice(
+    table.limitMode === LIVE_TABLE_ALL_VALUE ? LIVE_TABLE_ALL_VALUE : table.limit,
+    kind,
+    liveTableConfig(kind).defaultLimit,
+    table.limitMode
+  ).limit;
   const nextOffset = direction > 0 && table.nextOffset !== null && table.nextOffset !== undefined
     ? Math.max(0, Number(table.nextOffset || 0))
     : Math.max(0, Number(table.offset || 0) + Number(direction || 0) * limit);
   if (nextOffset === table.offset && direction < 0) return;
   return loadLiveTable(kind, { offset: nextOffset });
+}
+
+function sortLiveStockTable(field, explicitDirection = "") {
+  const table = liveTable("stock");
+  const sortField = normalizeLiveSortField("stock", field);
+  if (!sortField || table.loading) return;
+  const nextDirection = explicitDirection
+    ? normalizeSortDirection(explicitDirection)
+    : table.sortField === sortField && table.sortDirection === "desc"
+      ? "asc"
+      : "desc";
+  return loadLiveTable("stock", { sortField, sortDirection: nextDirection, offset: 0 });
+}
+
+function toggleStockList() {
+  state.stockUi.stockListCollapsed = !state.stockUi.stockListCollapsed;
+  saveState({ server: false });
+  render();
 }
 
 function queueLiveProductLookup(value) {
@@ -5086,7 +5162,8 @@ function renderInventorySheet(rows, totals) {
 
 function renderStock() {
   setTitle("Залишки магазину");
-  ensureLiveTableLoaded("stock");
+  const stockListCollapsed = Boolean(state.stockUi.stockListCollapsed);
+  if (!stockListCollapsed) ensureLiveTableLoaded("stock");
   ensureLiveTableLoaded("warehouses");
   const allRows = inventoryRows();
   const inventorySearch = String(state.inventory.search || "").trim();
@@ -5129,10 +5206,17 @@ function renderStock() {
             <h2>B2C.6 Залишки</h2>
             <p class="muted">Реальні залишки з SQL по ${escapeHtml(SQL_MAIN_WAREHOUSE_NAME)}. Повний довідник відкривається сторінками, без завантаження всієї бази в браузер.</p>
           </div>
-          <span class="pill">live SQL · склад №1</span>
+          <div class="toolbar">
+            <span class="pill">live SQL · склад №1</span>
+            <button class="secondary" type="button" data-toggle-stock-list>${stockListCollapsed ? "Розгорнути список" : "Згорнути список"}</button>
+          </div>
         </div>
-        ${renderLiveTableToolbar("stock")}
-        ${renderLiveStockTable()}
+        ${stockListCollapsed ? `
+          <p class="muted">Список залишків згорнуто. Пошук, сортування і вибір кількості рядків збережені локально для цього робочого місця.</p>
+        ` : `
+          ${renderLiveTableToolbar("stock")}
+          ${renderLiveStockTable()}
+        `}
       </article>
       <article class="panel">
         <div class="split">
@@ -5280,9 +5364,18 @@ function liveTableStatus(kind) {
     const to = Number(table.offset || 0) + table.items.length;
     const totalText = table.total ? ` з ${table.totalExact ? "" : "~"}${table.total}` : "";
     const moreText = table.hasMore ? " · є наступна сторінка" : "";
-    return { text: `${from}-${to}${totalText} · limit ${table.limit}${moreText}`, className: "good" };
+    const limitText = table.limitMode === LIVE_TABLE_ALL_VALUE ? `Всі до ${LIVE_STOCK_ALL_LIMIT}` : table.limit;
+    const sortText = table.sortField ? ` · sort ${table.sortField} ${table.sortDirection}` : "";
+    return { text: `${from}-${to}${totalText} · limit ${limitText}${sortText}${moreText}`, className: "good" };
   }
   return { text: "очікує першого запиту", className: "warn" };
+}
+
+function renderLiveLimitOptions(kind, table) {
+  const selectedValue = liveTableLimitSelection(table);
+  const options = LIVE_TABLE_LIMIT_OPTIONS.map((limit) => option(limit, limit, String(limit) === selectedValue));
+  if (kind === "stock") options.push(option(LIVE_TABLE_ALL_VALUE, "Всі", selectedValue === LIVE_TABLE_ALL_VALUE));
+  return options.join("");
 }
 
 function renderLiveTableToolbar(kind) {
@@ -5301,7 +5394,7 @@ function renderLiveTableToolbar(kind) {
     </div>
     <form class="form-grid live-table-toolbar" data-action="live-table-search" data-live-kind="${escapeHtml(kind)}">
       <label class="field wide"><span>Пошук</span><input name="search" value="${escapeHtml(table.search)}" placeholder="${escapeHtml(config.searchPlaceholder)}"></label>
-      <label class="field"><span>Рядків</span><select name="limit">${LIVE_TABLE_LIMIT_OPTIONS.map((limit) => option(limit, limit, limit === table.limit)).join("")}</select></label>
+      <label class="field"><span>Рядків</span><select name="limit">${renderLiveLimitOptions(kind, table)}</select></label>
       <div class="toolbar full">
         <button class="primary" type="submit" ${table.loading ? "disabled" : ""}>Пошук</button>
         <button class="secondary" type="button" data-live-refresh="${escapeHtml(kind)}" ${table.loading ? "disabled" : ""}>Оновити</button>
@@ -5311,6 +5404,15 @@ function renderLiveTableToolbar(kind) {
     </form>
     <p class="muted">Дані читаються з PostgreSQL/SQL API посторінково. Повний каталог у браузер не завантажується.</p>
   `;
+}
+
+function stockSortHeader(field, label) {
+  const table = liveTable("stock");
+  const active = table.sortField === field;
+  const direction = active ? table.sortDirection : "desc";
+  const marker = active ? (direction === "desc" ? " ↓" : " ↑") : "";
+  const nextDirection = active && direction === "desc" ? "asc" : "desc";
+  return `<button class="table-sort-button" type="button" data-live-stock-sort="${escapeHtml(field)}" data-live-stock-direction="${escapeHtml(nextDirection)}" title="Сортувати ${escapeHtml(label)}">${escapeHtml(label)}${marker}</button>`;
 }
 
 function renderLiveProductsTable() {
@@ -5392,7 +5494,7 @@ function renderLiveStockTable() {
   return `
     <div class="table-wrap">
       <table>
-        <thead><tr><th>product_code</th><th>Товар</th><th>Склад</th><th>Доступно</th><th>Резерв</th><th>К-сть</th><th>Дата зрізу</th><th>Джерело</th></tr></thead>
+        <thead><tr><th>${stockSortHeader("productCode", "product_code")}</th><th>${stockSortHeader("productName", "Товар")}</th><th>${stockSortHeader("warehouseName", "Склад")}</th><th>${stockSortHeader("availableQty", "Доступно")}</th><th>${stockSortHeader("reservedQty", "Резерв")}</th><th>${stockSortHeader("quantity", "К-сть")}</th><th>${stockSortHeader("snapshotAt", "Дата зрізу")}</th><th>${stockSortHeader("source", "Джерело")}</th></tr></thead>
         <tbody>
           ${table.items.map((row) => {
             const available = stockLookupAvailableQty(row);
@@ -7845,6 +7947,10 @@ document.addEventListener("click", (event) => {
   if (liveRefreshButton) return refreshLiveTable(liveRefreshButton.dataset.liveRefresh);
   const livePageButton = event.target.closest("[data-live-table-page]");
   if (livePageButton) return pageLiveTable(livePageButton.dataset.liveTablePage, Number(livePageButton.dataset.liveDirection || 0));
+  const liveStockSortButton = event.target.closest("[data-live-stock-sort]");
+  if (liveStockSortButton) return sortLiveStockTable(liveStockSortButton.dataset.liveStockSort, liveStockSortButton.dataset.liveStockDirection);
+  const stockListToggleButton = event.target.closest("[data-toggle-stock-list]");
+  if (stockListToggleButton) return toggleStockList();
   const stockSerialRefreshButton = event.target.closest("[data-stock-serial-refresh]");
   if (stockSerialRefreshButton) return loadStockSerialRows(0);
   const stockSerialPageButton = event.target.closest("[data-stock-serial-page]");

@@ -3,15 +3,28 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const APP_VERSION = "2026.06.10.5";
-const APP_BUILD = "20260610-b2c-inventory-warehouse-serials";
-const APP_RELEASED_AT = "2026-06-10 13:03:15 +03:00";
+const APP_VERSION = "2026.06.10.6";
+const APP_BUILD = "20260610-b2c-stock-list-controls";
+const APP_RELEASED_AT = "2026-06-10 14:04:01 +03:00";
 const ROOT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const CRM_SQL_API_BASE_URL = String(process.env.CRM_SQL_API_BASE_URL || "http://192.168.0.166:3000").replace(/\/+$/, "");
 const CRM_SQL_API_TIMEOUT_MS = Math.max(1000, Number(process.env.CRM_SQL_API_TIMEOUT_MS || 30000));
 const NBU_EXCHANGE_RATES_URL = "https://bank.gov.ua/NBUStatService/v1/statdirectory/exchangenew?json";
 const NBU_EXCHANGE_RATES_TIMEOUT_MS = Math.max(1000, Number(process.env.NBU_EXCHANGE_RATES_TIMEOUT_MS || 15000));
 const NBU_EXCHANGE_RATES_CACHE_TTL_MS = Math.max(60000, Number(process.env.NBU_EXCHANGE_RATES_CACHE_TTL_MS || 21600000));
+const LIVE_STOCK_SQL_PAGE_LIMIT = 500;
+const LIVE_STOCK_ALL_LIMIT = 5000;
+const LIVE_STOCK_SORT_FIELDS = new Set([
+  "productCode",
+  "productName",
+  "warehouseName",
+  "warehouseCode",
+  "availableQty",
+  "reservedQty",
+  "quantity",
+  "snapshotAt",
+  "source"
+]);
 
 const DEFAULT_CONFIG = {
   host: "0.0.0.0",
@@ -380,7 +393,8 @@ function liveApiEnvelope(stateContainer, payload = {}) {
 }
 
 function boundedParams(url, defaultLimit = 20, maxLimit = 100) {
-  const rawLimit = Number(url.searchParams.get("limit") || defaultLimit);
+  const rawLimitValue = String(url.searchParams.get("limit") || defaultLimit).trim().toLowerCase();
+  const rawLimit = rawLimitValue === "all" ? maxLimit : Number(rawLimitValue || defaultLimit);
   const rawOffset = Number(url.searchParams.get("offset") || 0);
   return {
     limit: Math.max(1, Math.min(maxLimit, Number.isFinite(rawLimit) ? rawLimit : defaultLimit)),
@@ -720,12 +734,15 @@ async function listLiveExchangeRates(url) {
   };
 }
 
-function liveQuery(url, defaultLimit = 20, maxLimit = 100, filterNames = []) {
+function liveQuery(url, defaultLimit = 20, maxLimit = 100, filterNames = [], sortFields = new Set()) {
   const { limit, offset } = boundedParams(url, defaultLimit, maxLimit);
   const search = String(url.searchParams.get("search") || "").trim();
   const barcode = String(url.searchParams.get("barcode") || "").trim();
   const filters = {};
   const params = new URLSearchParams();
+  const requestedSort = String(url.searchParams.get("sort") || "").trim();
+  const sortField = sortFields instanceof Set && sortFields.has(requestedSort) ? requestedSort : "";
+  const sortDirection = sortField && String(url.searchParams.get("direction") || "").toLowerCase() === "asc" ? "asc" : "desc";
   if (search) params.set("search", search);
   if (barcode) {
     params.set("barcode", barcode);
@@ -739,7 +756,11 @@ function liveQuery(url, defaultLimit = 20, maxLimit = 100, filterNames = []) {
   });
   params.set("limit", String(limit));
   params.set("offset", String(offset));
-  return { params, limit, offset, search, barcode, filters };
+  if (sortField) {
+    params.set("sort", sortField);
+    params.set("direction", sortDirection);
+  }
+  return { params, limit, offset, search, barcode, filters, sortField, sortDirection };
 }
 
 function payloadItems(payload) {
@@ -803,7 +824,7 @@ function sqlEnvelope(pathName, url, query, items, payload) {
     hasMore,
     nextOffset,
     totalExact: exact,
-    query: { search: query.search, barcode: query.barcode, ...(query.filters || {}) },
+    query: { search: query.search, barcode: query.barcode, ...(query.filters || {}), ...(query.sortField ? { sort: query.sortField, direction: query.sortDirection } : {}) },
     source: "crm-sql-live",
     sourceDetail: `${CRM_SQL_API_BASE_URL}${pathName}`,
     bounded: true,
@@ -1036,9 +1057,92 @@ async function listLiveWarehouses(url) {
   return sqlEnvelope(pathName, url, query, items, payload);
 }
 
+function stockSortValue(item, field) {
+  if (field === "availableQty") return Number(item.availableQty || item.qty || 0);
+  if (field === "reservedQty") return Number(item.reservedQty || 0);
+  if (field === "quantity") return Number(item.quantity ?? item.qty ?? item.availableQty ?? 0);
+  if (field === "source") return textValue(item.sourceFile, item.source, item.importedAt);
+  return textValue(item[field], item[`${field}_name`], "");
+}
+
+function sortLiveStockItems(items, field, direction) {
+  if (!field) return items;
+  const multiplier = direction === "asc" ? 1 : -1;
+  return [...items].sort((left, right) => {
+    const a = stockSortValue(left, field);
+    const b = stockSortValue(right, field);
+    if (typeof a === "number" || typeof b === "number") return (Number(a || 0) - Number(b || 0)) * multiplier;
+    return String(a || "").localeCompare(String(b || ""), "uk", { numeric: true, sensitivity: "base" }) * multiplier;
+  });
+}
+
+async function fetchPagedLiveStockItems(query, pathName) {
+  const maxRows = LIVE_STOCK_ALL_LIMIT;
+  const allItems = [];
+  let fetchOffset = 0;
+  let firstPayload = null;
+  let total = null;
+  let totalExact = false;
+  let hasMore = true;
+  while (hasMore && allItems.length < maxRows) {
+    const params = new URLSearchParams(query.params);
+    params.delete("sort");
+    params.delete("direction");
+    params.set("limit", String(Math.min(LIVE_STOCK_SQL_PAGE_LIMIT, maxRows - allItems.length)));
+    params.set("offset", String(fetchOffset));
+    const { payload } = await fetchCrmSql(pathName, params);
+    if (!firstPayload) firstPayload = payload;
+    const pageItems = payloadItems(payload).map(normalizeLiveStockBalance);
+    allItems.push(...pageItems);
+    const payloadTotal = Number(payload?.total ?? payload?.meta?.total ?? payload?.pagination?.total);
+    if (Number.isFinite(payloadTotal)) {
+      total = payloadTotal;
+      totalExact = true;
+    }
+    const nextOffset = Number(payload?.nextOffset ?? payload?.pagination?.nextOffset ?? payload?.meta?.nextOffset);
+    const explicitHasMore = payloadBoolean(payload?.hasMore, payload?.pagination?.hasMore, payload?.meta?.hasMore);
+    hasMore = explicitHasMore ?? (pageItems.length >= LIVE_STOCK_SQL_PAGE_LIMIT);
+    if (!pageItems.length) break;
+    if (Number.isFinite(nextOffset) && nextOffset > fetchOffset) {
+      fetchOffset = nextOffset;
+    } else {
+      fetchOffset += pageItems.length;
+    }
+    if (totalExact && fetchOffset >= total) hasMore = false;
+  }
+  const sortedItems = sortLiveStockItems(allItems, query.sortField, query.sortDirection);
+  const pageItems = sortedItems.slice(query.offset, query.offset + query.limit);
+  const effectiveTotal = totalExact ? Math.min(total, maxRows) : sortedItems.length;
+  const truncated = totalExact ? total > maxRows : hasMore;
+  const pageHasMore = query.offset + pageItems.length < effectiveTotal;
+  return {
+    data: pageItems,
+    items: pageItems,
+    total: effectiveTotal,
+    limit: query.limit,
+    offset: query.offset,
+    hasMore: pageHasMore,
+    nextOffset: pageHasMore ? query.offset + query.limit : null,
+    totalExact: totalExact && !truncated,
+    query: { search: query.search, barcode: query.barcode, ...(query.filters || {}), ...(query.sortField ? { sort: query.sortField, direction: query.sortDirection } : {}) },
+    source: "crm-sql-live",
+    sourceDetail: `${CRM_SQL_API_BASE_URL}${pathName}`,
+    bounded: true,
+    fallback: false,
+    productionReady: true,
+    loadedAt: new Date().toISOString(),
+    aggregation: "retail-backend-paged-stock",
+    maxRows,
+    truncated
+  };
+}
+
 async function listLiveStockBalances(url) {
-  const query = liveQuery(url, 20, 100, ["productCode", "warehouseCode"]);
+  const query = liveQuery(url, 20, LIVE_STOCK_ALL_LIMIT, ["productCode", "warehouseCode"], LIVE_STOCK_SORT_FIELDS);
   const pathName = "/one-c-mirror/stock-balances";
+  if (query.sortField || query.limit > LIVE_STOCK_SQL_PAGE_LIMIT) {
+    return fetchPagedLiveStockItems(query, pathName);
+  }
   const { payload } = await fetchCrmSql(pathName, query.params);
   const items = payloadItems(payload).map(normalizeLiveStockBalance);
   return sqlEnvelope(pathName, url, query, items, payload);

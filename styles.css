@@ -740,6 +740,26 @@ th {
   text-transform: uppercase;
 }
 
+.table-sort-button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-transform: inherit;
+  cursor: pointer;
+}
+
+.table-sort-button:hover,
+.table-sort-button:focus-visible {
+  color: var(--accent);
+  outline: none;
+}
+
 .selected-row {
   background: #ecfdf5;
 }

@@ -10,9 +10,9 @@ Repo: D:\Codex\CRM\retail-crm
 Stable LAN runtime: http://<LAN-IP>:18810/index.html
 Legacy/manual local runtime: internal diagnostics only, not the working URL
 MESER runtime: http://192.168.0.5:8790/index.html
-Current build: 20260610-b2c-inventory-warehouse-serials
-App version: 2026.06.10.5
-Released at: 2026-06-10 13:03:15 +03:00
+Current build: 20260610-b2c-stock-list-controls
+App version: 2026.06.10.6
+Released at: 2026-06-10 14:04:01 +03:00
 Contract version: 2026.06.07-retail-live-api-1
 ```
 
@@ -47,7 +47,7 @@ Retail sale customer selection reads SQL counterparties through bounded live end
 
 When a customer is selected from the POS datalist, the exact option value is resolved and persisted before starting any new live search. The customer field must keep the selected SQL customer and must not repaint back to the previous `customerId` while a live lookup is refreshing.
 
-The stock directory screen reads real Warehouse 1 balances through `/api/live/stock-balances?warehouseCode=2&search=&limit=&offset=`. Local/demo `state.stock` rows must not be the visible source-of-truth table in `Довідники -> Залишки`; they are only fallback/demo data for offline prototype flows.
+The stock directory screen reads real Warehouse 1 balances through `/api/live/stock-balances?warehouseCode=2&search=&sort=&direction=&limit=&offset=`. Operators can collapse/expand the list, sort by every visible stock column, and choose 20 / 50 / 100 / all rows. The explicit all-rows mode is capped at 5000 rows and is handled by the Retail backend by paging SQL API stock rows in 500-row chunks before returning the selected response. Local/demo `state.stock` rows must not be the visible source-of-truth table in `Довідники -> Залишки`; they are only fallback/demo data for offline prototype flows.
 
 Multi-user server sync stores shared business state plus the minimal `employeeSessions` registry used to enforce one active computer per employee. Browser-local UI and draft state stays local per operator/session: current screen, selected cashier, selected document row, checkout draft, confirm modals, drilldowns, live table pages, stock serial lookup page and inventory draft must not be written back as another user's global `/api/state`.
 

@@ -11,9 +11,9 @@ try {
 } catch {
 }
 
-$AppVersion = "2026.06.10.5"
-$AppBuild = "20260610-b2c-inventory-warehouse-serials"
-$AppReleasedAt = "2026-06-10 13:03:15 +03:00"
+$AppVersion = "2026.06.10.6"
+$AppBuild = "20260610-b2c-stock-list-controls"
+$AppReleasedAt = "2026-06-10 14:04:01 +03:00"
 $RootDir = $PSScriptRoot
 $ResolvedDataDir = if ([System.IO.Path]::IsPathRooted($DataDir)) { $DataDir } else { Join-Path $RootDir $DataDir }
 $StatePath = Join-Path $ResolvedDataDir "retail-crm-state.json"
@@ -22,6 +22,9 @@ $PublicBaseUrl = "http://$PublicHost`:$Port"
 $CrmSqlApiBaseUrl = if ($env:CRM_SQL_API_BASE_URL) { $env:CRM_SQL_API_BASE_URL.TrimEnd("/") } else { "http://192.168.0.166:3000" }
 $NbuExchangeRatesUrl = "https://bank.gov.ua/NBUStatService/v1/statdirectory/exchangenew?json"
 $NbuExchangeRatesCacheTtlSeconds = 21600
+$LiveStockSqlPageLimit = 500
+$LiveStockAllLimit = 5000
+$LiveStockSortFields = @("productCode", "productName", "warehouseName", "warehouseCode", "availableQty", "reservedQty", "quantity", "snapshotAt", "source")
 $script:ExchangeRatesCacheFetchedAt = [datetime]::MinValue
 $script:ExchangeRatesCachePayload = $null
 $Utf8 = [System.Text.Encoding]::UTF8
@@ -240,7 +243,12 @@ function Normalize-Text($Value) {
 function Get-BoundedParams($Params, [int]$DefaultLimit, [int]$MaxLimit) {
   $limit = $DefaultLimit
   $offset = 0
-  [int]::TryParse((Get-QueryValue $Params "limit" "$DefaultLimit"), [ref]$limit) | Out-Null
+  $rawLimit = (Get-QueryValue $Params "limit" "$DefaultLimit").Trim().ToLowerInvariant()
+  if ($rawLimit -eq "all") {
+    $limit = $MaxLimit
+  } else {
+    [int]::TryParse($rawLimit, [ref]$limit) | Out-Null
+  }
   [int]::TryParse((Get-QueryValue $Params "offset" "0"), [ref]$offset) | Out-Null
   if ($limit -lt 1) { $limit = 1 }
   if ($limit -gt $MaxLimit) { $limit = $MaxLimit }
@@ -248,10 +256,14 @@ function Get-BoundedParams($Params, [int]$DefaultLimit, [int]$MaxLimit) {
   return @{ limit = $limit; offset = $offset }
 }
 
-function Get-LiveQueryParams($Params, [int]$DefaultLimit, [int]$MaxLimit, [string[]]$FilterNames = @()) {
+function Get-LiveQueryParams($Params, [int]$DefaultLimit, [int]$MaxLimit, [string[]]$FilterNames = @(), [string[]]$SortFields = @()) {
   $bounds = Get-BoundedParams $Params $DefaultLimit $MaxLimit
   $search = (Get-QueryValue $Params "search").Trim()
   $barcode = (Get-QueryValue $Params "barcode").Trim()
+  $requestedSort = (Get-QueryValue $Params "sort").Trim()
+  $sortField = ""
+  if ($requestedSort -and ($SortFields -contains $requestedSort)) { $sortField = $requestedSort }
+  $sortDirection = if ((Get-QueryValue $Params "direction").Trim().ToLowerInvariant() -eq "asc") { "asc" } else { "desc" }
   $filters = @{}
   $query = @{
     limit = $bounds.limit
@@ -269,6 +281,10 @@ function Get-LiveQueryParams($Params, [int]$DefaultLimit, [int]$MaxLimit, [strin
       $query[$name] = $value
     }
   }
+  if ($sortField) {
+    $query.sort = $sortField
+    $query.direction = $sortDirection
+  }
   return @{
     params = $query
     limit = $bounds.limit
@@ -276,6 +292,8 @@ function Get-LiveQueryParams($Params, [int]$DefaultLimit, [int]$MaxLimit, [strin
     search = $search
     barcode = $barcode
     filters = $filters
+    sortField = $sortField
+    sortDirection = $sortDirection
   }
 }
 
@@ -521,6 +539,10 @@ function New-CrmSqlEnvelope([string]$Path, $Query, $Items, $Payload) {
     foreach ($key in $Query.filters.Keys) {
       $queryInfo[$key] = [string]$Query.filters[$key]
     }
+  }
+  if ($Query.sortField) {
+    $queryInfo.sort = [string]$Query.sortField
+    $queryInfo.direction = [string]$Query.sortDirection
   }
   return @{
     data = $itemArray
@@ -988,8 +1010,109 @@ function New-LiveWarehousesResponse($Params) {
   return New-CrmSqlEnvelope "/one-c-mirror/warehouses" $query $items $payload
 }
 
+function Get-LiveStockSortValue($Item, [string]$Field) {
+  switch ($Field) {
+    "availableQty" { return [double](Get-ObjectPropertyValue $Item @("availableQty", "qty") 0) }
+    "reservedQty" { return [double](Get-ObjectPropertyValue $Item @("reservedQty") 0) }
+    "quantity" { return [double](Get-ObjectPropertyValue $Item @("quantity", "qty", "availableQty") 0) }
+    "source" { return [string](Get-ObjectPropertyValue $Item @("sourceFile", "source", "importedAt") "") }
+    default { return [string](Get-ObjectPropertyValue $Item @($Field) "") }
+  }
+}
+
+function Sort-LiveStockItems($Items, [string]$Field, [string]$Direction) {
+  $itemArray = @($Items)
+  if (-not $Field) { return $itemArray }
+  if ($Direction -eq "asc") {
+    return @($itemArray | Sort-Object -Property { Get-LiveStockSortValue $_ $Field })
+  }
+  return @($itemArray | Sort-Object -Property { Get-LiveStockSortValue $_ $Field } -Descending)
+}
+
+function New-LiveStockPagedResponse($Query) {
+  $allItems = @()
+  $fetchOffset = 0
+  $hasMore = $true
+  $total = 0
+  $totalExact = $false
+  while ($hasMore -and @($allItems).Count -lt $LiveStockAllLimit) {
+    $pageParams = @{}
+    foreach ($key in $Query.params.Keys) {
+      if ($key -eq "sort" -or $key -eq "direction") { continue }
+      $pageParams[$key] = $Query.params[$key]
+    }
+    $remaining = $LiveStockAllLimit - @($allItems).Count
+    $pageParams.limit = [Math]::Min($LiveStockSqlPageLimit, $remaining)
+    $pageParams.offset = $fetchOffset
+    $payload = Invoke-CrmSqlApi "/one-c-mirror/stock-balances" $pageParams
+    $pageItems = @()
+    foreach ($row in (Get-PayloadItems $payload)) { $pageItems += ConvertTo-LiveStockBalance $row }
+    $allItems += $pageItems
+    $totalValue = Get-ObjectPropertyValue $payload @("total") $null
+    if ($null -ne $totalValue) {
+      $parsedTotal = 0
+      if ([int]::TryParse([string]$totalValue, [ref]$parsedTotal)) {
+        $total = $parsedTotal
+        $totalExact = $true
+      }
+    }
+    $explicitHasMore = Get-PayloadBoolean $payload @("hasMore")
+    if ($null -eq $explicitHasMore) {
+      $hasMore = @($pageItems).Count -ge $LiveStockSqlPageLimit
+    } else {
+      $hasMore = [bool]$explicitHasMore
+    }
+    if (@($pageItems).Count -eq 0) { break }
+    $nextOffsetValue = Get-ObjectPropertyValue $payload @("nextOffset") $null
+    $nextOffset = 0
+    if ($null -ne $nextOffsetValue -and [int]::TryParse([string]$nextOffsetValue, [ref]$nextOffset) -and $nextOffset -gt $fetchOffset) {
+      $fetchOffset = $nextOffset
+    } else {
+      $fetchOffset += @($pageItems).Count
+    }
+    if ($totalExact -and $fetchOffset -ge $total) { $hasMore = $false }
+  }
+  $sortedItems = @(Sort-LiveStockItems $allItems $Query.sortField $Query.sortDirection)
+  $pageItems = @($sortedItems | Select-Object -Skip ([int]$Query.offset) -First ([int]$Query.limit))
+  $effectiveTotal = if ($totalExact) { [Math]::Min($total, $LiveStockAllLimit) } else { @($sortedItems).Count }
+  $truncated = if ($totalExact) { $total -gt $LiveStockAllLimit } else { $hasMore }
+  $nextOffset = $null
+  if (([int]$Query.offset + @($pageItems).Count) -lt $effectiveTotal) {
+    $nextOffset = [int]$Query.offset + [int]$Query.limit
+  }
+  $queryInfo = @{ search = [string]$Query.search; barcode = [string]$Query.barcode }
+  foreach ($key in $Query.filters.Keys) { $queryInfo[$key] = [string]$Query.filters[$key] }
+  if ($Query.sortField) {
+    $queryInfo.sort = [string]$Query.sortField
+    $queryInfo.direction = [string]$Query.sortDirection
+  }
+  return @{
+    data = $pageItems
+    items = $pageItems
+    total = [int]$effectiveTotal
+    limit = [int]$Query.limit
+    offset = [int]$Query.offset
+    hasMore = ($null -ne $nextOffset)
+    nextOffset = $nextOffset
+    totalExact = ([bool]$totalExact -and -not [bool]$truncated)
+    query = $queryInfo
+    source = "crm-sql-live"
+    sourceDetail = "$CrmSqlApiBaseUrl/one-c-mirror/stock-balances"
+    bounded = $true
+    fallback = $false
+    productionReady = $true
+    loadedAt = (Get-Date).ToUniversalTime().ToString("o")
+    aggregation = "retail-backend-paged-stock"
+    maxRows = [int]$LiveStockAllLimit
+    truncated = [bool]$truncated
+  }
+}
+
 function New-LiveStockBalancesResponse($Params) {
-  $query = Get-LiveQueryParams $Params 20 100 @("productCode", "warehouseCode")
+  $query = Get-LiveQueryParams $Params 20 $LiveStockAllLimit @("productCode", "warehouseCode") $LiveStockSortFields
+  if ($query.sortField -or [int]$query.limit -gt $LiveStockSqlPageLimit) {
+    return New-LiveStockPagedResponse $query
+  }
   $payload = Invoke-CrmSqlApi "/one-c-mirror/stock-balances" $query.params
   $items = @()
   foreach ($row in (Get-PayloadItems $payload)) { $items += ConvertTo-LiveStockBalance $row }
