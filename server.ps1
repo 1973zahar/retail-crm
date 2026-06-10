@@ -11,9 +11,9 @@ try {
 } catch {
 }
 
-$AppVersion = "2026.06.10.10"
-$AppBuild = "20260610-b2c-powershell-http-timeouts"
-$AppReleasedAt = "2026-06-10 21:22:42 +03:00"
+$AppVersion = "2026.06.10.11"
+$AppBuild = "20260610-b2c-powershell-nonblocking-http"
+$AppReleasedAt = "2026-06-10 21:29:21 +03:00"
 $RootDir = $PSScriptRoot
 $ResolvedDataDir = if ([System.IO.Path]::IsPathRooted($DataDir)) { $DataDir } else { Join-Path $RootDir $DataDir }
 $StatePath = Join-Path $ResolvedDataDir "retail-crm-state.json"
@@ -222,6 +222,7 @@ function Get-StatusText([int]$StatusCode) {
 
 function Send-Bytes($Client, [int]$StatusCode, [string]$ContentType, [byte[]]$Bytes) {
   $stream = $Client.GetStream()
+  $stream.WriteTimeout = 10000
   $headers = @(
     "HTTP/1.1 $StatusCode $(Get-StatusText $StatusCode)"
     "Content-Type: $ContentType"
@@ -1465,10 +1466,16 @@ function Read-HttpRequest($Client) {
   $Client.SendTimeout = 10000
   $Client.NoDelay = $true
   $stream = $Client.GetStream()
+  $stream.ReadTimeout = 5000
   $buffer = New-Object byte[] 8192
   $memory = New-Object System.IO.MemoryStream
   $headerEnd = -1
-  while ($headerEnd -lt 0) {
+  $headerDeadline = [DateTime]::UtcNow.AddMilliseconds(5000)
+  while ($headerEnd -lt 0 -and [DateTime]::UtcNow -lt $headerDeadline) {
+    if (-not $stream.DataAvailable) {
+      Start-Sleep -Milliseconds 25
+      continue
+    }
     $read = $stream.Read($buffer, 0, $buffer.Length)
     if ($read -le 0) {
       break
@@ -1512,7 +1519,12 @@ function Read-HttpRequest($Client) {
       [Array]::Copy($allBytes, $bodyStart, $bodyBytes, 0, $copy)
     }
     $offset = $copy
-    while ($offset -lt $contentLength) {
+    $bodyDeadline = [DateTime]::UtcNow.AddMilliseconds(5000)
+    while ($offset -lt $contentLength -and [DateTime]::UtcNow -lt $bodyDeadline) {
+      if (-not $stream.DataAvailable) {
+        Start-Sleep -Milliseconds 25
+        continue
+      }
       $read = $stream.Read($bodyBytes, $offset, $contentLength - $offset)
       if ($read -le 0) {
         break
@@ -1957,7 +1969,7 @@ try {
     try {
       $request = Read-HttpRequest $client
       if (-not $request) {
-        Send-Text $client 400 "Bad request"
+        continue
       } elseif ($request.Path.StartsWith("/api/")) {
         Handle-Api $client $request
       } else {
