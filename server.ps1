@@ -11,9 +11,9 @@ try {
 } catch {
 }
 
-$AppVersion = "2026.06.10.11"
-$AppBuild = "20260610-b2c-powershell-nonblocking-http"
-$AppReleasedAt = "2026-06-10 21:29:21 +03:00"
+$AppVersion = "2026.06.10.12"
+$AppBuild = "20260610-b2c-powershell-async-writes"
+$AppReleasedAt = "2026-06-10 21:38:41 +03:00"
 $RootDir = $PSScriptRoot
 $ResolvedDataDir = if ([System.IO.Path]::IsPathRooted($DataDir)) { $DataDir } else { Join-Path $RootDir $DataDir }
 $StatePath = Join-Path $ResolvedDataDir "retail-crm-state.json"
@@ -220,6 +220,21 @@ function Get-StatusText([int]$StatusCode) {
   }
 }
 
+function Write-StreamBytes($Stream, [byte[]]$Bytes, [int]$Offset, [int]$Count) {
+  if ($Count -le 0) {
+    return
+  }
+  $async = $Stream.BeginWrite($Bytes, $Offset, $Count, $null, $null)
+  try {
+    if (-not $async.AsyncWaitHandle.WaitOne(10000)) {
+      throw "HTTP response write timed out"
+    }
+    $Stream.EndWrite($async)
+  } finally {
+    $async.AsyncWaitHandle.Close()
+  }
+}
+
 function Send-Bytes($Client, [int]$StatusCode, [string]$ContentType, [byte[]]$Bytes) {
   $stream = $Client.GetStream()
   $stream.WriteTimeout = 10000
@@ -236,9 +251,9 @@ function Send-Bytes($Client, [int]$StatusCode, [string]$ContentType, [byte[]]$By
     ""
   ) -join "`r`n"
   $headerBytes = $Ascii.GetBytes($headers)
-  $stream.Write($headerBytes, 0, $headerBytes.Length)
+  Write-StreamBytes $stream $headerBytes 0 $headerBytes.Length
   if ($Bytes.Length -gt 0) {
-    $stream.Write($Bytes, 0, $Bytes.Length)
+    Write-StreamBytes $stream $Bytes 0 $Bytes.Length
   }
 }
 
