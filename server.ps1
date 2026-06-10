@@ -11,9 +11,9 @@ try {
 } catch {
 }
 
-$AppVersion = "2026.06.10.4"
-$AppBuild = "20260610-b2c-inventory-live-add-all"
-$AppReleasedAt = "2026-06-10 12:08:28 +03:00"
+$AppVersion = "2026.06.10.5"
+$AppBuild = "20260610-b2c-inventory-warehouse-serials"
+$AppReleasedAt = "2026-06-10 13:03:15 +03:00"
 $RootDir = $PSScriptRoot
 $ResolvedDataDir = if ([System.IO.Path]::IsPathRooted($DataDir)) { $DataDir } else { Join-Path $RootDir $DataDir }
 $StatePath = Join-Path $ResolvedDataDir "retail-crm-state.json"
@@ -96,6 +96,28 @@ function Read-JsonFile($Path, $Fallback) {
     return $Fallback
   }
   return $raw | ConvertFrom-Json
+}
+
+function Read-StateHealthMetadata($Path) {
+  $metadata = @{
+    revision = 0
+    savedAt = ""
+  }
+  if (-not (Test-Path -LiteralPath $Path)) {
+    return $metadata
+  }
+  try {
+    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+    if ($raw -match '"revision"\s*:\s*(\d+)') {
+      $metadata.revision = [int]$matches[1]
+    }
+    if ($raw -match '"savedAt"\s*:\s*"([^"]*)"') {
+      $metadata.savedAt = [string]$matches[1]
+    }
+  } catch {
+    $metadata.savedAt = ""
+  }
+  return $metadata
 }
 
 function Write-JsonFile($Path, $Value) {
@@ -1158,8 +1180,8 @@ function Handle-Api($Client, $Request) {
   }
 
   if ($method -eq "GET" -and $path -eq "/api/health") {
-    $stateContainer = Read-JsonFile $StatePath (New-DefaultStateContainer)
-    Send-Json $Client 200 (New-HealthPayload $stateContainer)
+    $stateMetadata = Read-StateHealthMetadata $StatePath
+    Send-Json $Client 200 (New-HealthPayload $stateMetadata)
     return
   }
 

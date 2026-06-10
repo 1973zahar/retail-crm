@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.10.4";
-const APP_BUILD = "20260610-b2c-inventory-live-add-all";
-const APP_RELEASED_AT = "2026-06-10 12:08:28 +03:00";
+const APP_VERSION = "2026.06.10.5";
+const APP_BUILD = "20260610-b2c-inventory-warehouse-serials";
+const APP_RELEASED_AT = "2026-06-10 13:03:15 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SESSION_TOKEN_KEY = "retail-crm-b2c-session-token-v1";
@@ -77,6 +77,7 @@ const LIVE_CUSTOMER_LOOKUP_LIMIT = 20;
 const LIVE_STOCK_LOOKUP_LIMIT = 20;
 const LIVE_INVENTORY_STOCK_PAGE_LIMIT = 100;
 const LIVE_INVENTORY_STOCK_PAGE_CONCURRENCY = 4;
+const LIVE_INVENTORY_SERIAL_PAGE_LIMIT = 100;
 const LIVE_SERIAL_LOOKUP_LIMIT = 20;
 const LIVE_TABLE_LIMIT_OPTIONS = [20, 50, 100];
 const BASE_CURRENCY = "UAH";
@@ -126,7 +127,7 @@ const LIVE_TABLES = {
   },
   warehouses: {
     endpoint: "/api/live/warehouses",
-    defaultLimit: 20,
+    defaultLimit: 100,
     title: "SQL live склади",
     subtitle: "one_c_mirror.crm_warehouses",
     searchPlaceholder: "код або назва складу"
@@ -510,6 +511,36 @@ function serialStockFromSql(row) {
   };
 }
 
+function normalizeWarehouseCodes(value) {
+  const source = Array.isArray(value) ? value : String(value || "").split(/[;,]+/);
+  const codes = source
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+  return Array.from(new Set(codes.length ? codes : [SQL_MAIN_WAREHOUSE_CODE]));
+}
+
+function inventorySelectedWarehouseCodes(source = state.inventory) {
+  return normalizeWarehouseCodes(source?.warehouseCodes || source?.warehouseCode || SQL_MAIN_WAREHOUSE_CODE);
+}
+
+function inventoryLineKey(productId, warehouseCode = SQL_MAIN_WAREHOUSE_CODE, serialName = "") {
+  return [
+    String(productId || "").trim(),
+    String(warehouseCode || SQL_MAIN_WAREHOUSE_CODE).trim(),
+    normalizeScanText(serialName)
+  ].join("::");
+}
+
+function inventoryLineKeyForLine(line) {
+  return line?.lineKey || inventoryLineKey(line?.productId, line?.warehouseCode || SQL_MAIN_WAREHOUSE_CODE, line?.serialName || line?.serialNumber || "");
+}
+
+function inventoryLineMatches(line, token) {
+  const raw = String(token || "").trim();
+  if (!raw) return false;
+  return inventoryLineKeyForLine(line) === raw || line?.productId === raw;
+}
+
 function seedEmployee(id, code, name, role, phone, email, login, status = "active") {
   return {
     id,
@@ -540,9 +571,15 @@ function defaultRolePermissions() {
 }
 
 function inventoryLineFromProduct(row) {
+  const warehouseCode = SQL_MAIN_WAREHOUSE_CODE;
   return {
+    lineKey: inventoryLineKey(row.id, warehouseCode),
     productId: row.id,
-    expectedQty: stockQtyFromRows(sqlStockBalanceSnapshot, row.id),
+    warehouseCode,
+    warehouseName: SQL_MAIN_WAREHOUSE_NAME,
+    serialName: "",
+    serialNumber: "",
+    expectedQty: stockQtyFromRows(sqlStockBalanceSnapshot, row.id, warehouseCode),
     actualQty: ""
   };
 }
@@ -685,6 +722,7 @@ const seedState = {
     scan: "",
     printedAt: "",
     addSearch: "",
+    warehouseCodes: [SQL_MAIN_WAREHOUSE_CODE],
     lines: [],
     resorts: []
   },
@@ -1796,11 +1834,24 @@ function normalizeInventory(inventory, products, stockRows) {
   const lines = [];
   sourceLines.forEach((line) => {
     const product = products.find((item) => item.id === line.productId);
-    if (!product || lines.some((item) => item.productId === product.id)) return;
+    if (!product) return;
+    const warehouseCode = String(line.warehouseCode || SQL_MAIN_WAREHOUSE_CODE);
+    const warehouseName = line.warehouseName || (warehouseCode === SQL_MAIN_WAREHOUSE_CODE ? SQL_MAIN_WAREHOUSE_NAME : "Склад");
+    const serialName = String(line.serialName || line.serialNumber || "");
+    const lineKey = line.lineKey || inventoryLineKey(product.id, warehouseCode, serialName);
+    if (lines.some((item) => inventoryLineKeyForLine(item) === lineKey)) return;
     const actualValue = line.actualQty;
+    const expectedQty = serialName
+      ? Number(line.expectedQty ?? line.quantity ?? 1)
+      : stockQtyFromRows(stockRows, product.id, warehouseCode);
     lines.push({
+      lineKey,
       productId: product.id,
-      expectedQty: stockQtyFromRows(stockRows, product.id),
+      warehouseCode,
+      warehouseName,
+      serialName,
+      serialNumber: line.serialNumber || serialName,
+      expectedQty,
       actualQty: actualValue === "" || actualValue === undefined || actualValue === null ? "" : Number(actualValue)
     });
   });
@@ -1810,6 +1861,7 @@ function normalizeInventory(inventory, products, stockRows) {
     search: inventory?.search || "",
     scan: inventory?.scan || "",
     addSearch: inventory?.addSearch || "",
+    warehouseCodes: inventorySelectedWarehouseCodes(inventory),
     printedAt: inventory?.printedAt || "",
     lines,
     resorts: Array.isArray(inventory?.resorts) ? inventory.resorts.map(normalizeInventoryResort) : []
@@ -1850,10 +1902,10 @@ function normalizeInventoryResort(item) {
   };
 }
 
-function stockQtyFromRows(stockRows, productId) {
+function stockQtyFromRows(stockRows, productId, warehouseCode = SQL_MAIN_WAREHOUSE_CODE) {
   return (stockRows || [])
     .filter((item) => item.productId === productId && (
-      item.warehouseCode ? item.warehouseCode === SQL_MAIN_WAREHOUSE_CODE : true
+      item.warehouseCode ? String(item.warehouseCode) === String(warehouseCode || SQL_MAIN_WAREHOUSE_CODE) : String(warehouseCode || SQL_MAIN_WAREHOUSE_CODE) === SQL_MAIN_WAREHOUSE_CODE
     ))
     .reduce((sum, item) => sum + Number(item.qty || 0), 0);
 }
@@ -2560,11 +2612,105 @@ function upsertInventoryStockBalance(product, row) {
   return stockRowData;
 }
 
-function applyLiveStockRowsToInventory(rows) {
+function inventoryProductHasLocalSerials(product, warehouseCode) {
+  const targetCode = normalizeScanText(liveProductCode(product));
+  return state.serialStock.some((row) => {
+    const serial = normalizeSerialStock(row);
+    if (warehouseCode && String(serial.warehouseCode) !== String(warehouseCode)) return false;
+    if (Number(serial.quantity || 0) <= 0 || !serial.serialName) return false;
+    const rowCode = normalizeScanText(serial.productCode || serial.productId);
+    return Boolean(targetCode && rowCode === targetCode) || serial.productId === product.id;
+  });
+}
+
+function productMayHaveSerialNumbers(product) {
+  const text = normalizeScanText(productCategoryText(product));
+  return text.includes("серійн")
+    || text.includes("серийн")
+    || text.includes("serial")
+    || text.includes("s/n")
+    || text.includes("sn ");
+}
+
+function productNeedsInventorySerialRows(product, warehouseCode) {
+  return isWeaponProduct(product)
+    || productMayHaveSerialNumbers(product)
+    || inventoryProductHasLocalSerials(product, warehouseCode);
+}
+
+function upsertInventorySerialStock(product, row) {
+  const serial = normalizeSerialStock({
+    ...row,
+    productId: product.id,
+    productCode: product.productCode || product.sku || row.productCode,
+    productName: product.name || row.productName,
+    warehouseCode: row.warehouseCode || SQL_MAIN_WAREHOUSE_CODE,
+    warehouseName: row.warehouseName || SQL_MAIN_WAREHOUSE_NAME
+  });
+  if (!serial.serialName) return null;
+  const key = inventoryLineKey(product.id, serial.warehouseCode, serial.serialName);
+  const index = state.serialStock.findIndex((item) => inventoryLineKey(
+    item.productId,
+    item.warehouseCode,
+    item.serialName || item.serialNumber
+  ) === key);
+  if (index >= 0) state.serialStock[index] = serial;
+  else state.serialStock.push(serial);
+  return serial;
+}
+
+async function fetchLiveInventorySerialPage(product, warehouseCode, offset) {
+  const productCode = liveProductCode(product);
+  if (!productCode) return { rows: [], offset, nextOffset: null, total: 0, payload: { hasMore: false } };
+  const params = new URLSearchParams({
+    productCode,
+    warehouseCode: String(warehouseCode || SQL_MAIN_WAREHOUSE_CODE),
+    limit: String(LIVE_INVENTORY_SERIAL_PAGE_LIMIT),
+    offset: String(Math.max(0, Number(offset || 0)))
+  });
+  const payload = await fetchJson(`/api/live/serial-stock?${params.toString()}`);
+  markServerOnline(payload);
+  const rows = payloadItems(payload)
+    .map((item) => normalizeSerialStock({
+      ...item,
+      productId: product.id,
+      productCode,
+      productName: product.name,
+      warehouseCode: item.warehouseCode || warehouseCode,
+      warehouseName: item.warehouseName || warehouseNameByCode(warehouseCode)
+    }))
+    .filter((item) => item.serialName && String(item.warehouseCode) === String(warehouseCode) && Number(item.quantity || 0) > 0);
+  return {
+    payload,
+    rows,
+    offset: Math.max(0, Number(payload.offset || offset || 0)),
+    nextOffset: payload.nextOffset === null || payload.nextOffset === undefined ? null : Number(payload.nextOffset),
+    total: Math.max(0, Number(payload.total || rows.length))
+  };
+}
+
+async function fetchAllLiveInventorySerialRows(product, warehouseCode) {
+  const rows = [];
+  const firstPage = await fetchLiveInventorySerialPage(product, warehouseCode, 0);
+  rows.push(...firstPage.rows);
+  let offset = firstPage.nextOffset;
+  const seenOffsets = new Set([firstPage.offset]);
+  while (firstPage.payload.hasMore && Number.isFinite(offset) && !seenOffsets.has(offset)) {
+    seenOffsets.add(offset);
+    const page = await fetchLiveInventorySerialPage(product, warehouseCode, offset);
+    rows.push(...page.rows);
+    if (!page.payload.hasMore || !Number.isFinite(page.nextOffset) || page.nextOffset <= offset) break;
+    offset = page.nextOffset;
+  }
+  return rows;
+}
+
+async function applyLiveStockRowsToInventory(rows) {
   const grouped = new Map();
+  const selectedWarehouses = new Set(inventorySelectedWarehouseCodes());
   rows.forEach((sourceRow) => {
     const row = normalizeStockBalance(sourceRow);
-    if (String(row.warehouseCode) !== SQL_MAIN_WAREHOUSE_CODE || stockLookupAvailableQty(row) <= 0) return;
+    if (!selectedWarehouses.has(String(row.warehouseCode)) || stockLookupAvailableQty(row) <= 0) return;
     const product = upsertInventoryProductFromLiveStock(row);
     if (!product?.id) return;
     const key = `${product.id}::${row.warehouseCode || SQL_MAIN_WAREHOUSE_CODE}`;
@@ -2586,7 +2732,8 @@ function applyLiveStockRowsToInventory(rows) {
 
   let added = 0;
   let updated = 0;
-  grouped.forEach((entry) => {
+  let serialLines = 0;
+  for (const entry of grouped.values()) {
     const stockRowData = {
       ...entry.row,
       qty: entry.qty,
@@ -2595,19 +2742,63 @@ function applyLiveStockRowsToInventory(rows) {
       reservedQty: entry.reservedQty
     };
     upsertInventoryStockBalance(entry.product, stockRowData);
-    const existed = state.inventory.lines.some((line) => line.productId === entry.product.id);
-    const line = inventoryLineForProduct(entry.product.id);
-    line.expectedQty = stockQty(entry.product.id);
+    const warehouseCode = String(stockRowData.warehouseCode || SQL_MAIN_WAREHOUSE_CODE);
+    const warehouseName = stockRowData.warehouseName || warehouseNameByCode(warehouseCode);
+    let serialRows = [];
+    if (productNeedsInventorySerialRows(entry.product, warehouseCode)) {
+      try {
+        serialRows = await fetchAllLiveInventorySerialRows(entry.product, warehouseCode);
+      } catch (error) {
+        serialRows = state.serialStock
+          .map(normalizeSerialStock)
+          .filter((row) => row.serialName && String(row.warehouseCode) === warehouseCode && Number(row.quantity || 0) > 0 && (
+            row.productId === entry.product.id
+            || normalizeScanText(row.productCode || row.productId) === normalizeScanText(liveProductCode(entry.product))
+          ));
+      }
+    }
+    if (serialRows.length) {
+      for (const serialRow of serialRows) {
+        const serial = upsertInventorySerialStock(entry.product, {
+          ...serialRow,
+          warehouseCode,
+          warehouseName
+        });
+        if (!serial) continue;
+        const lineKey = inventoryLineKey(entry.product.id, warehouseCode, serial.serialName);
+        const existed = state.inventory.lines.some((line) => inventoryLineKeyForLine(line) === lineKey);
+        const line = inventoryLineForProduct(entry.product.id, {
+          warehouseCode,
+          warehouseName,
+          serialName: serial.serialName,
+          serialNumber: serial.serialNumber,
+          expectedQty: Math.max(1, Number(serial.quantity || 1))
+        });
+        line.expectedQty = Math.max(1, Number(serial.quantity || 1));
+        if (existed) updated += 1;
+        else added += 1;
+        serialLines += 1;
+      }
+      continue;
+    }
+    const lineKey = inventoryLineKey(entry.product.id, warehouseCode);
+    const existed = state.inventory.lines.some((line) => inventoryLineKeyForLine(line) === lineKey);
+    const line = inventoryLineForProduct(entry.product.id, {
+      warehouseCode,
+      warehouseName,
+      expectedQty: stockQty(entry.product.id, warehouseCode)
+    });
+    line.expectedQty = stockQty(entry.product.id, warehouseCode);
     if (existed) updated += 1;
     else added += 1;
-  });
+  }
 
-  return { added, updated, products: grouped.size, sourceRows: rows.length };
+  return { added, updated, products: grouped.size, sourceRows: rows.length, serialLines };
 }
 
-async function fetchLiveInventoryStockPage(offset) {
+async function fetchLiveInventoryStockPage(offset, warehouseCode = SQL_MAIN_WAREHOUSE_CODE) {
   const params = new URLSearchParams({
-    warehouseCode: SQL_MAIN_WAREHOUSE_CODE,
+    warehouseCode: String(warehouseCode || SQL_MAIN_WAREHOUSE_CODE),
     limit: String(LIVE_INVENTORY_STOCK_PAGE_LIMIT),
     offset: String(Math.max(0, Number(offset || 0)))
   });
@@ -2619,11 +2810,12 @@ async function fetchLiveInventoryStockPage(offset) {
     limit: Math.max(1, Number(payload.limit || LIVE_INVENTORY_STOCK_PAGE_LIMIT)),
     offset: Math.max(0, Number(payload.offset || offset || 0)),
     nextOffset: payload.nextOffset === null || payload.nextOffset === undefined ? null : Number(payload.nextOffset),
-    total: Math.max(0, Number(payload.total || 0))
+    total: Math.max(0, Number(payload.total || 0)),
+    warehouseCode: String(warehouseCode || SQL_MAIN_WAREHOUSE_CODE)
   };
 }
 
-async function fetchRemainingLiveInventoryStockRowsSequential(firstPage) {
+async function fetchRemainingLiveInventoryStockRowsSequential(firstPage, warehouseCode = SQL_MAIN_WAREHOUSE_CODE) {
   const rows = [];
   const seenOffsets = new Set([firstPage.offset]);
   let offset = firstPage.nextOffset;
@@ -2632,7 +2824,7 @@ async function fetchRemainingLiveInventoryStockRowsSequential(firstPage) {
       throw new Error(`Live API повернув повторний offset ${offset}; зупинено, щоб не зациклити інвентаризацію.`);
     }
     seenOffsets.add(offset);
-    const page = await fetchLiveInventoryStockPage(offset);
+    const page = await fetchLiveInventoryStockPage(offset, warehouseCode);
     rows.push(...page.rows);
     inventoryAddAllStockStatus.loaded += page.rows.length;
     inventoryAddAllStockStatus.total = Math.max(inventoryAddAllStockStatus.total, page.total, inventoryAddAllStockStatus.loaded);
@@ -2642,15 +2834,15 @@ async function fetchRemainingLiveInventoryStockRowsSequential(firstPage) {
   return rows;
 }
 
-async function fetchAllLiveInventoryStockRows() {
-  const firstPage = await fetchLiveInventoryStockPage(0);
+async function fetchAllLiveInventoryStockRowsForWarehouse(warehouseCode) {
+  const firstPage = await fetchLiveInventoryStockPage(0, warehouseCode);
   const rows = [...firstPage.rows];
-  inventoryAddAllStockStatus.loaded = rows.length;
-  inventoryAddAllStockStatus.total = Math.max(firstPage.total, rows.length);
+  inventoryAddAllStockStatus.loaded += rows.length;
+  inventoryAddAllStockStatus.total += Math.max(firstPage.total, rows.length);
   if (!firstPage.payload.hasMore || !rows.length) return rows;
 
   if (!firstPage.total || firstPage.total <= firstPage.limit || !Number.isFinite(firstPage.limit)) {
-    rows.push(...await fetchRemainingLiveInventoryStockRowsSequential(firstPage));
+    rows.push(...await fetchRemainingLiveInventoryStockRowsSequential(firstPage, warehouseCode));
     return rows;
   }
 
@@ -2660,14 +2852,23 @@ async function fetchAllLiveInventoryStockRows() {
   }
   for (let index = 0; index < offsets.length; index += LIVE_INVENTORY_STOCK_PAGE_CONCURRENCY) {
     const batchOffsets = offsets.slice(index, index + LIVE_INVENTORY_STOCK_PAGE_CONCURRENCY);
-    const pages = await Promise.all(batchOffsets.map((offset) => fetchLiveInventoryStockPage(offset)));
+    const pages = await Promise.all(batchOffsets.map((offset) => fetchLiveInventoryStockPage(offset, warehouseCode)));
     pages
       .sort((left, right) => left.offset - right.offset)
       .forEach((page) => {
         rows.push(...page.rows);
-        inventoryAddAllStockStatus.loaded = rows.length;
-        inventoryAddAllStockStatus.total = Math.max(inventoryAddAllStockStatus.total, page.total, rows.length);
+        inventoryAddAllStockStatus.loaded += page.rows.length;
       });
+  }
+  return rows;
+}
+
+async function fetchAllLiveInventoryStockRows(warehouseCodes = inventorySelectedWarehouseCodes()) {
+  const rows = [];
+  inventoryAddAllStockStatus.loaded = 0;
+  inventoryAddAllStockStatus.total = 0;
+  for (const warehouseCode of normalizeWarehouseCodes(warehouseCodes)) {
+    rows.push(...await fetchAllLiveInventoryStockRowsForWarehouse(warehouseCode));
   }
   return rows;
 }
@@ -3520,6 +3721,34 @@ function warehouseLabel(code, name) {
   return `${name || "Склад"}${code ? ` (${code})` : ""}`;
 }
 
+function warehouseNameByCode(code) {
+  const target = String(code || "");
+  if (target === SQL_MAIN_WAREHOUSE_CODE) return SQL_MAIN_WAREHOUSE_NAME;
+  const live = liveTable("warehouses").items.find((item) => String(item.warehouseCode || item.id) === target);
+  if (live) return live.warehouseName || "Склад";
+  const stock = state.stock.find((item) => String(item.warehouseCode || "") === target);
+  return stock?.warehouseName || "Склад";
+}
+
+function inventoryWarehouseOptions() {
+  const selected = inventorySelectedWarehouseCodes();
+  const options = new Map();
+  const add = (code, name) => {
+    const key = String(code || "").trim();
+    if (!key || options.has(key)) return;
+    options.set(key, { warehouseCode: key, warehouseName: name || warehouseNameByCode(key) });
+  };
+  add(SQL_MAIN_WAREHOUSE_CODE, SQL_MAIN_WAREHOUSE_NAME);
+  liveTable("warehouses").items.forEach((warehouse) => add(warehouse.warehouseCode || warehouse.id, warehouse.warehouseName));
+  state.stock.forEach((row) => add(row.warehouseCode, row.warehouseName));
+  selected.forEach((code) => add(code, warehouseNameByCode(code)));
+  return Array.from(options.values()).sort((left, right) => {
+    if (left.warehouseCode === SQL_MAIN_WAREHOUSE_CODE) return -1;
+    if (right.warehouseCode === SQL_MAIN_WAREHOUSE_CODE) return 1;
+    return warehouseLabel(left.warehouseCode, left.warehouseName).localeCompare(warehouseLabel(right.warehouseCode, right.warehouseName), "uk");
+  });
+}
+
 function stockRowsForProduct(productId) {
   return state.stock.filter((item) => item.productId === productId);
 }
@@ -3561,6 +3790,7 @@ function stockWholesaleQty(productId) {
 
 function productCategoryText(product) {
   return [
+    product.name,
     product.category,
     product.categoryPrimary,
     product.productGroup,
@@ -3573,7 +3803,15 @@ function productCategoryText(product) {
 
 function isWeaponProduct(product) {
   const text = normalizeScanText(productCategoryText(product));
-  return text.includes("збро") || text.includes("оруж") || text.includes("weapon") || text.includes("firearm");
+  return text.includes("збро")
+    || text.includes("оруж")
+    || text.includes("weapon")
+    || text.includes("firearm")
+    || text.includes("рушниц")
+    || text.includes("караб")
+    || text.includes("гвинтів")
+    || text.includes("винтовк")
+    || text.includes("пістолет");
 }
 
 function productWarehouseStockFallback(product) {
@@ -3675,6 +3913,25 @@ function findProductByLookup(value) {
 
 function findProductForSale(value) {
   return findProductByLookup(value);
+}
+
+function findInventoryProductByScan(value) {
+  const raw = normalizeScanText(value);
+  if (!raw) return null;
+  const tokens = scanTokens(raw);
+  return productSearchPool().find((product) => (
+    productScanTargets(product).some((target) => tokens.has(target) || raw.includes(target))
+  )) || null;
+}
+
+function findInventoryProductByLookup(value) {
+  const raw = normalizeScanText(value);
+  if (!raw) return null;
+  const pool = productSearchPool();
+  return pool.find((product) => normalizeScanText(productLookupValue(product)) === raw)
+    || findInventoryProductByScan(value)
+    || pool.find((product) => productMatchesQuery(product, value))
+    || null;
 }
 
 function findCustomerByLookup(value) {
@@ -4683,7 +4940,10 @@ function inventoryRows() {
   return state.inventory.lines.map((line) => {
     const product = state.products.find((item) => item.id === line.productId);
     if (!product) return null;
-    const expectedQty = stockQty(product.id);
+    const warehouseCode = String(line.warehouseCode || SQL_MAIN_WAREHOUSE_CODE);
+    const warehouseName = line.warehouseName || warehouseNameByCode(warehouseCode);
+    const serialName = String(line.serialName || line.serialNumber || "");
+    const expectedQty = serialName ? Number(line.expectedQty ?? 1) : stockQty(product.id, warehouseCode);
     const hasActual = line.actualQty !== "" && line.actualQty !== null && line.actualQty !== undefined;
     const actualQty = hasActual ? Number(line.actualQty || 0) : "";
     const diff = hasActual ? Number(actualQty) - expectedQty : null;
@@ -4691,8 +4951,28 @@ function inventoryRows() {
     const expectedAmount = expectedQty * price;
     const actualAmount = hasActual ? Number(actualQty) * price : null;
     const diffAmount = hasActual ? Number(diff || 0) * price : null;
-    return { product, line, expectedQty, actualQty, hasActual, diff, price, expectedAmount, actualAmount, diffAmount };
+    const lineKey = inventoryLineKeyForLine({ ...line, warehouseCode, serialName });
+    return { product, line, lineKey, warehouseCode, warehouseName, serialName, expectedQty, actualQty, hasActual, diff, price, expectedAmount, actualAmount, diffAmount };
   }).filter(Boolean);
+}
+
+function inventoryRowMatchesQuery(row, query) {
+  const raw = normalizeScanText(query);
+  if (!raw) return true;
+  const text = normalizeScanText([
+    row.product.name,
+    row.product.sku,
+    row.product.productCode,
+    row.product.barcode,
+    row.product.qr,
+    row.product.sqlId,
+    row.product.productGroupPath,
+    row.product.productFullPath,
+    row.warehouseCode,
+    row.warehouseName,
+    row.serialName
+  ].filter(Boolean).join(" "));
+  return text.includes(raw) || productMatchesQuery(row.product, query);
 }
 
 function inventoryTotals(rows) {
@@ -4774,13 +5054,14 @@ function renderInventorySheet(rows, totals) {
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>SKU</th><th>Штрихкод</th><th>Товар</th><th>Роздріб</th><th>Облік</th><th>Факт</th><th>Різниця</th><th>+/- грн</th><th>Підпис</th></tr></thead>
+          <thead><tr><th>SKU</th><th>Склад</th><th>Штрихкод</th><th>Товар</th><th>Роздріб</th><th>Облік</th><th>Факт</th><th>Різниця</th><th>+/- грн</th><th>Підпис</th></tr></thead>
           <tbody>
             ${rows.map((row) => `
               <tr>
                 <td>${escapeHtml(row.product.sku)}</td>
+                <td>${escapeHtml(row.warehouseName)}<br><span class="muted">${escapeHtml(row.warehouseCode)}</span></td>
                 <td>${escapeHtml(row.product.barcode || "-")}</td>
-                <td>${escapeHtml(row.product.name)}</td>
+                <td>${escapeHtml(row.product.name)}${row.serialName ? `<br><span class="muted">SN ${escapeHtml(row.serialName)}</span>` : ""}</td>
                 <td>${formatMoney(row.price)}</td>
                 <td>${row.expectedQty}</td>
                 <td>${row.hasActual ? row.actualQty : ""}</td>
@@ -4806,14 +5087,20 @@ function renderInventorySheet(rows, totals) {
 function renderStock() {
   setTitle("Залишки магазину");
   ensureLiveTableLoaded("stock");
+  ensureLiveTableLoaded("warehouses");
   const allRows = inventoryRows();
   const inventorySearch = String(state.inventory.search || "").trim();
-  const rows = allRows.filter((row) => productMatchesQuery(row.product, inventorySearch));
+  const rows = allRows.filter((row) => inventoryRowMatchesQuery(row, inventorySearch));
   const totals = inventoryTotals(allRows);
   const printTotals = inventoryTotals(rows);
   const resortTotals = inventoryResortTotals();
   const canPostInventory = canDo("inventory_post");
   const canResortInventory = canDo("inventory_resort");
+  const selectedInventoryWarehouses = inventorySelectedWarehouseCodes();
+  const inventoryWarehouseText = selectedInventoryWarehouses.map((code) => warehouseLabel(code, warehouseNameByCode(code))).join(", ");
+  const inventoryWarehouseOptionsHtml = inventoryWarehouseOptions()
+    .map((warehouse) => option(warehouse.warehouseCode, warehouseLabel(warehouse.warehouseCode, warehouse.warehouseName), selectedInventoryWarehouses.includes(String(warehouse.warehouseCode))))
+    .join("");
   const weaponProducts = state.products.filter(isWeaponProduct);
   const selectedSerialProductId = weaponProducts.some((product) => product.id === state.stockUi.serialProductId)
     ? state.stockUi.serialProductId
@@ -4909,6 +5196,8 @@ function renderStock() {
         <article class="card metric"><span>Мінус</span><strong>${formatMoney(Math.abs(totals.negativeAmount))}</strong><small>${Math.abs(totals.negative)} од. факт менше обліку.</small></article>
       </section>
       <form class="form-grid section-gap" data-action="${canPostInventory ? "post-inventory" : "inventory-draft"}">
+        <label class="field wide no-print"><span>Склади інвентаризації</span><select name="inventoryWarehouseCodes" data-inventory-warehouses multiple size="4">${inventoryWarehouseOptionsHtml}</select><small class="muted">Можна вибрати один або кілька складів. Поточний вибір: ${escapeHtml(inventoryWarehouseText)}</small></label>
+        <div class="field lookup-action no-print"><span>Склади</span><button class="secondary" type="button" data-refresh-inventory-warehouses ${liveTable("warehouses").loading ? "disabled" : ""}>Оновити склади SQL</button></div>
         <label class="field wide"><span>Товар з довідника</span><input name="inventoryAddSearch" data-inventory-add-search list="inventory-product-options" value="${escapeHtml(state.inventory.addSearch || "")}" autocomplete="off" placeholder="назва, SKU, штрихкод або QR з довідника товарів"><datalist id="inventory-product-options">${state.products.map((product) => `<option value="${escapeHtml(productLookupValue(product))}"></option>`).join("")}</datalist></label>
         <div class="field lookup-action no-print"><span>Додати</span><button class="secondary" type="button" data-add-inventory-product>Додати товар</button></div>
         <label class="field wide"><span>Пошук у інвентаризації</span><input name="inventorySearch" data-inventory-search value="${escapeHtml(state.inventory.search || "")}" placeholder="назва, SKU, штрихкод або QR"></label>
@@ -4922,21 +5211,22 @@ function renderStock() {
         </div>
         <div class="table-wrap full">
           <table>
-            <thead><tr><th>SKU</th><th>Товар</th><th>Штрихкод</th><th>Роздріб</th><th>Облік</th><th>Факт</th><th>Різниця</th><th>+/- грн</th><th>Дії</th></tr></thead>
+            <thead><tr><th>SKU</th><th>Склад</th><th>Товар</th><th>Штрихкод</th><th>Роздріб</th><th>Облік</th><th>Факт</th><th>Різниця</th><th>+/- грн</th><th>Дії</th></tr></thead>
             <tbody>
               ${rows.map((row) => `
                 <tr class="${row.hasActual && row.diff !== 0 ? "inventory-diff" : ""}">
                   <td>${escapeHtml(row.product.sku)}</td>
-                  <td>${escapeHtml(row.product.name)}</td>
+                  <td>${escapeHtml(row.warehouseName)}<br><span class="muted">${escapeHtml(row.warehouseCode)}</span></td>
+                  <td>${escapeHtml(row.product.name)}${row.serialName ? `<br><span class="muted">SN ${escapeHtml(row.serialName)}</span>` : ""}</td>
                   <td>${escapeHtml(row.product.barcode || "-")}</td>
                   <td>${formatMoney(row.price)}</td>
                   <td><strong>${row.expectedQty}</strong></td>
-                  <td><input class="mini-input" data-inventory-actual="${escapeHtml(row.product.id)}" type="number" min="0" value="${row.hasActual ? row.actualQty : ""}"></td>
+                  <td><input class="mini-input" data-inventory-actual="${escapeHtml(row.lineKey)}" type="number" min="0" ${row.serialName ? 'max="1"' : ""} value="${row.hasActual ? row.actualQty : ""}"></td>
                   <td><span class="pill ${row.diff === null ? "" : row.diff < 0 ? "danger" : row.diff > 0 ? "warn" : "good"}">${diffLabel(row.diff)}</span></td>
                   <td>${row.diffAmount === null ? "-" : formatMoney(row.diffAmount)}</td>
-                  <td><button class="secondary" type="button" data-remove-inventory-product="${escapeHtml(row.product.id)}">Видалити</button></td>
+                  <td><button class="secondary" type="button" data-remove-inventory-product="${escapeHtml(row.lineKey)}">Видалити</button></td>
                 </tr>
-              `).join("") || `<tr><td colspan="9" class="muted">${inventorySearch ? "За цим пошуком позицій немає." : "Додайте товар з довідника товарів або відскануйте штрихкод/QR."}</td></tr>`}
+              `).join("") || `<tr><td colspan="10" class="muted">${inventorySearch ? "За цим пошуком позицій немає." : "Додайте товар з довідника товарів або відскануйте штрихкод/QR."}</td></tr>`}
             </tbody>
           </table>
         </div>
@@ -6673,20 +6963,39 @@ function syncAllExchangeFromSql(mode = "manual-sync") {
 }
 
 function setInventoryActual(productId, value) {
-  const line = state.inventory.lines.find((item) => item.productId === productId);
+  const line = state.inventory.lines.find((item) => inventoryLineMatches(item, productId));
   if (!line) return;
-  line.expectedQty = stockQty(productId);
+  line.expectedQty = line.serialName ? Number(line.expectedQty || 1) : stockQty(line.productId, line.warehouseCode || SQL_MAIN_WAREHOUSE_CODE);
   line.actualQty = value === "" ? "" : Math.max(0, Number(value || 0));
-  saveState();
+  if (line.serialName && line.actualQty !== "") line.actualQty = Math.min(1, Number(line.actualQty || 0));
+  saveState({ server: false });
 }
 
-function inventoryLineForProduct(productId) {
-  let line = state.inventory.lines.find((item) => item.productId === productId);
+function inventoryLineForProduct(productId, options = {}) {
+  const warehouseCode = String(options.warehouseCode || SQL_MAIN_WAREHOUSE_CODE);
+  const warehouseName = options.warehouseName || warehouseNameByCode(warehouseCode);
+  const serialName = String(options.serialName || options.serialNumber || "");
+  const lineKey = options.lineKey || inventoryLineKey(productId, warehouseCode, serialName);
+  let line = state.inventory.lines.find((item) => inventoryLineKeyForLine(item) === lineKey);
   if (!line) {
-    line = { productId, expectedQty: stockQty(productId), actualQty: "" };
+    line = {
+      lineKey,
+      productId,
+      warehouseCode,
+      warehouseName,
+      serialName,
+      serialNumber: options.serialNumber || serialName,
+      expectedQty: serialName ? Number(options.expectedQty ?? 1) : stockQty(productId, warehouseCode),
+      actualQty: ""
+    };
     state.inventory.lines.push(line);
   }
-  line.expectedQty = stockQty(productId);
+  line.lineKey = lineKey;
+  line.warehouseCode = warehouseCode;
+  line.warehouseName = warehouseName;
+  line.serialName = serialName;
+  line.serialNumber = options.serialNumber || serialName;
+  line.expectedQty = serialName ? Number(options.expectedQty ?? line.expectedQty ?? 1) : stockQty(productId, warehouseCode);
   return line;
 }
 
@@ -6696,28 +7005,33 @@ function addInventoryProductFromLookup(value = state.inventory.addSearch) {
     alert("Вкажіть товар з довідника товарів.");
     return;
   }
-  const product = findProductByLookup(query);
+  const product = findInventoryProductByLookup(query);
   if (!product) {
     state.inventory.addSearch = query;
-    saveState();
+    saveState({ server: false });
     render();
     alert("Товар не знайдено в довіднику товарів. Перевірте назву, SKU, штрихкод або QR.");
     return;
   }
-  const existed = state.inventory.lines.some((item) => item.productId === product.id);
-  inventoryLineForProduct(product.id);
+  const warehouseCode = inventorySelectedWarehouseCodes()[0] || SQL_MAIN_WAREHOUSE_CODE;
+  const lineKey = inventoryLineKey(product.id, warehouseCode);
+  const existed = state.inventory.lines.some((item) => inventoryLineKeyForLine(item) === lineKey);
+  inventoryLineForProduct(product.id, { warehouseCode });
   state.inventory.addSearch = "";
   state.inventory.search = product.sku;
   audit(`${existed ? "Відкрито" : "Додано"} товар до інвентаризації: ${product.sku}`);
-  saveState();
+  saveState({ server: false });
   render();
 }
 
 function addLocalInventoryStockProducts() {
-  const productsWithStock = state.products.filter((product) => stockQty(product.id) > 0);
+  const selectedWarehouses = inventorySelectedWarehouseCodes();
+  const productsWithStock = state.products.filter((product) => selectedWarehouses.some((warehouseCode) => stockQty(product.id, warehouseCode) > 0));
   const before = state.inventory.lines.length;
   productsWithStock.forEach((product) => {
-    inventoryLineForProduct(product.id);
+    selectedWarehouses
+      .filter((warehouseCode) => stockQty(product.id, warehouseCode) > 0)
+      .forEach((warehouseCode) => inventoryLineForProduct(product.id, { warehouseCode }));
   });
   const added = state.inventory.lines.length - before;
   state.inventory.addSearch = "";
@@ -6726,8 +7040,8 @@ function addLocalInventoryStockProducts() {
     alert("У довіднику немає товарів із залишками.");
     return;
   }
-  audit(`Додано товари із залишками до інвентаризації: ${added} нових із ${productsWithStock.length}`);
-  saveState();
+  audit(`Додано товари із залишками до інвентаризації: ${added} нових із ${productsWithStock.length}, склади ${selectedWarehouses.join(", ")}`);
+  saveState({ server: false });
   render();
 }
 
@@ -6740,21 +7054,23 @@ async function addAllInventoryStockProducts() {
   inventoryAddAllStockStatus.error = "";
   render();
   try {
-    const rows = await fetchAllLiveInventoryStockRows();
+    const selectedWarehouses = inventorySelectedWarehouseCodes();
+    const rows = await fetchAllLiveInventoryStockRows(selectedWarehouses);
+    const selectedWarehouseSet = new Set(selectedWarehouses);
     const filteredRows = rows
       .map(normalizeStockBalance)
-      .filter((row) => String(row.warehouseCode) === SQL_MAIN_WAREHOUSE_CODE && stockLookupAvailableQty(row) > 0);
+      .filter((row) => selectedWarehouseSet.has(String(row.warehouseCode)) && stockLookupAvailableQty(row) > 0);
     if (!filteredRows.length) {
-      inventoryAddAllStockStatus.error = `Live API не повернув товарів із залишками на ${SQL_MAIN_WAREHOUSE_NAME}.`;
+      inventoryAddAllStockStatus.error = `Live API не повернув товарів із залишками на вибраних складах: ${selectedWarehouses.join(", ")}.`;
       alert(inventoryAddAllStockStatus.error);
       return;
     }
-    const result = applyLiveStockRowsToInventory(filteredRows);
+    const result = await applyLiveStockRowsToInventory(filteredRows);
     state.inventory.addSearch = "";
     state.inventory.search = "";
     inventoryAddAllStockStatus.error = "";
-    audit(`Додано live SQL залишки до інвентаризації: ${result.added} нових, ${result.updated} оновлено, ${result.products} товарів із ${result.sourceRows} рядків складу ${SQL_MAIN_WAREHOUSE_CODE}`);
-    saveState();
+    audit(`Додано live SQL залишки до інвентаризації: ${result.added} нових, ${result.updated} оновлено, ${result.products} товарів, ${result.serialLines} серійних рядків із ${result.sourceRows} рядків складів ${selectedWarehouses.join(", ")}`);
+    saveState({ server: false });
   } catch (error) {
     inventoryAddAllStockStatus.error = String(error?.message || error || "Не вдалося завантажити live залишки.");
     markServerOffline(error);
@@ -6766,17 +7082,19 @@ async function addAllInventoryStockProducts() {
 }
 
 function removeInventoryProduct(productId) {
-  const index = state.inventory.lines.findIndex((item) => item.productId === productId);
+  const index = state.inventory.lines.findIndex((item) => inventoryLineMatches(item, productId));
   if (index === -1) return;
-  const product = productById(productId);
-  const relatedResorts = state.inventory.resorts.filter((item) => item.fromProductId === productId || item.toProductId === productId).length;
+  const removedLine = state.inventory.lines[index];
+  const product = productById(removedLine.productId || productId);
+  const hasOtherProductLines = state.inventory.lines.some((item, itemIndex) => itemIndex !== index && item.productId === removedLine.productId);
+  const relatedResorts = hasOtherProductLines ? 0 : state.inventory.resorts.filter((item) => item.fromProductId === removedLine.productId || item.toProductId === removedLine.productId).length;
   state.inventory.lines.splice(index, 1);
   if (relatedResorts) {
-    state.inventory.resorts = state.inventory.resorts.filter((item) => item.fromProductId !== productId && item.toProductId !== productId);
+    state.inventory.resorts = state.inventory.resorts.filter((item) => item.fromProductId !== removedLine.productId && item.toProductId !== removedLine.productId);
   }
   if (normalizeScanText(state.inventory.search) === normalizeScanText(product.sku)) state.inventory.search = "";
-  audit(`Видалено товар з інвентаризації: ${product.sku}${relatedResorts ? `, прибрано пересортів: ${relatedResorts}` : ""}`);
-  saveState();
+  audit(`Видалено рядок з інвентаризації: ${product.sku} · ${removedLine.warehouseName || warehouseNameByCode(removedLine.warehouseCode)}${removedLine.serialName ? ` · SN ${removedLine.serialName}` : ""}${relatedResorts ? `, прибрано пересортів: ${relatedResorts}` : ""}`);
+  saveState({ server: false });
   render();
 }
 
@@ -6820,7 +7138,7 @@ function createInventoryResort(form) {
   };
   state.inventory.resorts.unshift(item);
   audit(`Проведено пересорт ${item.id}: -${fromProduct.sku} +${toProduct.sku}, ${qty} од., різниця ${formatMoney(item.netAmount)}`);
-  saveState();
+  saveState({ server: false });
   render();
 }
 
@@ -6832,35 +7150,36 @@ function removeInventoryResort(index) {
   fromLine.actualQty = inventoryActualBase(item.fromProductId) + Number(item.qty || 0);
   toLine.actualQty = Math.max(0, inventoryActualBase(item.toProductId) - Number(item.qty || 0));
   audit(`Скасовано пересорт ${item.id}`);
-  saveState();
+  saveState({ server: false });
   render();
 }
 
 function scanInventoryProduct(value) {
-  const product = findProductByScan(value);
+  const product = findInventoryProductByScan(value);
   if (!product) {
     alert("Товар за штрихкодом або QR для інвентаризації не знайдено.");
     return;
   }
-  const line = inventoryLineForProduct(product.id);
-  line.expectedQty = stockQty(product.id);
+  const warehouseCode = inventorySelectedWarehouseCodes()[0] || SQL_MAIN_WAREHOUSE_CODE;
+  const line = inventoryLineForProduct(product.id, { warehouseCode });
+  line.expectedQty = stockQty(product.id, warehouseCode);
   line.actualQty = Number(line.actualQty || 0) + 1;
   state.inventory.scan = "";
   state.inventory.search = product.sku;
-  saveState();
+  saveState({ server: false });
   render();
 }
 
 function resetInventoryDraft() {
   state.inventory = normalizeInventory({ id: "INV-DRAFT", date: today(), lines: [] }, state.products, state.stock);
   audit("Очищено інвентаризаційний лист");
-  saveState();
+  saveState({ server: false });
   render();
 }
 
 function printInventorySheet() {
   state.inventory.printedAt = nowIso();
-  saveState();
+  saveState({ server: false });
   render();
   if (typeof window !== "undefined" && typeof window.print === "function") {
     window.print();
@@ -6880,8 +7199,14 @@ function postInventory() {
     date: today(),
     createdAt: nowIso(),
     lines: rows.map((row) => ({
+      lineKey: row.lineKey,
       productId: row.product.id,
       sku: row.product.sku,
+      productCode: row.product.productCode || row.product.sku,
+      warehouseCode: row.warehouseCode,
+      warehouseName: row.warehouseName,
+      serialName: row.serialName,
+      serialNumber: row.serialName,
       price: row.price,
       expectedQty: row.expectedQty,
       expectedAmount: row.expectedAmount,
@@ -6901,13 +7226,26 @@ function postInventory() {
     stockAdjustments: rows.map((row) => ({
       productId: row.product.id,
       sku: row.product.sku,
+      warehouseCode: row.warehouseCode,
+      warehouseName: row.warehouseName,
+      serialName: row.serialName,
       beforeQty: row.expectedQty,
       afterQty: row.actualQty,
       diff: row.diff
     }))
   };
+  const actualByStockKey = new Map();
   rows.forEach((row) => {
-    stockRow(row.product.id).qty = row.actualQty;
+    const key = inventoryLineKey(row.product.id, row.warehouseCode);
+    const current = actualByStockKey.get(key) || { row, actualQty: 0, serialMode: false };
+    current.actualQty += Number(row.actualQty || 0);
+    current.serialMode = current.serialMode || Boolean(row.serialName);
+    actualByStockKey.set(key, current);
+  });
+  actualByStockKey.forEach((entry) => {
+    const target = stockRow(entry.row.product.id, entry.row.warehouseCode);
+    target.warehouseName = entry.row.warehouseName;
+    target.qty = entry.serialMode ? entry.actualQty : entry.row.actualQty;
   });
   state.inventoryDocs.unshift(doc);
   state.inventory = normalizeInventory({ id: "INV-DRAFT", date: today(), lines: [] }, state.products, state.stock);
@@ -7070,7 +7408,7 @@ function loginEmployee(form) {
   const requiredPin = String(employee.pin || "").trim();
   if (requiredPin && enteredPin !== requiredPin) {
     audit(`Невдала спроба входу для ${employee.name}: невірний пароль/PIN`, "auth");
-    saveState();
+    saveState({ server: false });
     render();
     return alert("Невірний пароль/PIN працівника.");
   }
@@ -7090,7 +7428,7 @@ function loginEmployee(form) {
     ? `Працівник повторно увійшов у B2C: ${employee.name} (${roleLabel(employee.role)})`
     : `Вхід працівника у B2C: ${employee.name} (${roleLabel(employee.role)})`,
     employee.name);
-  saveState();
+  saveState({ server: false });
   render();
 }
 
@@ -7103,7 +7441,7 @@ function logoutEmployee() {
   state.activeEmployeeId = "";
   loginDialog = { open: true, employeeId: activeEmployees()[0]?.id || "" };
   sessionNotice = "";
-  saveState();
+  saveState({ server: false });
   render();
 }
 
@@ -7298,7 +7636,7 @@ function updateCartSerial(index, serialName) {
   line.serialName = selected?.serialName || "";
   line.serialNumber = selected?.serialNumber || selected?.serialName || "";
   line.qty = 1;
-  saveState();
+  saveState({ server: false });
   render();
 }
 
@@ -7365,7 +7703,7 @@ async function updateCartPriceOption(lineToken, optionId) {
     priceWarning: priceInfo.priceWarning || ""
   });
   audit(`Змінено ціну товару ${productById(line.productId).sku}: ${priceOptionLabel(selected)}`);
-  saveState();
+  saveState({ server: false });
   render();
 }
 
@@ -7479,6 +7817,8 @@ document.addEventListener("click", (event) => {
   if (addInventoryProductButton) return addInventoryProductFromLookup();
   const addAllStockInventoryButton = event.target.closest("[data-add-all-stock-inventory]");
   if (addAllStockInventoryButton) return addAllInventoryStockProducts();
+  const refreshInventoryWarehousesButton = event.target.closest("[data-refresh-inventory-warehouses]");
+  if (refreshInventoryWarehousesButton) return loadLiveTable("warehouses", { limit: 100, offset: 0 });
   const removeInventoryProductButton = event.target.closest("[data-remove-inventory-product]");
   if (removeInventoryProductButton) return removeInventoryProduct(removeInventoryProductButton.dataset.removeInventoryProduct);
   const resortRemoveButton = event.target.closest("[data-remove-resort]");
@@ -7512,7 +7852,7 @@ document.addEventListener("click", (event) => {
   if (event.target.id === "reset-local-state") {
     state = clone(seedState);
     audit("Скинуто локальний стан B2C. Товари, клієнти, залишки й чеки очищені до нового SQL-імпорту.", "manager");
-    saveState();
+    saveState({ server: false });
     render();
   }
 });
@@ -7527,12 +7867,12 @@ document.addEventListener("input", (event) => {
   }
   if (event.target.dataset.inventorySearch !== undefined) {
     state.inventory.search = event.target.value;
-    saveState();
+    saveState({ server: false });
     render();
   }
   if (event.target.dataset.inventoryAddSearch !== undefined) {
     state.inventory.addSearch = event.target.value;
-    saveState();
+    saveState({ server: false });
   }
   if (event.target.dataset.listFilter !== undefined) {
     setDocumentListFilter(event.target.dataset.listFilter, event.target.dataset.filterField, event.target.value);
@@ -7556,12 +7896,18 @@ document.addEventListener("change", (event) => {
     const product = productById(event.target.value);
     const productId = product?.id && isWeaponProduct(product) ? product.id : "";
     resetStockSerialRows(productId);
-    saveState();
+    saveState({ server: false });
     render();
     if (productId) loadStockSerialRows(0);
   }
   if (event.target.dataset.inventoryActual !== undefined) {
     setInventoryActual(event.target.dataset.inventoryActual, event.target.value);
+    render();
+  }
+  if (event.target.dataset.inventoryWarehouses !== undefined) {
+    const selected = Array.from(event.target.selectedOptions || []).map((item) => item.value);
+    state.inventory.warehouseCodes = normalizeWarehouseCodes(selected);
+    saveState({ server: false });
     render();
   }
   if (event.target.dataset.inventoryScan !== undefined && event.target.value.trim()) scanInventoryProduct(event.target.value);

@@ -27,9 +27,9 @@
     "dataDir": "data"
   },
   "currentApp": {
-    "build": "20260610-b2c-inventory-live-add-all",
-    "version": "2026.06.10.4",
-    "releasedAt": "2026-06-10 12:08:28 +03:00",
+    "build": "20260610-b2c-inventory-warehouse-serials",
+    "version": "2026.06.10.5",
+    "releasedAt": "2026-06-10 13:03:15 +03:00",
     "contractVersion": "2026.06.07-retail-live-api-1"
   },
   "sourceOfTruth": {
@@ -92,6 +92,7 @@
       "GET /api/live/product-prices?search=&limit=&offset=",
       "GET /api/live/exchange-rates?currency=&force=",
       "GET /api/live/counterparties?search=&limit=&offset=",
+      "GET /api/live/warehouses?search=&limit=&offset=",
       "GET /api/live/stock-balances?productCode=&warehouseCode=&limit=&offset=",
       "GET /api/live/serial-stock?productCode=&warehouseCode=&limit=&offset=",
       "GET /api/products?search=&barcode=&limit=&offset=",
@@ -183,6 +184,16 @@
       "maxLimit": 100,
       "filters": ["productCode", "warehouseCode", "offset"],
       "source": "CRM SQL API /one-c-mirror/serial-stock; productCode required",
+      "fallback": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/live/warehouses",
+      "model": "Warehouse",
+      "defaultLimit": 100,
+      "maxLimit": 100,
+      "filters": ["search", "offset"],
+      "source": "CRM SQL API /one-c-mirror/warehouses",
       "fallback": false
     },
     {

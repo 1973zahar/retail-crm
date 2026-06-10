@@ -10,9 +10,9 @@ Repo: D:\Codex\CRM\retail-crm
 Stable LAN runtime: http://<LAN-IP>:18810/index.html
 Legacy/manual local runtime: internal diagnostics only, not the working URL
 MESER runtime: http://192.168.0.5:8790/index.html
-Current build: 20260610-b2c-inventory-live-add-all
-App version: 2026.06.10.4
-Released at: 2026-06-10 12:08:28 +03:00
+Current build: 20260610-b2c-inventory-warehouse-serials
+App version: 2026.06.10.5
+Released at: 2026-06-10 13:03:15 +03:00
 Contract version: 2026.06.07-retail-live-api-1
 ```
 
@@ -41,7 +41,7 @@ B2C.10 employee cards can be edited from the employee row/card click path when t
 
 Retail sale product selection reads Warehouse 1 stock through bounded live endpoints. The POS product autocomplete uses `/api/live/stock-balances?warehouseCode=2&search=&limit=&offset=` and shows only products with a positive `Склад №1` balance; in server mode it must not fall back to the local/demo full product list when live stock search returns zero rows. After a product is selected, the sale line reloads product-scoped stock by `productCode` and `warehouseCode`. Serial numbers are fetched only after a concrete weapon product is selected through `/api/live/serial-stock?productCode=&warehouseCode=2&limit=20&offset=`; `productCode` is required, and weapon rows require one available live serial number before a sale can be posted.
 
-The inventory button `Додати всі товари із залишками` uses the same live Warehouse 1 stock endpoint in server mode. It reads `/api/live/stock-balances?warehouseCode=2&limit=100&offset=...` page by page until `hasMore` ends, creates/updates the inventory draft rows for every positive live stock balance, and no longer depends on local/demo `state.stock` as the source for that action.
+The inventory button `Додати всі товари із залишками` uses the selected live warehouses in server mode. The operator can select one or multiple warehouses above the inventory sheet; Retail B2C reads `/api/live/stock-balances?warehouseCode=<selected>&limit=100&offset=...` page by page for every selected warehouse, then creates or updates inventory draft rows keyed by product + warehouse + optional serial number. Serialized product candidates are expanded through product-scoped `/api/live/serial-stock?productCode=&warehouseCode=&limit=100&offset=...`, so each serial number appears as its own row under the product instead of being merged into one aggregate product row. The browser still does not load a full serial directory.
 
 Retail sale customer selection reads SQL counterparties through bounded live endpoints. The POS customer autocomplete uses `/api/live/counterparties?search=&limit=20&offset=0`; B2C stores only the selected SQL customer card for receipts and does not import the full client directory into browser memory. The client screen shows SQL live counterparties first with search/pagination and keeps local B2C-created/export-pending cards in a separate cache table.
 
