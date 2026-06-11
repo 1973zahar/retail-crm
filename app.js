@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.10.12";
-const APP_BUILD = "20260610-b2c-powershell-async-writes";
-const APP_RELEASED_AT = "2026-06-10 21:38:41 +03:00";
+const APP_VERSION = "2026.06.11.1";
+const APP_BUILD = "20260611-b2c-login-page-layout";
+const APP_RELEASED_AT = "2026-06-11 03:12:00 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SESSION_TOKEN_KEY = "retail-crm-b2c-session-token-v1";
@@ -3699,6 +3699,36 @@ function employeeSessionLabel(employee) {
   return `Сеанс на іншому комп'ютері: ${record.deviceLabel || "без назви"}`;
 }
 
+function employeeLoginLabel(employee) {
+  return `${employee.login || employee.code} · ${employee.name} · ${roleLabel(employee.role)}`;
+}
+
+function normalizeLoginValue(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function loginCandidateValues(employee) {
+  return [
+    employee.id,
+    employee.login,
+    employee.code,
+    employee.name,
+    employeeLoginLabel(employee)
+  ].map(normalizeLoginValue).filter(Boolean);
+}
+
+function resolveLoginEmployee(data) {
+  const active = activeEmployees();
+  const byId = active.find((item) => item.id === data.employeeId);
+  if (byId) return byId;
+  const login = normalizeLoginValue(data.login);
+  if (!login) return null;
+  const exact = active.find((employee) => loginCandidateValues(employee).includes(login));
+  if (exact) return exact;
+  const partial = active.filter((employee) => loginCandidateValues(employee).some((value) => value.includes(login)));
+  return partial.length === 1 ? partial[0] : null;
+}
+
 function registerEmployeeSession(employee) {
   state.employeeSessions = normalizeEmployeeSessions(state.employeeSessions, state.employees);
   const previous = state.employeeSessions[employee.id] || null;
@@ -4753,6 +4783,7 @@ function renderEmployeeLoginModal() {
     || currentEmployee()?.id
     || active[0]?.id
     || "";
+  if (!currentEmployee()) return "";
   if (!loginDialog.open && currentEmployee()) return "";
   return `
     <div class="modal-backdrop" role="presentation">
@@ -4767,7 +4798,7 @@ function renderEmployeeLoginModal() {
         <form class="form-grid one-col" data-action="employee-login">
           ${sessionNotice ? `<p class="warning-note">${escapeHtml(sessionNotice)}</p>` : ""}
           <label class="field"><span>Логін працівника</span><select name="employeeId" required>
-            ${active.map((employee) => option(employee.id, `${employee.login || employee.code} · ${employee.name} · ${roleLabel(employee.role)}`, employee.id === selectedId)).join("")}
+            ${active.map((employee) => option(employee.id, employeeLoginLabel(employee), employee.id === selectedId)).join("")}
           </select></label>
           <label class="field"><span>Пароль / PIN</span><input name="pin" type="password" autocomplete="current-password" placeholder="пароль/PIN із картки працівника"></label>
           <div class="toolbar">
@@ -4777,6 +4808,45 @@ function renderEmployeeLoginModal() {
         </form>
       </section>
     </div>
+  `;
+}
+
+function renderEmployeeLoginPage() {
+  const active = activeEmployees();
+  const serverUrl = state.systemSettings.publicBaseUrl || state.systemSettings.publicHost || "http://192.168.0.5:8790";
+  const defaultLogin = active.length === 1 ? (active[0].login || active[0].code || "") : "";
+  return `
+    <section class="login-page" aria-labelledby="employee-login-page-title">
+      <div class="login-shell">
+        <div class="login-mark" aria-hidden="true">B2C</div>
+        <div class="login-hero">
+          <h1 id="employee-login-page-title">Вхід до Retail B2C</h1>
+          <p>Операційний кабінет роздрібного магазину для продажів, клієнтів, залишків, інвентаризації та каси.</p>
+        </div>
+
+        <form class="login-card" data-action="employee-login">
+          <h2>Працівник</h2>
+          ${sessionNotice ? `<p class="warning-note">${escapeHtml(sessionNotice)}</p>` : ""}
+          <label class="field">
+            <span>Логін</span>
+            <input name="login" list="employee-login-options" autocomplete="username" value="${escapeHtml(defaultLogin)}" placeholder="логін або код працівника" required ${active.length ? "" : "disabled"}>
+          </label>
+          <datalist id="employee-login-options">
+            ${active.map((employee) => `<option value="${escapeHtml(employee.login || employee.code)}" label="${escapeHtml(employeeLoginLabel(employee))}"></option>`).join("")}
+          </datalist>
+          <label class="field">
+            <span>Пароль</span>
+            <input name="pin" type="password" autocomplete="current-password" required ${active.length ? "" : "disabled"}>
+          </label>
+          <button class="primary login-submit" type="submit" ${active.length ? "" : "disabled"}>Увійти в CRM</button>
+        </form>
+
+        <div class="login-status-strip">
+          <span>Сервер: <strong>${escapeHtml(serverSyncLabel())}</strong></span>
+          <span>${escapeHtml(serverUrl)}</span>
+        </div>
+      </div>
+    </section>
   `;
 }
 
@@ -7615,8 +7685,8 @@ function syncSessionHeartbeatTimer() {
 
 async function loginEmployee(form) {
   const data = Object.fromEntries(new FormData(form).entries());
-  const employee = activeEmployees().find((item) => item.id === data.employeeId);
-  if (!employee) return alert("Працівника для входу не знайдено або він не активний.");
+  const employee = resolveLoginEmployee(data);
+  if (!employee) return alert("Працівника для входу не знайдено або він не активний. Перевірте логін.");
   const enteredPin = String(data.pin || "").trim();
   const requiredPin = String(employee.pin || "").trim();
   if (serverModeEnabled()) {
@@ -7979,6 +8049,18 @@ async function updateCartPriceOption(lineToken, optionId) {
 function render() {
   applySidebarState();
   renderAppReleaseTime();
+  const authenticated = Boolean(currentEmployee());
+  document.body.classList.toggle("auth-screen", !authenticated);
+  if (!authenticated) {
+    setTitle("Вхід");
+    const nav = document.getElementById("nav");
+    const topStatus = document.getElementById("top-status");
+    if (nav) nav.innerHTML = "";
+    if (topStatus) topStatus.innerHTML = "";
+    document.getElementById("app").innerHTML = renderEmployeeLoginPage();
+    syncSessionHeartbeatTimer();
+    return;
+  }
   if (!canOpenBlock(state.currentView)) {
     const allowedView = firstAllowedView();
     if (canOpenBlock(allowedView)) {

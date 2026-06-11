@@ -11,9 +11,9 @@ try {
 } catch {
 }
 
-$AppVersion = "2026.06.10.12"
-$AppBuild = "20260610-b2c-powershell-async-writes"
-$AppReleasedAt = "2026-06-10 21:38:41 +03:00"
+$AppVersion = "2026.06.11.1"
+$AppBuild = "20260611-b2c-login-page-layout"
+$AppReleasedAt = "2026-06-11 03:12:00 +03:00"
 $RootDir = $PSScriptRoot
 $ResolvedDataDir = if ([System.IO.Path]::IsPathRooted($DataDir)) { $DataDir } else { Join-Path $RootDir $DataDir }
 $StatePath = Join-Path $ResolvedDataDir "retail-crm-state.json"

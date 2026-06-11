@@ -27,9 +27,9 @@
     "dataDir": "data"
   },
   "currentApp": {
-    "build": "20260610-b2c-powershell-async-writes",
-    "version": "2026.06.10.12",
-    "releasedAt": "2026-06-10 21:38:41 +03:00",
+    "build": "20260611-b2c-login-page-layout",
+    "version": "2026.06.11.1",
+    "releasedAt": "2026-06-11 03:12:00 +03:00",
     "contractVersion": "2026.06.07-retail-live-api-1"
   },
   "sourceOfTruth": {
