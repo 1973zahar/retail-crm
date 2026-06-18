@@ -1,5 +1,5 @@
-export type RetailB2CBuildId = "20260618-retail-live-query-rules-1";
-export type RetailB2CContractVersion = "2026.06.18-retail-live-query-rules-1";
+export type RetailB2CBuildId = "20260618-retail-live-api-routes-1";
+export type RetailB2CContractVersion = "2026.06.18-retail-live-api-routes-1";
 
 export interface RetailB2CBuildInfo {
   appVersion: string;

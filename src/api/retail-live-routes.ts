@@ -21,9 +21,27 @@ export const RETAIL_LIVE_READ_ROUTES: readonly RetailLiveRouteContract[] = [
   },
   {
     method: "GET",
+    path: "/api/live/product-prices",
+    model: "ProductPrice",
+    defaultLimit: 20,
+    maxLimit: 100,
+    filters: ["search", "productCode", "limit", "offset"],
+    writesExternalSystem: false
+  },
+  {
+    method: "GET",
     path: "/api/live/counterparties",
     model: "Counterparty",
     defaultLimit: 20,
+    maxLimit: 100,
+    filters: ["search", "limit", "offset"],
+    writesExternalSystem: false
+  },
+  {
+    method: "GET",
+    path: "/api/live/warehouses",
+    model: "Warehouse",
+    defaultLimit: 100,
     maxLimit: 100,
     filters: ["search", "limit", "offset"],
     writesExternalSystem: false

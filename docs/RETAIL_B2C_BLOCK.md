@@ -10,10 +10,10 @@ Repo: D:\Codex\CRM\retail-crm
 Stable LAN runtime: http://<LAN-IP>:18810/index.html
 Legacy/manual local runtime: internal diagnostics only, not the working URL
 MESER runtime: http://192.168.0.5:8790/index.html
-Current build: 20260618-retail-live-query-rules-1
-App version: 2026.06.18.4
-Released at: 2026-06-18 15:44:44 +03:00
-Contract version: 2026.06.18-retail-live-query-rules-1
+Current build: 20260618-retail-live-api-routes-1
+App version: 2026.06.18.5
+Released at: 2026-06-18 15:50:01 +03:00
+Contract version: 2026.06.18-retail-live-api-routes-1
 ```
 
 ## Architecture
@@ -68,6 +68,8 @@ Autostart checkpoint `20260618-retail-autostart-detach-1` keeps the MESER schedu
 Domain rules checkpoint `20260618-retail-domain-rules-1` adds executable transitional Node modules under `src/domain`: sales totals/discount/merge rules, serial-number gating for weapon products, and role/block/action permission checks. These modules are covered by Node tests but are not wired into the active `app.js`/`server.mjs` runtime yet; runtime wiring stays for a separate verified slice.
 
 Live query rules checkpoint `20260618-retail-live-query-rules-1` adds a tested bounded-read module under `src/domain/live-query-rules.mjs`. It normalizes live read `limit`, `offset`, `search`, `sort`, `direction`, required serial-stock filters and paged response envelopes for products, stock, serials, counterparties, prices and warehouses. It is not wired into active runtime yet; future API route wiring must keep the same tests green.
+
+Live API routes checkpoint `20260618-retail-live-api-routes-1` adds a tested route adapter under `src/api/live-read-routes.mjs`. The adapter maps Retail live read paths to their SQL API target paths, preserves fallback metadata for counterparty search, blocks serial-stock without `productCode`, and normalizes SQL API payloads into the standard paged envelope. The adapter is not wired into `server.mjs` yet; it is a verified route-boundary module for the next backend split.
 
 The browser must not load full products, stock, serials, customers, balances or orders as production data. Large lists must be read through backend endpoints with `search`, `limit`, `offset` and filters. Retail B2C now has live reference tables for products, prices, counterparties/customers and warehouses through its own backend proxy over the CRM SQL API. The current local `server-json` responses are fallback/demo only.
 

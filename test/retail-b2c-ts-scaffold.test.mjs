@@ -6,10 +6,10 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const EXPECTED_BUILD = "20260618-retail-live-query-rules-1";
-const EXPECTED_VERSION = "2026.06.18.4";
-const EXPECTED_RELEASED_AT = "2026-06-18 15:44:44 +03:00";
-const EXPECTED_CONTRACT_VERSION = "2026.06.18-retail-live-query-rules-1";
+const EXPECTED_BUILD = "20260618-retail-live-api-routes-1";
+const EXPECTED_VERSION = "2026.06.18.5";
+const EXPECTED_RELEASED_AT = "2026-06-18 15:50:01 +03:00";
+const EXPECTED_CONTRACT_VERSION = "2026.06.18-retail-live-api-routes-1";
 
 const readText = (relativePath) => readFile(path.join(ROOT, relativePath), "utf8");
 const readJson = async (relativePath) => JSON.parse(await readText(relativePath));
@@ -48,6 +48,7 @@ test("TypeScript scaffold files exist in the target block layout", async () => {
     "src/domain/role-rules.mjs",
     "src/domain/live-query-rules.mjs",
     "src/api/retail-live-routes.ts",
+    "src/api/live-read-routes.mjs",
     "src/services/sql-api-client.types.ts",
     "src/adapters/sql-api-adapter.types.ts",
     "src/workers/retail-outbox-worker.types.ts",
@@ -76,6 +77,8 @@ test("live API contract keeps large references bounded", async () => {
   assert.equal(contract.domainRules.serials, "src/domain/serial-rules.mjs");
   assert.equal(contract.domainRules.roles, "src/domain/role-rules.mjs");
   assert.equal(contract.domainRules.liveQueries, "src/domain/live-query-rules.mjs");
+  assert.equal(contract.apiRoutes.runtimeWired, false);
+  assert.equal(contract.apiRoutes.liveReads, "src/api/live-read-routes.mjs");
 
   for (const endpoint of contract.liveReadEndpoints) {
     assert.equal(endpoint.method, "GET");
