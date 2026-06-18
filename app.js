@@ -1,8 +1,8 @@
 ﻿"use strict";
 
-const APP_VERSION = "2026.06.11.1";
-const APP_BUILD = "20260611-b2c-login-page-layout";
-const APP_RELEASED_AT = "2026-06-11 03:12:00 +03:00";
+const APP_VERSION = "2026.06.18.1";
+const APP_BUILD = "20260618-retail-ts-scaffold-1";
+const APP_RELEASED_AT = "2026-06-18 15:11:02 +03:00";
 const STORAGE_KEY = "retail-crm-b2c-v12";
 const SESSION_KEY = "retail-crm-b2c-session-v1";
 const SESSION_TOKEN_KEY = "retail-crm-b2c-session-token-v1";

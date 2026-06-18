@@ -1,0 +1,11 @@
+{
+  "name": "retail-b2c-crm",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check:js": "node --check app.js && node --check server.mjs",
+    "check:contracts": "node --test test/retail-b2c-ts-scaffold.test.mjs",
+    "test": "node --test test/retail-b2c-ts-scaffold.test.mjs"
+  }
+}

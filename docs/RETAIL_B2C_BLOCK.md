@@ -10,10 +10,10 @@ Repo: D:\Codex\CRM\retail-crm
 Stable LAN runtime: http://<LAN-IP>:18810/index.html
 Legacy/manual local runtime: internal diagnostics only, not the working URL
 MESER runtime: http://192.168.0.5:8790/index.html
-Current build: 20260611-b2c-login-page-layout
-App version: 2026.06.11.1
-Released at: 2026-06-11 03:12:00 +03:00
-Contract version: 2026.06.07-retail-live-api-1
+Current build: 20260618-retail-ts-scaffold-1
+App version: 2026.06.18.1
+Released at: 2026-06-18 15:11:02 +03:00
+Contract version: 2026.06.18-retail-ts-scaffold-1
 ```
 
 ## Architecture
@@ -60,6 +60,8 @@ PostgreSQL crm_hub = shared durable source of truth
 Backend API/model layer = permissions, transactions, pagination and audit
 Frontend = bounded interactive view/cache only
 ```
+
+TypeScript migration checkpoint `20260618-retail-ts-scaffold-1` adds the first non-runtime-breaking scaffold under `src/`: API route contracts, service/adapter/worker type boundaries, shared Retail B2C types, and pure sales/permission domain functions. The legacy `app.js`, `server.mjs`, and `server.ps1` remain the active runtime entrypoints until each slice is wired and verified separately.
 
 The browser must not load full products, stock, serials, customers, balances or orders as production data. Large lists must be read through backend endpoints with `search`, `limit`, `offset` and filters. Retail B2C now has live reference tables for products, prices, counterparties/customers and warehouses through its own backend proxy over the CRM SQL API. The current local `server-json` responses are fallback/demo only.
 
