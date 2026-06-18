@@ -27,10 +27,10 @@
     "dataDir": "data"
   },
   "currentApp": {
-    "build": "20260618-retail-domain-rules-1",
-    "version": "2026.06.18.3",
-    "releasedAt": "2026-06-18 15:36:10 +03:00",
-    "contractVersion": "2026.06.18-retail-domain-rules-1"
+    "build": "20260618-retail-live-query-rules-1",
+    "version": "2026.06.18.4",
+    "releasedAt": "2026-06-18 15:44:44 +03:00",
+    "contractVersion": "2026.06.18-retail-live-query-rules-1"
   },
   "sourceOfTruth": {
     "core": "PostgreSQL SQL core",

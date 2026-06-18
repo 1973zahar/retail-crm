@@ -10,10 +10,10 @@ Repo: D:\Codex\CRM\retail-crm
 Stable LAN runtime: http://<LAN-IP>:18810/index.html
 Legacy/manual local runtime: internal diagnostics only, not the working URL
 MESER runtime: http://192.168.0.5:8790/index.html
-Current build: 20260618-retail-domain-rules-1
-App version: 2026.06.18.3
-Released at: 2026-06-18 15:36:10 +03:00
-Contract version: 2026.06.18-retail-domain-rules-1
+Current build: 20260618-retail-live-query-rules-1
+App version: 2026.06.18.4
+Released at: 2026-06-18 15:44:44 +03:00
+Contract version: 2026.06.18-retail-live-query-rules-1
 ```
 
 ## Architecture
@@ -66,6 +66,8 @@ TypeScript migration checkpoint `20260618-retail-ts-scaffold-1` adds the first n
 Autostart checkpoint `20260618-retail-autostart-detach-1` keeps the MESER scheduled task stable by making `start-retail-b2c-background.ps1` refuse duplicate listeners, log an occupied wrong port, and start the runtime as a detached child process with per-run stdout/stderr logs.
 
 Domain rules checkpoint `20260618-retail-domain-rules-1` adds executable transitional Node modules under `src/domain`: sales totals/discount/merge rules, serial-number gating for weapon products, and role/block/action permission checks. These modules are covered by Node tests but are not wired into the active `app.js`/`server.mjs` runtime yet; runtime wiring stays for a separate verified slice.
+
+Live query rules checkpoint `20260618-retail-live-query-rules-1` adds a tested bounded-read module under `src/domain/live-query-rules.mjs`. It normalizes live read `limit`, `offset`, `search`, `sort`, `direction`, required serial-stock filters and paged response envelopes for products, stock, serials, counterparties, prices and warehouses. It is not wired into active runtime yet; future API route wiring must keep the same tests green.
 
 The browser must not load full products, stock, serials, customers, balances or orders as production data. Large lists must be read through backend endpoints with `search`, `limit`, `offset` and filters. Retail B2C now has live reference tables for products, prices, counterparties/customers and warehouses through its own backend proxy over the CRM SQL API. The current local `server-json` responses are fallback/demo only.
 
