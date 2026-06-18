@@ -1,5 +1,5 @@
-export type RetailB2CBuildId = "20260618-retail-autostart-detach-1";
-export type RetailB2CContractVersion = "2026.06.18-retail-autostart-detach-1";
+export type RetailB2CBuildId = "20260618-retail-domain-rules-1";
+export type RetailB2CContractVersion = "2026.06.18-retail-domain-rules-1";
 
 export interface RetailB2CBuildInfo {
   appVersion: string;

@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "check:js": "node --check app.js && node --check server.mjs",
-    "check:contracts": "node --test test/retail-b2c-ts-scaffold.test.mjs",
-    "test": "node --test test/retail-b2c-ts-scaffold.test.mjs"
+    "check:contracts": "node --test test/retail-b2c-ts-scaffold.test.mjs test/retail-b2c-domain-rules.test.mjs",
+    "check:domain": "node --test test/retail-b2c-domain-rules.test.mjs",
+    "test": "node --test test/retail-b2c-ts-scaffold.test.mjs test/retail-b2c-domain-rules.test.mjs"
   }
 }

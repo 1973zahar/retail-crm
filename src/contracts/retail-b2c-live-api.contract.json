@@ -3,8 +3,8 @@
   "$id": "https://crm.local/contracts/retail-b2c-live-api.contract.json",
   "schema": "retail.b2c.live_api.v1",
   "blockId": "retail-b2c",
-  "build": "20260618-retail-autostart-detach-1",
-  "contractVersion": "2026.06.18-retail-autostart-detach-1",
+  "build": "20260618-retail-domain-rules-1",
+  "contractVersion": "2026.06.18-retail-domain-rules-1",
   "sourceOfTruth": {
     "core": "PostgreSQL crm_hub through Retail B2C backend proxy",
     "schema": "one_c_mirror",
@@ -65,5 +65,11 @@
     "browserWritesToExternalSystems": false,
     "oneCWriteBack": "outbox-export-only",
     "requiresServerPermissionCheck": true
+  },
+  "domainRules": {
+    "runtimeWired": false,
+    "sales": "src/domain/sales-rules.mjs",
+    "serials": "src/domain/serial-rules.mjs",
+    "roles": "src/domain/role-rules.mjs"
   }
 }
