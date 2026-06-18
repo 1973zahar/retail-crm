@@ -11,9 +11,9 @@ try {
 } catch {
 }
 
-$AppVersion = "2026.06.18.1"
-$AppBuild = "20260618-retail-ts-scaffold-1"
-$AppReleasedAt = "2026-06-18 15:11:02 +03:00"
+$AppVersion = "2026.06.18.2"
+$AppBuild = "20260618-retail-autostart-detach-1"
+$AppReleasedAt = "2026-06-18 15:23:58 +03:00"
 $RootDir = $PSScriptRoot
 $ResolvedDataDir = if ([System.IO.Path]::IsPathRooted($DataDir)) { $DataDir } else { Join-Path $RootDir $DataDir }
 $StatePath = Join-Path $ResolvedDataDir "retail-crm-state.json"

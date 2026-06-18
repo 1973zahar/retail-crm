@@ -10,10 +10,10 @@ Repo: D:\Codex\CRM\retail-crm
 Stable LAN runtime: http://<LAN-IP>:18810/index.html
 Legacy/manual local runtime: internal diagnostics only, not the working URL
 MESER runtime: http://192.168.0.5:8790/index.html
-Current build: 20260618-retail-ts-scaffold-1
-App version: 2026.06.18.1
-Released at: 2026-06-18 15:11:02 +03:00
-Contract version: 2026.06.18-retail-ts-scaffold-1
+Current build: 20260618-retail-autostart-detach-1
+App version: 2026.06.18.2
+Released at: 2026-06-18 15:23:58 +03:00
+Contract version: 2026.06.18-retail-autostart-detach-1
 ```
 
 ## Architecture
@@ -62,6 +62,8 @@ Frontend = bounded interactive view/cache only
 ```
 
 TypeScript migration checkpoint `20260618-retail-ts-scaffold-1` adds the first non-runtime-breaking scaffold under `src/`: API route contracts, service/adapter/worker type boundaries, shared Retail B2C types, and pure sales/permission domain functions. The legacy `app.js`, `server.mjs`, and `server.ps1` remain the active runtime entrypoints until each slice is wired and verified separately.
+
+Autostart checkpoint `20260618-retail-autostart-detach-1` keeps the MESER scheduled task stable by making `start-retail-b2c-background.ps1` refuse duplicate listeners, log an occupied wrong port, and start the runtime as a detached child process with per-run stdout/stderr logs.
 
 The browser must not load full products, stock, serials, customers, balances or orders as production data. Large lists must be read through backend endpoints with `search`, `limit`, `offset` and filters. Retail B2C now has live reference tables for products, prices, counterparties/customers and warehouses through its own backend proxy over the CRM SQL API. The current local `server-json` responses are fallback/demo only.
 

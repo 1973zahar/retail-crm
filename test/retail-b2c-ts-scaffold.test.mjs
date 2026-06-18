@@ -6,10 +6,10 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const EXPECTED_BUILD = "20260618-retail-ts-scaffold-1";
-const EXPECTED_VERSION = "2026.06.18.1";
-const EXPECTED_RELEASED_AT = "2026-06-18 15:11:02 +03:00";
-const EXPECTED_CONTRACT_VERSION = "2026.06.18-retail-ts-scaffold-1";
+const EXPECTED_BUILD = "20260618-retail-autostart-detach-1";
+const EXPECTED_VERSION = "2026.06.18.2";
+const EXPECTED_RELEASED_AT = "2026-06-18 15:23:58 +03:00";
+const EXPECTED_CONTRACT_VERSION = "2026.06.18-retail-autostart-detach-1";
 
 const readText = (relativePath) => readFile(path.join(ROOT, relativePath), "utf8");
 const readJson = async (relativePath) => JSON.parse(await readText(relativePath));
@@ -92,4 +92,13 @@ test("domain TypeScript slices export pure Retail B2C logic boundaries", async (
   assert.match(permissions, /export function canExecuteAction/);
   assert.match(permissions, /export function canViewBlock/);
   assert.match(permissions, /export function missingPermissionText/);
+});
+
+test("MESER autostart wrapper is detached and duplicate-safe", async () => {
+  const script = await readText("start-retail-b2c-background.ps1");
+  assert.match(script, /Start-Process/);
+  assert.match(script, /LISTENING/);
+  assert.match(script, /retail-b2c-server-\$runId\.out\.log/);
+  assert.match(script, /retail-b2c-server-\$runId\.err\.log/);
+  assert.match(script, /port 8790 already has Retail B2C listener/);
 });

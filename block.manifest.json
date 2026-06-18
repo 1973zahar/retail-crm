@@ -27,10 +27,10 @@
     "dataDir": "data"
   },
   "currentApp": {
-    "build": "20260618-retail-ts-scaffold-1",
-    "version": "2026.06.18.1",
-    "releasedAt": "2026-06-18 15:11:02 +03:00",
-    "contractVersion": "2026.06.18-retail-ts-scaffold-1"
+    "build": "20260618-retail-autostart-detach-1",
+    "version": "2026.06.18.2",
+    "releasedAt": "2026-06-18 15:23:58 +03:00",
+    "contractVersion": "2026.06.18-retail-autostart-detach-1"
   },
   "sourceOfTruth": {
     "core": "PostgreSQL SQL core",
